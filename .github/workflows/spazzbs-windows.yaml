@@ -6,7 +6,7 @@ on:
       - '**.md'
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: spazzbs-windows-${{ github.ref }}
   cancel-in-progress: true
@@ -29,10 +29,10 @@ jobs:
       # OBS build and packaging scripts need one. Tag locally on the runner.
       - name: Add Version Tag 🏷️
         run: |
-          $Tags = git tag --list
-          if ( -not $Tags ) {
-            git tag "${env:SPAZZBS_BASE_VERSION}" HEAD
-          }
+          # Drop any fetched tags (like the release tag below) so the OBS
+          # scripts always see a plain version number.
+          git tag --list | ForEach-Object { git tag -d $_ | Out-Null }
+          git tag "${env:SPAZZBS_BASE_VERSION}" HEAD
           git describe --tags --long
 
       - name: Build SPAZZbs 🧱
@@ -70,8 +70,14 @@ jobs:
             'start "" /D "%~dp0bin\64bit" "%~dp0bin\64bit\SPAZZbs.exe" %*'
           )
 
-          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/spazzbs_out" | Out-Null
-          Compress-Archive -Path "$Stage/*" -DestinationPath "${{ github.workspace }}/spazzbs_out/SPAZZbs-portable-windows-x64.zip" -Force
+          # Zip with 7-Zip using plain Deflate so Windows' built-in zip
+          # support opens it (no bogus password prompt).
+          $Out = "${{ github.workspace }}/spazzbs_out"
+          New-Item -ItemType Directory -Force -Path $Out | Out-Null
+          Push-Location $Stage
+          7z a -tzip -mm=Deflate -mx=7 "$Out/SPAZZbs-portable-windows-x64.zip" *
+          if ( $LASTEXITCODE -ne 0 ) { throw "Zipping failed" }
+          Pop-Location
           Remove-Item "$Stage/Open SPAZZbs.cmd"
 
           "SPAZZBS_STAGE=$Stage" >> $env:GITHUB_ENV
@@ -89,13 +95,34 @@ jobs:
             "${{ github.workspace }}\.github\spazzbs\SPAZZbs.iss"
           if ( $LASTEXITCODE -ne 0 ) { throw "Installer build failed" }
 
+      # Plain downloads on the Releases page (no extra zip, no sign-in).
+      - name: Publish Release 🚀
+        if: github.ref_name == 'master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $Tag = 'latest'
+          $Notes = "Latest SPAZZbs build from commit ${{ github.sha }}.`n`n" +
+            "- **SPAZZbs-Setup.exe**: installer with desktop and Start menu icons.`n" +
+            "- **SPAZZbs-portable-windows-x64.zip**: no install; unzip and double-click Open SPAZZbs.cmd.`n`n" +
+            "Windows may say it protected your PC because the files aren't code-signed: click More info, then Run anyway."
+          gh release delete $Tag --yes --cleanup-tag 2>$null
+          gh release create $Tag `
+            "${{ github.workspace }}/spazzbs_out/SPAZZbs-Setup.exe" `
+            "${{ github.workspace }}/spazzbs_out/SPAZZbs-portable-windows-x64.zip" `
+            --target ${{ github.sha }} --title "SPAZZbs (latest build)" --notes $Notes --latest
+          if ( $LASTEXITCODE -ne 0 ) { throw "Publishing the release failed" }
+
+      # Test branches only; master builds go to the Releases page.
       - name: Upload Installer 📡
+        if: github.ref_name != 'master'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: SPAZZbs-Setup
           path: ${{ github.workspace }}/spazzbs_out/SPAZZbs-Setup.exe
 
       - name: Upload Portable Zip 📡
+        if: github.ref_name != 'master'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: SPAZZbs-portable-windows-x64
