@@ -15,6 +15,10 @@ with a few changes:
 - Uses its own settings folder (``%APPDATA%\spazzbs``), so it runs alongside
   regular OBS without touching your OBS setup. The OBS auto-updater is off.
 
+**Download:** open the latest run under the Actions tab and grab
+``SPAZZbs-Setup`` (installer with desktop and Start menu icons) or
+``SPAZZbs-portable-windows-x64`` (unzip and double-click ``Open SPAZZbs.cmd``).
+
 SPAZZbs is not affiliated with or endorsed by the OBS Project. Like OBS Studio,
 it is licensed under the GNU General Public License v2 (see COPYING).
 

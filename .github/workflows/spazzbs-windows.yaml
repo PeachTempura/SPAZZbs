@@ -10,6 +10,8 @@ permissions:
 concurrency:
   group: spazzbs-windows-${{ github.ref }}
   cancel-in-progress: true
+env:
+  SPAZZBS_BASE_VERSION: '33.0.0'
 jobs:
   windows-build:
     name: Windows x64 🪟
@@ -22,6 +24,16 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      # Forks made with "master branch only" have no OBS version tags, and the
+      # OBS build and packaging scripts need one. Tag locally on the runner.
+      - name: Add Version Tag 🏷️
+        run: |
+          $Tags = git tag --list
+          if ( -not $Tags ) {
+            git tag "${env:SPAZZBS_BASE_VERSION}" HEAD
+          }
+          git describe --tags --long
 
       - name: Build SPAZZbs 🧱
         uses: ./.github/actions/build-obs
@@ -36,13 +48,55 @@ jobs:
           config: RelWithDebInfo
           package: false
 
-      - name: Rename Package 🏷️
+      - name: Stage Files 📂
         run: |
           $Zip = Get-ChildItem -Path "${{ github.workspace }}/build_x64" -Filter "obs-studio-*-windows-x64.zip" -File | Select-Object -First 1
-          Move-Item -Path $Zip.FullName -Destination "${{ github.workspace }}/build_x64/SPAZZbs-windows-x64.zip"
+          $Stage = "${{ github.workspace }}/spazzbs_stage"
+          Expand-Archive -Path $Zip.FullName -DestinationPath $Stage -Force
 
-      - name: Upload SPAZZbs 📡
+          # If the zip has one top-level folder, use its contents
+          $Top = Get-ChildItem -Path $Stage
+          if ( $Top.Count -eq 1 -and $Top[0].PSIsContainer -and -not (Test-Path "$Stage/bin") ) {
+            $Stage = $Top[0].FullName
+          }
+          if ( -not (Test-Path "$Stage/bin/64bit/SPAZZbs.exe") ) {
+            Get-ChildItem -Path $Stage -Recurse -Filter *.exe | Select-Object -First 20 FullName
+            throw "SPAZZbs.exe not found in package"
+          }
+
+          # One-click launcher for the portable zip
+          Set-Content -Path "$Stage/Open SPAZZbs.cmd" -Encoding ascii -Value @(
+            '@echo off',
+            'start "" /D "%~dp0bin\64bit" "%~dp0bin\64bit\SPAZZbs.exe" %*'
+          )
+
+          New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/spazzbs_out" | Out-Null
+          Compress-Archive -Path "$Stage/*" -DestinationPath "${{ github.workspace }}/spazzbs_out/SPAZZbs-portable-windows-x64.zip" -Force
+          Remove-Item "$Stage/Open SPAZZbs.cmd"
+
+          "SPAZZBS_STAGE=$Stage" >> $env:GITHUB_ENV
+
+      - name: Build Installer 💿
+        run: |
+          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if ( -not (Test-Path $Iscc) ) {
+            choco install innosetup --no-progress -y
+          }
+          & $Iscc `
+            "/DSourceDir=${env:SPAZZBS_STAGE}" `
+            "/DOutputDir=${{ github.workspace }}\spazzbs_out" `
+            "/DAppVersion=${env:SPAZZBS_BASE_VERSION}" `
+            "${{ github.workspace }}\.github\spazzbs\SPAZZbs.iss"
+          if ( $LASTEXITCODE -ne 0 ) { throw "Installer build failed" }
+
+      - name: Upload Installer 📡
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: SPAZZbs-windows-x64
-          path: ${{ github.workspace }}/build_x64/SPAZZbs-windows-x64.zip
+          name: SPAZZbs-Setup
+          path: ${{ github.workspace }}/spazzbs_out/SPAZZbs-Setup.exe
+
+      - name: Upload Portable Zip 📡
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SPAZZbs-portable-windows-x64
+          path: ${{ github.workspace }}/spazzbs_out/SPAZZbs-portable-windows-x64.zip
