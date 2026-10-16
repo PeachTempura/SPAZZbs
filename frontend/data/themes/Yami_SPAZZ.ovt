@@ -1,0 +1,334 @@
+/* ------------------------------------------------------------------------- *
+ * SPAZZbs - "Sunset 2001"
+ *
+ * Dark mode with an early-2000s instant-messenger skin feel: glossy
+ * bevelled chrome, pill buttons, chunky scrollbars, Tahoma, and a sunset
+ * gradient (violet -> magenta -> coral -> gold) wherever the old skins
+ * would have used blue.
+ *
+ * Built as a Yami variant so it keeps working as the base theme updates.
+ * ------------------------------------------------------------------------- */
+
+@OBSThemeMeta {
+    name: 'SPAZZ Sunset';
+    id: 'com.spazzbs.Yami.Sunset';
+    extends: 'com.obsproject.Yami';
+    author: 'SPAZZbs';
+    dark: 'true';
+}
+
+@OBSThemeVars {
+    /* Sunset palette */
+    --sun_night: #1A0E2C;
+    --sun_violet: #3A1C71;
+    --sun_plum: #6B2163;
+    --sun_magenta: #B8336A;
+    --sun_coral: #F2545B;
+    --sun_orange: #F7873A;
+    --sun_gold: #FFC15E;
+
+    /* Charcoal with a violet tint, like a dark skin at dusk */
+    --grey1: #6A6478;
+    --grey2: #575166;
+    --grey3: #464152;
+    --grey4: #37323F;
+    --grey5: #2C2833;
+    --grey6: #221F28;
+    --grey7: #19171E;
+    --grey8: #100E14;
+
+    --bg_window: var(--grey7);
+    --bg_base: var(--grey6);
+    --bg_preview: var(--grey8);
+
+    --primary: var(--sun_magenta);
+    --primary_light: var(--sun_coral);
+    --primary_lighter: var(--sun_gold);
+    --primary_dark: var(--sun_plum);
+    --primary_darker: var(--sun_violet);
+
+    --text: #F4EEF8;
+    --text_light: #FFFFFF;
+    --text_muted: #A79FB3;
+
+    --border_color: var(--grey3);
+    --border_radius: 6px;
+    --border_radius_small: 3px;
+    --border_radius_large: 9px;
+
+    --input_bg: var(--grey8);
+    --input_bg_hover: var(--grey7);
+    --input_bg_focus: var(--grey8);
+    --input_border: var(--grey3);
+    --input_border_hover: var(--sun_orange);
+    --input_border_focus: var(--sun_coral);
+
+    --list_item_bg_selected: var(--sun_magenta);
+    --list_item_bg_hover: var(--grey3);
+
+    --button_bg: var(--grey4);
+    --button_bg_hover: var(--grey3);
+    --button_bg_down: var(--grey7);
+    --button_bg_disabled: var(--grey6);
+    --button_border: var(--grey2);
+    --button_border_hover: var(--sun_orange);
+    --button_border_focus: var(--sun_coral);
+
+    --tab_bg: var(--grey6);
+    --tab_bg_hover: var(--grey4);
+    --tab_bg_down: var(--grey7);
+    --tab_border: var(--grey3);
+    --tab_border_hover: var(--sun_orange);
+    --tab_border_focus: var(--sun_coral);
+    --tab_border_selected: var(--sun_coral);
+
+    --scrollbar_handle: var(--grey3);
+    --scrollbar_hover: var(--sun_magenta);
+    --scrollbar_down: var(--sun_plum);
+    --scrollbar_border: var(--grey2);
+
+    --toolbutton_bg: var(--grey4);
+    --toolbutton_bg_hover: var(--grey3);
+    --toolbutton_bg_down: var(--sun_plum);
+
+    --highlight_color: var(--sun_gold);
+}
+
+/* ---------- Type: the classic Windows skin font ---------- */
+
+QWidget {
+    font-family: 'Tahoma', 'Verdana', 'Segoe UI', sans-serif;
+}
+
+/* ---------- The sunset bars ---------- */
+
+QMenuBar {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_violet), stop:0.35 var(--sun_magenta),
+        stop:0.7 var(--sun_coral), stop:1 var(--sun_gold));
+    border-top: 1px solid rgba(255, 255, 255, 90);
+    border-bottom: 1px solid #0B0712;
+    color: #FFFFFF;
+}
+
+QMenuBar::item {
+    background: transparent;
+    color: #FFFFFF;
+    border-radius: var(--border_radius_small);
+}
+
+QMenuBar::item:selected,
+QMenuBar::item:pressed {
+    background: rgba(0, 0, 0, 70);
+    border: 1px solid rgba(255, 255, 255, 80);
+}
+
+QDockWidget::title {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_violet), stop:0.35 var(--sun_magenta),
+        stop:0.7 var(--sun_coral), stop:1 var(--sun_gold));
+    border-top: 1px solid rgba(255, 255, 255, 110);
+    border-bottom: 1px solid #0B0712;
+    border-top-left-radius: var(--border_radius);
+    border-top-right-radius: var(--border_radius);
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+QDockWidget {
+    color: #FFFFFF;
+    font-weight: bold;
+}
+
+QDockWidget > QWidget {
+    font-weight: normal;
+}
+
+QDockWidget::close-button,
+QDockWidget::float-button {
+    background: rgba(0, 0, 0, 60);
+    border: 1px solid rgba(255, 255, 255, 70);
+    border-radius: 7px;
+}
+
+QDockWidget::close-button:hover,
+QDockWidget::float-button:hover {
+    background: rgba(255, 255, 255, 60);
+}
+
+QStatusBar {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 var(--grey5), stop:1 var(--grey8));
+    border-top: 1px solid var(--grey3);
+}
+
+/* Thin sunset line between panels */
+QMainWindow::separator {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 var(--sun_plum), stop:1 var(--sun_orange));
+}
+
+QMainWindow::separator:hover {
+    background: var(--sun_gold);
+}
+
+/* ---------- Glossy pill buttons ---------- */
+
+QPushButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #4C4659, stop:0.49 #3A3546, stop:0.5 #2E2A38, stop:1 #24212C);
+    border: 1px solid #120F17;
+    border-top-color: #6C6580;
+    border-radius: 9px;
+    color: var(--text);
+}
+
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #5A5369, stop:0.49 #463F55, stop:0.5 #382F44, stop:1 #2C2635);
+    border-color: var(--sun_orange);
+}
+
+QPushButton:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 var(--sun_plum), stop:1 var(--sun_magenta));
+    border-color: var(--sun_coral);
+}
+
+QPushButton:checked {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #FF8E7A, stop:0.49 var(--sun_coral), stop:0.5 var(--sun_magenta), stop:1 var(--sun_plum));
+    border: 1px solid #3A0F24;
+    border-top-color: #FFD3A8;
+    color: #FFFFFF;
+}
+
+QPushButton:disabled {
+    background: var(--grey6);
+    border-color: var(--grey5);
+    color: var(--text_muted);
+}
+
+QToolButton:hover {
+    border: 1px solid var(--sun_orange);
+}
+
+/* ---------- Lists: sunset selection ---------- */
+
+QListWidget::item:selected,
+QListView::item:selected,
+QTreeView::item:selected,
+SourceTree::item:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_plum), stop:0.6 var(--sun_magenta), stop:1 var(--sun_coral));
+    color: #FFFFFF;
+}
+
+/* ---------- Chunky skin scrollbars ---------- */
+
+QScrollBar::handle:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #4C4659, stop:0.5 #3A3546, stop:1 #2A2632);
+    border: 1px solid #120F17;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #4C4659, stop:0.5 #3A3546, stop:1 #2A2632);
+    border: 1px solid #120F17;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 var(--sun_magenta), stop:1 var(--sun_orange));
+}
+
+/* ---------- Tabs (settings + the SPAZZ bottom tabs) ---------- */
+
+QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_violet), stop:0.4 var(--sun_magenta),
+        stop:0.8 var(--sun_coral), stop:1 var(--sun_gold));
+    color: #FFFFFF;
+}
+
+#spazzTabs QTabBar::tab {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #3A3546, stop:1 #24212C);
+    border: 1px solid #120F17;
+    border-top-color: #5A5369;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 4px 16px;
+    margin-right: 2px;
+    min-width: 60px;
+    color: var(--text_muted);
+    font-weight: bold;
+}
+
+#spazzTabs QTabBar::tab:hover {
+    color: #FFFFFF;
+    border-top-color: var(--sun_orange);
+}
+
+#spazzTabs QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_violet), stop:0.35 var(--sun_magenta),
+        stop:0.7 var(--sun_coral), stop:1 var(--sun_gold));
+    border-top-color: #FFD3A8;
+    color: #FFFFFF;
+}
+
+#spazzTabs::pane {
+    border-top: 2px solid var(--sun_coral);
+}
+
+#spazzAddTab {
+    color: var(--sun_gold);
+    font-weight: bold;
+    font-size: 14px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 0px 8px;
+}
+
+#spazzAddTab:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_magenta), stop:1 var(--sun_orange));
+    color: #FFFFFF;
+}
+
+#spazzDockTabHint {
+    color: var(--text_muted);
+    font-style: italic;
+}
+
+/* ---------- Inputs ---------- */
+
+QComboBox,
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QPlainTextEdit,
+QTextEdit {
+    border-radius: var(--border_radius_small);
+}
+
+QMenu {
+    border: 1px solid var(--sun_plum);
+}
+
+QMenu::item:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_plum), stop:0.6 var(--sun_magenta), stop:1 var(--sun_coral));
+    color: #FFFFFF;
+}
+
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 var(--sun_violet), stop:0.5 var(--sun_magenta), stop:1 var(--sun_gold));
+}

@@ -69,6 +69,8 @@ target_sources(
     components/SceneTree.hpp
     components/SilentUpdateCheckBox.hpp
     components/SilentUpdateSpinBox.hpp
+    components/SpazzDockTabs.cpp
+    components/SpazzDockTabs.hpp
     components/SourceSelectButton.cpp
     components/SourceSelectButton.hpp
     components/SourceToolbar.cpp

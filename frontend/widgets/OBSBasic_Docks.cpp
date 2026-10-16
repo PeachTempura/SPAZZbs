@@ -19,7 +19,10 @@
 
 #include "OBSBasic.hpp"
 
+#include <components/SpazzDockTabs.hpp>
 #include <qt-wrappers.hpp>
+
+#include <QMenu>
 
 void setupDockAction(QDockWidget *dock)
 {
@@ -77,26 +80,14 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 	restoreState(startingDockLayout);
 	ui->sideDocks->setChecked(true);
 
-	int cx = width();
-	int bottomDocksHeight = height();
-
-	bottomDocksHeight = bottomDocksHeight * 225 / 1000;
-
-	ui->scenesDock->setVisible(true);
-	ui->sourcesDock->setVisible(true);
-	ui->mixerDock->setVisible(true);
-	ui->transitionsDock->setVisible(true);
-	controlsDock->setVisible(true);
 	statsDock->setVisible(false);
 	statsDock->setFloating(true);
 
-	QList<QDockWidget *> bottomDocks{ui->mixerDock, ui->transitionsDock, controlsDock};
-
-	resizeDocks(bottomDocks, {bottomDocksHeight, bottomDocksHeight, bottomDocksHeight}, Qt::Vertical);
-	resizeDocks(bottomDocks, {cx * 45 / 100, cx * 14 / 100, cx * 16 / 100}, Qt::Horizontal);
-
-	int sideDockWidth = std::min(width() * 30 / 100, 280);
-	resizeDocks({ui->scenesDock, ui->sourcesDock}, {sideDockWidth, sideDockWidth}, Qt::Horizontal);
+	/* SPAZZbs: the stock segments all live in the Main tab of the bottom area */
+	if (spazzTabs) {
+		spazzTabs->ResetToDefault(
+			{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock, controlsDock});
+	}
 
 	activateWindow();
 }
@@ -117,6 +108,11 @@ void OBSBasic::on_lockDocks_toggled(bool lock)
 	ui->transitionsDock->setFeatures(mainFeatures);
 	controlsDock->setFeatures(mainFeatures);
 	statsDock->setFeatures(features);
+
+	/* The tab strip itself never moves */
+	if (spazzTabs) {
+		spazzTabs->setFeatures(QDockWidget::NoDockWidgetFeatures);
+	}
 
 	for (int i = extraDocks.size() - 1; i >= 0; i--) {
 		extraDocks[i]->setFeatures(features);
@@ -155,6 +151,10 @@ void OBSBasic::AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool ex
 	setupDockAction(dock);
 	dock->setFeatures(features);
 	addDockWidget(area, dock);
+
+	if (spazzTabs) {
+		spazzTabs->TrackDock(dock);
+	}
 
 #ifdef BROWSER_AVAILABLE
 	if (extraBrowser && extraBrowserMenuDocksSeparator.isNull()) {
@@ -203,7 +203,8 @@ bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 	     << "mixerDock"
 	     << "transitionsDock"
 	     << "controlsDock"
-	     << "statsDock";
+	     << "statsDock"
+	     << "spazzTabsDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;
 
@@ -223,6 +224,10 @@ void OBSBasic::AddCustomDockWidget(QDockWidget *dock)
 
 	dock->setFeatures(features);
 	addDockWidget(Qt::RightDockWidgetArea, dock);
+
+	if (spazzTabs) {
+		spazzTabs->TrackDock(dock);
+	}
 
 	extraCustomDockNames.push_back(dock->objectName());
 	extraCustomDocks.push_back(dock);
@@ -257,4 +262,28 @@ void OBSBasic::RepairCustomExtraDockName()
 	blog(LOG_WARNING, "The custom dock '%s' got its object name restored", QT_TO_UTF8(extraCustomDockNames[idx]));
 
 	dock->setObjectName(extraCustomDockNames[idx]);
+}
+
+void OBSBasic::SetupSpazzTabs()
+{
+	if (!spazzTabs) {
+		return;
+	}
+
+	SpazzDockTabs::DefaultDocks defaults{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock,
+					      controlsDock};
+
+	for (QDockWidget *dock : findChildren<QDockWidget *>()) {
+		spazzTabs->TrackDock(dock);
+	}
+
+	if (!spazzTabs->Load(defaults)) {
+		spazzTabs->ResetToDefault(defaults);
+	}
+
+	/* Docks menu: "Dock Tabs" submenu, rebuilt every time it opens */
+	QMenu *tabsMenu = new QMenu(QTStr("SPAZZ.DockTabs.Menu"), ui->menuDocks);
+	ui->menuDocks->insertMenu(ui->resetDocks, tabsMenu);
+	ui->menuDocks->insertSeparator(ui->resetDocks);
+	connect(tabsMenu, &QMenu::aboutToShow, this, [this, tabsMenu]() { spazzTabs->PopulateDocksMenu(tabsMenu); });
 }

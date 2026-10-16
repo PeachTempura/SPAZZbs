@@ -1,3 +1,25 @@
+SPAZZbs
+=======
+
+SPAZZbs is a fork of `OBS Studio <https://github.com/obsproject/obs-studio>`_
+with a few changes:
+
+- **Tabbed bottom area.** Scenes, Sources, Mixer, Transitions and Controls live
+  in a "Main" tab. Drag any dock (browser docks, plugin docks, stats, or one of
+  the main panels) onto a tab to move it there, or onto **+** to give it a new
+  tab. Right-click a tab to rename, close, or move docks in and out.
+- **Name before you configure.** Adding a new source asks for its name first,
+  then opens its properties.
+- **SPAZZ Sunset theme.** Dark mode with an early-2000s messenger-skin feel and
+  sunset gradient bars. It is the default; switch in Settings > Appearance.
+- Uses its own settings folder (``%APPDATA%\spazzbs``), so it runs alongside
+  regular OBS without touching your OBS setup. The OBS auto-updater is off.
+
+SPAZZbs is not affiliated with or endorsed by the OBS Project. Like OBS Studio,
+it is licensed under the GNU General Public License v2 (see COPYING).
+
+----
+
 OBS Studio <https://obsproject.com>
 ===================================
 

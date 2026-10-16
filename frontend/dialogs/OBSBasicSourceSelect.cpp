@@ -18,6 +18,7 @@
 
 #include "OBSApp.hpp"
 #include "OBSBasicSourceSelect.hpp"
+#include "NameDialog.hpp"
 
 #include <utility/ResizeSignaler.hpp>
 #include <utility/ThumbnailManager.hpp>
@@ -749,7 +750,35 @@ void OBSBasicSourceSelect::createNew()
 	QString placeholder = getDisplayNameForSourceType(selectedTypeId);
 	std::string newName = getNewSourceName(placeholder.toStdString().c_str());
 
-	std::optional<OBSSource> createResult = setupNewSource(this, id, newName.c_str());
+	/* SPAZZbs: ask for the source's name before creating it, then open the
+	 * properties window as usual. Re-prompt on empty or duplicate names. */
+	std::optional<OBSSource> createResult;
+	for (;;) {
+		std::string typedName;
+		bool accepted = NameDialog::AskForName(this, QTStr("Basic.SourceSelect.NameNew.Title"),
+						       QTStr("Basic.SourceSelect.NameNew.Text").arg(placeholder),
+						       typedName, QString::fromStdString(newName));
+		if (!accepted) {
+			return;
+		}
+
+		if (typedName.empty()) {
+			OBSMessageBox::warning(this, QTStr("NoNameEntered.Title"), QTStr("NoNameEntered.Text"));
+			continue;
+		}
+
+		OBSSourceAutoRelease existing = obs_get_source_by_name(typedName.c_str());
+		if (existing) {
+			OBSMessageBox::warning(this, QTStr("NameExists.Title"), QTStr("NameExists.Text"));
+			newName = typedName;
+			continue;
+		}
+
+		newName = typedName;
+		createResult = setupNewSource(this, id, newName.c_str());
+		break;
+	}
+
 	if (!createResult.has_value()) {
 		return;
 	}

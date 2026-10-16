@@ -30,6 +30,7 @@
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
 #endif
+#include <components/SpazzDockTabs.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -257,6 +258,11 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	statsDock->setVisible(false);
 	statsDock->setFloating(true);
 	statsDock->resize(700, 200);
+
+	/* SPAZZbs: tabbed bottom area. Docks get moved into it in OBSInit,
+	 * once every dock (plugins, browser docks) exists. */
+	spazzTabs = new SpazzDockTabs(this);
+	addDockWidget(Qt::BottomDockWidgetArea, spazzTabs);
 
 	copyActionsDynamicProperties();
 
@@ -1136,6 +1142,8 @@ void OBSBasic::OBSInit()
 		}
 	}
 
+	SetupSpazzTabs();
+
 	bool docksLocked = config_get_bool(App()->GetUserConfig(), "BasicWindow", "DocksLocked");
 	on_lockDocks_toggled(docksLocked);
 	ui->lockDocks->blockSignals(true);
@@ -1208,6 +1216,14 @@ void OBSBasic::OBSInit()
 	ui->actionCheckForUpdates = nullptr;
 #endif
 #endif
+
+	/* SPAZZbs: no OBS updater, so hide its menu items */
+	if (ui->actionCheckForUpdates) {
+		ui->actionCheckForUpdates->setVisible(false);
+	}
+	if (ui->actionRepair) {
+		ui->actionRepair->setVisible(false);
+	}
 
 #ifdef __APPLE__
 	/* Remove OBS' Fullscreen Interface menu in favor of the one macOS adds by default */
@@ -1750,6 +1766,10 @@ void OBSBasic::saveAll()
 		config_set_string(App()->GetUserConfig(), "BasicWindow", "DockState",
 				  saveState().toBase64().constData());
 
+		if (spazzTabs) {
+			spazzTabs->Save();
+		}
+
 #ifdef BROWSER_AVAILABLE
 		if (cef) {
 			SaveExtraBrowserDocks();
@@ -1982,12 +2002,13 @@ void OBSBasic::UpdateTitleBar()
 	const char *profile = config_get_string(App()->GetUserConfig(), "Basic", "Profile");
 	const char *sceneCollection = config_get_string(App()->GetUserConfig(), "Basic", "SceneCollection");
 
-	name << "OBS ";
+	/* SPAZZbs: keep the upstream version so plugin/support issues are traceable */
+	name << "SPAZZbs ";
 	if (previewProgramMode) {
-		name << "Studio ";
+		name << "Studio Mode ";
 	}
 
-	name << App()->GetVersionString(false);
+	name << "(OBS " << App()->GetVersionString(false) << ")";
 	if (safe_mode) {
 		name << " (" << Str("TitleBar.SafeMode") << ")";
 	}

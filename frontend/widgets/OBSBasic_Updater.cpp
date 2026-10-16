@@ -202,6 +202,11 @@ void OBSBasic::TimedCheckForUpdates()
 
 void OBSBasic::CheckForUpdates(bool manualUpdate)
 {
+	if (App()->IsUpdaterDisabled()) {
+		UNUSED_PARAMETER(manualUpdate);
+		return;
+	}
+
 #if _WIN32
 	ui->actionCheckForUpdates->setEnabled(false);
 	ui->actionRepair->setEnabled(false);

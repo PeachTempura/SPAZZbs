@@ -1,0 +1,48 @@
+name: SPAZZbs Windows Build
+run-name: SPAZZbs Windows build (${{ github.ref_name }})
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: spazzbs-windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-build:
+    name: Windows x64 🪟
+    runs-on: windows-2025-vs2026
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Build SPAZZbs 🧱
+        uses: ./.github/actions/build-obs
+        with:
+          target: x64
+          config: RelWithDebInfo
+
+      - name: Package SPAZZbs 📀
+        uses: ./.github/actions/package-obs
+        with:
+          target: x64
+          config: RelWithDebInfo
+          package: false
+
+      - name: Rename Package 🏷️
+        run: |
+          $Zip = Get-ChildItem -Path "${{ github.workspace }}/build_x64" -Filter "obs-studio-*-windows-x64.zip" -File | Select-Object -First 1
+          Move-Item -Path $Zip.FullName -Destination "${{ github.workspace }}/build_x64/SPAZZbs-windows-x64.zip"
+
+      - name: Upload SPAZZbs 📡
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SPAZZbs-windows-x64
+          path: ${{ github.workspace }}/build_x64/SPAZZbs-windows-x64.zip

@@ -65,6 +65,7 @@ class YouTubeAppDock;
 #endif
 class QMessageBox;
 class QWidgetAction;
+class SpazzDockTabs;
 struct QuickTransition;
 
 namespace OBS {
@@ -453,6 +454,10 @@ private:
 
 	QPointer<OBSDock> controlsDock;
 	QPointer<OBSDock> mixerDock;
+
+	/* SPAZZbs: tabbed bottom area */
+	QPointer<SpazzDockTabs> spazzTabs;
+	void SetupSpazzTabs();
 
 public:
 	void AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool extraBrowser = false);
