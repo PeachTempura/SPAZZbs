@@ -280,11 +280,11 @@ void OBSBasic::SetupSpazzTabs()
 	}
 
 	if (!spazzTabs->Load(defaults)) {
+		/* no saved tabs yet: stock layout plus the Music tab */
 		spazzTabs->ResetToDefault(defaults);
-	}
-
-	/* first launch with the music player: give it its own tab */
-	if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
+		PlaceSpazzMusicDock();
+	} else if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
+		/* saved tabs from before the music player existed */
 		PlaceSpazzMusicDock();
 	}
 
