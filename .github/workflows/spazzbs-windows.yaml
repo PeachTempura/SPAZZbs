@@ -90,11 +90,32 @@ jobs:
           git tag "${env:SPAZZBS_BASE_VERSION}" HEAD
           git describe --tags --long
 
+      # Same as the build-obs action, but the output is saved so errors can
+      # be shown as annotations below.
       - name: Build SPAZZbs 🧱
-        uses: ./.github/actions/build-obs
-        with:
-          target: x64
-          config: RelWithDebInfo
+        run: |
+          git fetch origin --no-tags --no-recurse-submodules -q
+          .github/scripts/Build-Windows.ps1 -Target x64 -Configuration RelWithDebInfo *>&1 |
+            Tee-Object -FilePath "${{ github.workspace }}/spazz-build.log"
+          if ( $LASTEXITCODE -ne 0 ) { exit $LASTEXITCODE }
+
+      - name: Report Build Errors 🔎
+        if: failure()
+        run: |
+          $Log = "${{ github.workspace }}/spazz-build.log"
+          if ( -not (Test-Path $Log) ) { Write-Host "::error::No build log was written"; exit 0 }
+          $Lines = Get-Content $Log
+          $Hits = $Lines | Select-String -Pattern 'CMake Error|CMake Warning \(dev\)|error C\d+|error MSB\d+|error LNK\d+|fatal error|: error |Error:' -Context 0,8
+          $Count = 0
+          foreach ( $Hit in $Hits ) {
+            if ( $Count -ge 8 ) { break }
+            $Text = @($Hit.Line) + $Hit.Context.PostContext
+            $Msg = ($Text -join "`n").Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error::$Msg"
+            $Count++
+          }
+          $Tail = (($Lines | Select-Object -Last 40) -join "`n").Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+          Write-Host "::error title=Last lines of the build::$Tail"
 
       - name: Package SPAZZbs 📀
         uses: ./.github/actions/package-obs
