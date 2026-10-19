@@ -66,6 +66,8 @@ class YouTubeAppDock;
 class QMessageBox;
 class QWidgetAction;
 class SpazzDockTabs;
+class SpazzMusicPlayer;
+class SpazzMusicDock;
 struct QuickTransition;
 
 namespace OBS {
@@ -458,6 +460,11 @@ private:
 	/* SPAZZbs: tabbed bottom area */
 	QPointer<SpazzDockTabs> spazzTabs;
 	void SetupSpazzTabs();
+
+	/* SPAZZbs: SPAZZamp music player */
+	QPointer<SpazzMusicPlayer> spazzMusic;
+	QPointer<SpazzMusicDock> spazzMusicDock;
+	void PlaceSpazzMusicDock();
 
 public:
 	void AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool extraBrowser = false);

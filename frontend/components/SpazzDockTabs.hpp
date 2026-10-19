@@ -79,6 +79,10 @@ public:
 	void MoveDockToPage(QDockWidget *dock, SpazzDockTabPage *page);
 	void MoveDockToMainWindow(QDockWidget *dock);
 
+	/* Puts a dock in the tab with this name, creating the tab if needed,
+	 * without switching away from the tab you're on. */
+	void PlaceInTab(QDockWidget *dock, const QString &tabName);
+
 	/* Fills a menu with "move dock to tab" actions, used by the Docks menu. */
 	void PopulateDocksMenu(QMenu *menu);
 

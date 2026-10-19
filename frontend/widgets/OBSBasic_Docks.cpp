@@ -20,6 +20,7 @@
 #include "OBSBasic.hpp"
 
 #include <components/SpazzDockTabs.hpp>
+#include <docks/SpazzMusicDock.hpp>
 #include <qt-wrappers.hpp>
 
 #include <QMenu>
@@ -87,6 +88,7 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 	if (spazzTabs) {
 		spazzTabs->ResetToDefault(
 			{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock, controlsDock});
+		PlaceSpazzMusicDock();
 	}
 
 	activateWindow();
@@ -281,9 +283,24 @@ void OBSBasic::SetupSpazzTabs()
 		spazzTabs->ResetToDefault(defaults);
 	}
 
+	/* first launch with the music player: give it its own tab */
+	if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
+		PlaceSpazzMusicDock();
+	}
+
 	/* Docks menu: "Dock Tabs" submenu, rebuilt every time it opens */
 	QMenu *tabsMenu = new QMenu(QTStr("SPAZZ.DockTabs.Menu"), ui->menuDocks);
 	ui->menuDocks->insertMenu(ui->resetDocks, tabsMenu);
 	ui->menuDocks->insertSeparator(ui->resetDocks);
 	connect(tabsMenu, &QMenu::aboutToShow, this, [this, tabsMenu]() { spazzTabs->PopulateDocksMenu(tabsMenu); });
+}
+
+void OBSBasic::PlaceSpazzMusicDock()
+{
+	if (!spazzTabs || !spazzMusicDock) {
+		return;
+	}
+
+	spazzTabs->PlaceInTab(spazzMusicDock, QTStr("SPAZZ.Music.TabName"));
+	config_set_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced", true);
 }

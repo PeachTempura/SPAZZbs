@@ -3,6 +3,8 @@ target_sources(
   PRIVATE
     utility/AdvancedOutput.cpp
     utility/AdvancedOutput.hpp
+    utility/SpazzMusicPlayer.cpp
+    utility/SpazzMusicPlayer.hpp
     utility/BaseLexer.hpp
     utility/BasicOutputHandler.cpp
     utility/BasicOutputHandler.hpp
@@ -79,3 +81,12 @@ target_sources(
     utility/undo_stack.cpp
     utility/undo_stack.hpp
 )
+
+# SPAZZbs: the music dock shares the visualizer's audio analysis
+target_sources(
+  obs-studio
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer/spazz-analyzer.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer/spazz-analyzer.h"
+)
+target_include_directories(obs-studio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer")

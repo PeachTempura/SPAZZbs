@@ -31,6 +31,8 @@
 #include <docks/YouTubeAppDock.hpp>
 #endif
 #include <components/SpazzDockTabs.hpp>
+#include <docks/SpazzMusicDock.hpp>
+#include <utility/SpazzMusicPlayer.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -1120,6 +1122,12 @@ void OBSBasic::OBSInit()
 		NewYouTubeAppDock();
 	}
 #endif
+
+	/* SPAZZbs: the music player and its dock. Created after the scene
+	 * collection is loaded and before docks are restored. */
+	spazzMusic = new SpazzMusicPlayer(this);
+	spazzMusicDock = new SpazzMusicDock(spazzMusic, this);
+	AddDockWidget(spazzMusicDock, Qt::BottomDockWidgetArea);
 
 	const char *dockStateStr = config_get_string(App()->GetUserConfig(), "BasicWindow", "DockState");
 

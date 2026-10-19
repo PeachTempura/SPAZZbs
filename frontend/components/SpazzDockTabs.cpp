@@ -676,3 +676,25 @@ void SpazzDockTabs::PopulateDocksMenu(QMenu *menu)
 				    [this, dock]() { MoveDockToMainWindow(dock); });
 	}
 }
+
+void SpazzDockTabs::PlaceInTab(QDockWidget *dock, const QString &tabName)
+{
+	if (!dock)
+		return;
+
+	SpazzDockTabPage *page = nullptr;
+	for (int i = 0; i < tabs->count(); i++) {
+		if (tabs->tabText(i) == tabName)
+			page = pageAt(i);
+	}
+
+	QWidget *current = tabs->currentWidget();
+	if (!page)
+		page = AddTab(tabName);
+
+	pendingDocks.remove(dock->objectName());
+	MoveDockToPage(dock, page);
+
+	if (current)
+		tabs->setCurrentWidget(current);
+}

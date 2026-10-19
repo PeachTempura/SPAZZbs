@@ -1,0 +1,355 @@
+// SPAZZbs Visualizer
+//
+// "bands" is a 64x1 texture written every frame by spazz-visualizer.c:
+//   r = smoothed level of the band (0..1), low -> high frequency
+//   g = falling peak marker
+//   b = onset flash (spikes when that band suddenly gets louder)
+//
+// Coordinates used below: p.x in [0, aspect], p.y in [0, 1] from the top,
+// so shapes stay round on any canvas size. "px" is one pixel in those units.
+
+uniform float4x4 ViewProj;
+uniform texture2d bands;
+
+uniform float2 res;
+uniform float time;
+uniform float flow;
+uniform float bass;
+uniform float mid;
+uniform float treble;
+uniform float level;
+uniform float beat;
+uniform float hue;
+uniform float density;
+uniform float bg;
+
+sampler_state band_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+
+float hash21(float2 p)
+{
+	float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float hash11(float p)
+{
+	p = frac(p * 0.1031);
+	p *= p + 33.33;
+	p *= p + p;
+	return frac(p);
+}
+
+/* Soft jewel-toned rainbow */
+float3 prism(float h)
+{
+	float3 c = 0.5 + 0.5 * cos(6.2831853 * (h + float3(0.0, 0.333, 0.667)));
+	c = c * c * (3.0 - 2.0 * c);
+	return lerp(c, float3(1.0, 1.0, 1.0), 0.12);
+}
+
+float4 band_full(float x)
+{
+	return bands.SampleLevel(band_sampler, float2(saturate(x) * 0.984375 + 0.0078125, 0.5), 0.0);
+}
+
+float band_level(float x)
+{
+	return band_full(x).r;
+}
+
+float3 midnight(float2 uv)
+{
+	float3 top = float3(0.016, 0.014, 0.034);
+	float3 bot = float3(0.030, 0.020, 0.052);
+	float3 c = lerp(top, bot, uv.y);
+	float2 d = uv - 0.5;
+	return c * (1.0 - 0.9 * dot(d, d));
+}
+
+/* Tone-map accumulated light and output either transparent or over the
+ * midnight backdrop. */
+float4 finish(float3 light, float2 uv)
+{
+	float3 col = 1.0 - exp(-max(light, float3(0.0, 0.0, 0.0)));
+	float a = saturate(max(col.r, max(col.g, col.b)) * 1.15);
+	float4 clear_out = float4(col / max(a, 0.0001), a);
+	float4 night_out = float4(midnight(uv) + col, 1.0);
+	return lerp(clear_out, night_out, bg);
+}
+
+/* ------------------------------------------------------------------ */
+/* falling prism shimmer                                               */
+
+float3 shimmer_layer(float2 p, float aspect, float px, float layer, float cols, float speed, float bright)
+{
+	float3 light = float3(0.0, 0.0, 0.0);
+	float cw = aspect / cols;
+	float ci = floor(p.x / cw);
+	float keep = saturate(0.42 * density + 0.08 * layer);
+	float w = (0.7 + 0.55 * layer) * px;
+
+	for (int o = -1; o <= 1; o++) {
+		float c = ci + (float)o;
+
+		for (int k = 0; k < 2; k++) {
+			float kf = (float)k;
+			float seed = hash21(float2(c, layer * 17.0 + kf * 5.3));
+			float seed2 = hash21(float2(c * 1.37 + 4.1, layer * 3.1 + kf * 11.7));
+			float present = step(seed2, keep);
+
+			float cx = (c + 0.2 + 0.6 * seed) * cw;
+			float bx = abs(cx / aspect - 0.5) * 2.0;
+			float4 bd = band_full(bx);
+			float e = bd.r;
+			float fl = bd.b;
+
+			float spd = (0.35 + 0.65 * frac(seed2 * 7.7)) * speed;
+			float head = frac(seed * 7.13 + flow * spd * 0.25) * 1.5 - 0.25;
+
+			float dx = p.x - cx;
+			float dy = head - p.y;
+
+			/* glitter tail: sparse twinkling dots behind the head */
+			float tail_len = (0.05 + 0.24 * e) * (0.7 + 0.25 * layer);
+			float tail = step(0.0, dy) * exp(-max(dy, 0.0) / tail_len);
+			float row = floor(p.y * res.y / (2.0 + layer));
+			float g = hash21(float2(c * 3.1 + kf * 7.0, row + floor(time * 12.0 + seed * 50.0)));
+			float sparkle = smoothstep(0.6, 1.0, g);
+
+			/* glitter tail; a faint thread plus twinkling dots */
+			float xf = exp(-(dx * dx) / (w * w));
+			float streak = tail * xf * (0.06 + 1.8 * sparkle);
+
+			/* white light near the top, refracting into a spectrum as it
+			 * falls; each tail runs through the colours along its length */
+			float fall = smoothstep(0.05, 1.0, p.y);
+			float3 tint = lerp(float3(1.0, 0.97, 0.93),
+					   prism(hue + bx * 0.55 + layer * 0.13 + seed * 0.2 + dy * 2.5),
+					   0.2 + 0.7 * fall);
+
+			/* star glint at the head: white core and vertical ray, the
+			 * horizontal ray splits into a little rainbow like a prism */
+			float d2 = dx * dx + dy * dy;
+			float r = (1.3 + layer) * px;
+			float core = exp(-d2 / (r * r));
+			float arm_len = px * (5.0 + 12.0 * e + 6.0 * layer);
+			float arm_v = exp(-abs(dy) / arm_len) * exp(-abs(dx) / (px * 0.8));
+			float arm_h = exp(-abs(dx) / (arm_len * 1.3)) * exp(-abs(dy) / (px * 0.9));
+			float twinkle = 0.65 + 0.35 * sin(time * 9.0 + seed * 40.0);
+			float shine = twinkle * (0.35 + 1.1 * e + 0.9 * fl);
+			float3 split = prism(hue + seed * 0.3 + dx / arm_len * 0.18);
+
+			float amount = bright * (0.22 + 1.35 * e) * present;
+			light += (tint * streak + float3(1.0, 0.98, 0.95) * (core * 1.6 + arm_v * 0.6) * shine +
+				  split * arm_h * 0.9 * shine) * amount;
+		}
+	}
+
+	return light;
+}
+
+float3 glitter_crown(float2 p, float aspect, float px)
+{
+	float cell_px = 3.0;
+	float2 cell = floor(p * res.y / cell_px);
+	float g = hash21(cell + floor(time * 8.0) * 0.618);
+	float top = exp(-p.y / (0.035 + 0.06 * treble + 0.04 * density));
+	float bx = abs((cell.x * cell_px / res.y) / aspect - 0.5) * 2.0;
+	float e = band_level(bx);
+
+	float2 f = frac(p * res.y / cell_px) - 0.5;
+	float dot_shape = exp(-dot(f, f) * 8.0);
+
+	float3 tint = lerp(float3(1.0, 0.97, 0.93), prism(hue + bx * 0.5), 0.35);
+	return tint * smoothstep(0.92, 1.0, g) * dot_shape * top * (0.3 + 1.4 * treble + 1.2 * e);
+}
+
+float3 beat_flare(float2 p, float aspect)
+{
+	float x = p.x / aspect;
+	float wave = 0.6 + 0.4 * sin(x * 9.0 + time * 0.7);
+	return prism(hue + x * 0.35 + 0.1) * beat * 0.28 * wave * exp(-p.y / 0.16);
+}
+
+float4 PSPrismRain(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+
+	float d = max(density, 0.25);
+	float3 light = float3(0.0, 0.0, 0.0);
+	light += shimmer_layer(p, aspect, px, 0.0, 70.0 * d, 0.55, 0.45);
+	light += shimmer_layer(p, aspect, px, 1.0, 44.0 * d, 0.85, 0.80);
+	light += shimmer_layer(p, aspect, px, 2.0, 26.0 * d, 1.20, 1.15);
+	light += glitter_crown(p, aspect, px);
+	light += beat_flare(p, aspect);
+
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* prism halo                                                          */
+
+float4 PSPrismHalo(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+
+	float2 q = p - float2(aspect * 0.5, 0.5);
+	float r = length(q);
+	/* the spectrum wraps the ring three times, mirrored, so the shape
+	 * stays balanced: six soft petals that ripple with the music */
+	float ang = atan2(q.x, -q.y);
+	float a01 = ang / 6.2831853 + 0.5;
+	float m = abs(frac(a01 * 3.0) - 0.5) * 2.0;
+
+	float e = (band_level(m - 0.02) + band_level(m) * 2.0 + band_level(m + 0.02)) * 0.25;
+	float base_r = 0.2 + 0.035 * level + 0.025 * beat;
+	float ring_r = base_r + e * 0.035;
+
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* thin glass ring, split into colour fringes by bass */
+	float3 dr = (r - ring_r) + px * (1.0 + 3.0 * bass) * float3(-1.0, 0.0, 1.0);
+	float w = px * (1.2 + 2.0 * e);
+	float3 ring = exp(-(dr * dr) / (w * w));
+	light += ring * lerp(float3(1.0, 0.97, 0.93), prism(hue + a01), 0.55) * (0.6 + 1.6 * e);
+
+	/* faint inner rim */
+	light += prism(hue + a01 + 0.5) * exp(-abs(r - base_r) / (px * 3.0)) * 0.18;
+
+	/* prismatic rays leaving the ring */
+	float nb = 160.0;
+	float ai = floor(a01 * nb);
+	float rh = hash11(ai + 3.7);
+	float fx = frac(a01 * nb) - 0.5;
+	float beam = exp(-(fx * fx) / 0.02);
+	float out_d = max(r - ring_r, 0.0);
+	float reach = 0.04 + 0.4 * e * (0.4 + 0.6 * rh) + 0.1 * beat;
+	float ray = beam * step(ring_r, r) * exp(-out_d / reach) * (0.15 + 1.2 * e) * (0.5 + 0.5 * rh);
+	light += prism(hue + a01 + out_d * 1.8) * ray * 0.9;
+
+	/* soft bloom around the ring on beats */
+	light += prism(hue + a01) * exp(-abs(r - ring_r) / 0.05) * beat * 0.25;
+
+	/* far shimmer dust behind */
+	light += shimmer_layer(p, aspect, px, 0.0, 70.0 * max(density, 0.25), 0.4, 0.3);
+
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* spectrum glass (Winamp tribute)                                     */
+
+float4 PSSpectrumGlass(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+
+	float x0 = 0.06;
+	float x1 = 0.94;
+	float nb = 32.0;
+	float baseline = 0.74;
+	float max_h = 0.58;
+
+	float t = (uv.x - x0) / (x1 - x0);
+	float i = clamp(floor(t * nb), 0.0, nb - 1.0);
+	float fx = t * nb - i;
+	float inside_x = step(0.0, t) * step(t, 1.0);
+
+	float4 bd = band_full((i + 0.5) / nb);
+	float h = bd.r * max_h;
+	float peak_y = baseline - bd.g * max_h;
+
+	float gap = 0.16;
+	float col_mask = smoothstep(gap * 0.5, gap * 0.5 + 0.04, fx) * smoothstep(gap * 0.5, gap * 0.5 + 0.04, 1.0 - fx);
+	col_mask *= inside_x;
+
+	float3 c = prism(hue + i / nb * 0.6);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* the bar, with LED segments and a hot top */
+	float above = baseline - uv.y;
+	float in_bar = step(0.0, above) * step(above, h);
+	float seg = smoothstep(0.15, 0.35, frac(above / 0.0125));
+	float heat = saturate(above / max(h, 0.001));
+	float3 bar_col = lerp(c * 0.8, lerp(c, float3(1.0, 1.0, 1.0), 0.4), heat) * 1.3;
+	light += bar_col * in_bar * col_mask * seg * (0.9 + 0.8 * bd.b);
+
+	/* glass sheen down the left edge of each bar */
+	light += float3(1.0, 1.0, 1.0) * in_bar * col_mask * exp(-fx / 0.12) * 0.12;
+
+	/* glowing peak cap */
+	float pd = (uv.y - peak_y) / (px * 1.6);
+	light += lerp(c, float3(1.0, 1.0, 1.0), 0.5) * exp(-pd * pd) * col_mask * 1.4 * step(0.01, bd.g);
+
+	/* bloom around the bar */
+	float dist_top = max(above - h, 0.0);
+	float in_col = step(0.0, above + 0.002);
+	light += c * col_mask * in_col * exp(-dist_top / (px * 14.0)) * bd.r * 0.25 * (1.0 - in_bar);
+
+	/* reflection on the floor */
+	float below = uv.y - baseline;
+	float in_refl = step(0.0, below) * step(below, h * 0.45);
+	light += bar_col * in_refl * col_mask * exp(-below / 0.05) * 0.22;
+
+	/* floor line */
+	light += prism(hue + uv.x * 0.5) * exp(-abs(below) / (px * 1.2)) * 0.35 * inside_x;
+
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+
+technique PrismRain
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPrismRain(v_in);
+	}
+}
+
+technique PrismHalo
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPrismHalo(v_in);
+	}
+}
+
+technique SpectrumGlass
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSSpectrumGlass(v_in);
+	}
+}
