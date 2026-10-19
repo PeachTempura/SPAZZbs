@@ -83,10 +83,5 @@ target_sources(
 )
 
 # SPAZZbs: the music dock shares the visualizer's audio analysis
-target_sources(
-  obs-studio
-  PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer/spazz-analyzer.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer/spazz-analyzer.h"
-)
+target_sources(obs-studio PRIVATE utility/spazz-analyzer-shared.c)
 target_include_directories(obs-studio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/spazz-visualizer")
