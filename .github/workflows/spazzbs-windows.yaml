@@ -24,10 +24,12 @@ jobs:
 
       - name: Parse Effects 🔍
         run: |
-          .github/spazzbs/fxcheck/build.sh ./fxparse
+          # surface any error as an annotation so it's visible without logs
+          report() { while IFS= read -r line; do echo "$line"; echo "::error::$line"; done; }
+          .github/spazzbs/fxcheck/build.sh ./fxparse 2>&1 | report; test -x ./fxparse
           mkdir -p hlsl/spazz hlsl/control
-          ./fxparse plugins/spazz-visualizer/data/spazz-visualizer.effect hlsl/spazz
-          ./fxparse libobs/data/default.effect hlsl/control
+          ./fxparse plugins/spazz-visualizer/data/spazz-visualizer.effect hlsl/spazz 2> >(report)
+          ./fxparse libobs/data/default.effect hlsl/control 2> >(report)
 
       - name: Upload HLSL 📡
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
