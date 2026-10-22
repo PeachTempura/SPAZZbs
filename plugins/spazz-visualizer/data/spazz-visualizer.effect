@@ -8,6 +8,13 @@
 // Coordinates used below: p.x in [0, aspect], p.y in [0, 1] from the top,
 // so shapes stay round on any canvas size. "px" is one pixel in those units.
 
+/* real branches on D3D (skips work for far-away drops); nothing on OpenGL */
+#ifdef _D3D11
+#define BRANCH [branch]
+#else
+#define BRANCH
+#endif
+
 uniform float4x4 ViewProj;
 uniform texture2d bands;
 
@@ -109,6 +116,20 @@ float3 shimmer_layer(float2 p, float aspect, float px, float layer, float cols, 
 	float keep = saturate(0.42 * density + 0.08 * layer);
 	float w = (0.7 + 0.55 * layer) * px;
 
+	/* the same for every drop at this pixel */
+	float row = floor(p.y * res.y / (2.0 + layer));
+	float fall = smoothstep(0.05, 1.0, p.y);
+	float twinkle_base = time * 9.0;
+
+	/* the furthest a drop can light anything at full volume. Pixels outside
+	 * that skip the drop entirely: most pixels are near no drop at all. */
+	float tail_reach = 6.0 * 0.29 * (0.7 + 0.25 * layer);
+	float arm_max = px * (17.0 + 6.0 * layer);
+	float reach_x = max(3.0 * w, 6.0 * px);
+	float reach_below = 6.0 * arm_max;
+	float reach_h = 7.8 * arm_max;
+	float reach_h_y = 6.0 * px;
+
 	for (int o = -1; o <= 1; o++) {
 		float c = ci + (float)o;
 
@@ -116,53 +137,60 @@ float3 shimmer_layer(float2 p, float aspect, float px, float layer, float cols, 
 			float kf = (float)k;
 			float seed = hash21(float2(c, layer * 17.0 + kf * 5.3));
 			float seed2 = hash21(float2(c * 1.37 + 4.1, layer * 3.1 + kf * 11.7));
-			float present = step(seed2, keep);
 
 			float cx = (c + 0.2 + 0.6 * seed) * cw;
-			float bx = abs(cx / aspect - 0.5) * 2.0;
-			float4 bd = band_full(bx);
-			float e = bd.r;
-			float fl = bd.b;
 
-			float spd = (0.35 + 0.65 * frac(seed2 * 7.7)) * speed;
+			/* speeds snap to 1/16 steps so "flow" can wrap at 64 with no
+			 * visible jump (see viz_tick) */
+			float spd = floor((0.35 + 0.65 * frac(seed2 * 7.7)) * speed * 16.0 + 0.5) / 16.0;
 			float head = frac(seed * 7.13 + flow * spd * 0.25) * 1.5 - 0.25;
 
 			float dx = p.x - cx;
 			float dy = head - p.y;
+			float adx = abs(dx);
 
-			/* glitter tail: sparse twinkling dots behind the head */
-			float tail_len = (0.05 + 0.24 * e) * (0.7 + 0.25 * layer);
-			float tail = step(0.0, dy) * exp(-max(dy, 0.0) / tail_len);
-			float row = floor(p.y * res.y / (2.0 + layer));
-			float g = hash21(float2(c * 3.1 + kf * 7.0, row + floor(time * 12.0 + seed * 50.0)));
-			float sparkle = smoothstep(0.6, 1.0, g);
+			bool near_v = adx < reach_x && dy > -reach_below && dy < tail_reach;
+			bool near_h = abs(dy) < reach_h_y && adx < reach_h;
+			bool visible = seed2 <= keep && (near_v || near_h);
 
-			/* glitter tail; a faint thread plus twinkling dots */
-			float xf = exp(-(dx * dx) / (w * w));
-			float streak = tail * xf * (0.06 + 1.8 * sparkle);
+			BRANCH
+			if (visible) {
+				float bx = abs(cx / aspect - 0.5) * 2.0;
+				float4 bd = band_full(bx);
+				float e = bd.r;
+				float fl = bd.b;
 
-			/* white light near the top, refracting into a spectrum as it
-			 * falls; each tail runs through the colours along its length */
-			float fall = smoothstep(0.05, 1.0, p.y);
-			float3 tint = lerp(float3(1.0, 0.97, 0.93),
-					   prism(hue + bx * 0.55 + layer * 0.13 + seed * 0.2 + dy * 2.5),
-					   0.2 + 0.7 * fall);
+				/* glitter tail: a faint thread plus twinkling dots */
+				float tail_len = (0.05 + 0.24 * e) * (0.7 + 0.25 * layer);
+				float tail = step(0.0, dy) * exp(-max(dy, 0.0) / tail_len);
+				float g = hash21(float2(c * 3.1 + kf * 7.0, row + floor(time * 12.0 + seed * 50.0)));
+				float sparkle = smoothstep(0.6, 1.0, g);
+				float xf = exp(-(dx * dx) / (w * w));
+				float streak = tail * xf * (0.06 + 1.8 * sparkle);
 
-			/* star glint at the head: white core and vertical ray, the
-			 * horizontal ray splits into a little rainbow like a prism */
-			float d2 = dx * dx + dy * dy;
-			float r = (1.3 + layer) * px;
-			float core = exp(-d2 / (r * r));
-			float arm_len = px * (5.0 + 12.0 * e + 6.0 * layer);
-			float arm_v = exp(-abs(dy) / arm_len) * exp(-abs(dx) / (px * 0.8));
-			float arm_h = exp(-abs(dx) / (arm_len * 1.3)) * exp(-abs(dy) / (px * 0.9));
-			float twinkle = 0.65 + 0.35 * sin(time * 9.0 + seed * 40.0);
-			float shine = twinkle * (0.35 + 1.1 * e + 0.9 * fl);
-			float3 split = prism(hue + seed * 0.3 + dx / arm_len * 0.18);
+				/* white light near the top, refracting into a spectrum as
+				 * it falls; each tail runs through the colours */
+				float3 tint = lerp(float3(1.0, 0.97, 0.93),
+						   prism(hue + bx * 0.55 + layer * 0.13 + seed * 0.2 + dy * 2.5),
+						   0.2 + 0.7 * fall);
 
-			float amount = bright * (0.22 + 1.35 * e) * present;
-			light += (tint * streak + float3(1.0, 0.98, 0.95) * (core * 1.6 + arm_v * 0.6) * shine +
-				  split * arm_h * 0.9 * shine) * amount;
+				/* star glint: white core and vertical ray, the horizontal
+				 * ray splits into a little rainbow like a prism */
+				float d2 = dx * dx + dy * dy;
+				float r = (1.3 + layer) * px;
+				float core = exp(-d2 / (r * r));
+				float arm_len = px * (5.0 + 12.0 * e + 6.0 * layer);
+				float arm_v = exp(-abs(dy) / arm_len) * exp(-adx / (px * 0.8));
+				float arm_h = exp(-adx / (arm_len * 1.3)) * exp(-abs(dy) / (px * 0.9));
+				float twinkle = 0.65 + 0.35 * sin(twinkle_base + seed * 40.0);
+				float shine = twinkle * (0.35 + 1.1 * e + 0.9 * fl);
+				float3 split = prism(hue + seed * 0.3 + dx / arm_len * 0.18);
+
+				float amount = bright * (0.22 + 1.35 * e);
+				light += (tint * streak + float3(1.0, 0.98, 0.95) * (core * 1.6 + arm_v * 0.6) * shine +
+					  split * arm_h * 0.9 * shine) *
+					 amount;
+			}
 		}
 	}
 

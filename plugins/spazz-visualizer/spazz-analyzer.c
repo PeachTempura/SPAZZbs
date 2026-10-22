@@ -84,20 +84,42 @@ void spazz_analyzer_init(struct spazz_analyzer *a, uint32_t sample_rate)
 	}
 }
 
+#define RING_MASK (SPAZZ_RING_SIZE - 1)
+_Static_assert((SPAZZ_RING_SIZE & RING_MASK) == 0, "SPAZZ_RING_SIZE must be a power of two");
+
+/* copies in at most two blocks instead of wrapping per sample */
+static void ring_write(struct spazz_analyzer *a, const float *src, size_t count)
+{
+	if (count >= SPAZZ_RING_SIZE) {
+		/* only the newest samples matter */
+		if (src)
+			src += count - SPAZZ_RING_SIZE;
+		count = SPAZZ_RING_SIZE;
+	}
+
+	size_t first = SPAZZ_RING_SIZE - a->ring_pos;
+	if (first > count)
+		first = count;
+
+	if (src) {
+		memcpy(a->ring + a->ring_pos, src, first * sizeof(float));
+		memcpy(a->ring, src + first, (count - first) * sizeof(float));
+	} else {
+		memset(a->ring + a->ring_pos, 0, first * sizeof(float));
+		memset(a->ring, 0, (count - first) * sizeof(float));
+	}
+
+	a->ring_pos = (a->ring_pos + count) & RING_MASK;
+}
+
 void spazz_analyzer_push(struct spazz_analyzer *a, const float *mono, size_t count)
 {
-	for (size_t i = 0; i < count; i++) {
-		a->ring[a->ring_pos] = mono[i];
-		a->ring_pos = (a->ring_pos + 1) % SPAZZ_RING_SIZE;
-	}
+	ring_write(a, mono, count);
 }
 
 void spazz_analyzer_push_silence(struct spazz_analyzer *a, size_t count)
 {
-	for (size_t i = 0; i < count; i++) {
-		a->ring[a->ring_pos] = 0.0f;
-		a->ring_pos = (a->ring_pos + 1) % SPAZZ_RING_SIZE;
-	}
+	ring_write(a, NULL, count);
 }
 
 static void fft(struct spazz_analyzer *a)
@@ -153,9 +175,9 @@ void spazz_analyzer_update(struct spazz_analyzer *a, float dt, float sensitivity
 	if (sensitivity < 0.1f)
 		sensitivity = 0.1f;
 
-	size_t start = (a->ring_pos + SPAZZ_RING_SIZE - n) % SPAZZ_RING_SIZE;
+	size_t start = (a->ring_pos + SPAZZ_RING_SIZE - n) & RING_MASK;
 	for (int i = 0; i < n; i++) {
-		a->re[i] = a->ring[(start + i) % SPAZZ_RING_SIZE] * a->window[i];
+		a->re[i] = a->ring[(start + i) & RING_MASK] * a->window[i];
 		a->im[i] = 0.0f;
 	}
 

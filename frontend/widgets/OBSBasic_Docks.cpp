@@ -206,7 +206,8 @@ bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 	     << "transitionsDock"
 	     << "controlsDock"
 	     << "statsDock"
-	     << "spazzTabsDock";
+	     << "spazzTabsDock"
+	     << "spazzMusicDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;
 

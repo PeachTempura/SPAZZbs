@@ -151,6 +151,34 @@ static bool target_alive(struct spazz_viz *v)
 	return alive;
 }
 
+static bool find_music_player(void *param, obs_source_t *src)
+{
+	obs_source_t **found = param;
+	obs_data_t *priv = obs_source_get_private_settings(src);
+	bool is_player = obs_data_get_bool(priv, "spazz_music");
+	obs_data_release(priv);
+
+	if (is_player) {
+		*found = obs_source_get_ref(src);
+		return false;
+	}
+	return true;
+}
+
+static obs_source_t *find_target(const char *name)
+{
+	/* "SPAZZ Music" means the music player's source, whatever OBS ended up
+	 * naming it (e.g. "SPAZZ Music 2" if the name was taken) */
+	if (strcmp(name, DEFAULT_TARGET) == 0) {
+		obs_source_t *player = NULL;
+		obs_enum_sources(find_music_player, &player);
+		if (player)
+			return player;
+	}
+
+	return obs_get_source_by_name(name);
+}
+
 static void attach_target(struct spazz_viz *v)
 {
 	detach_target(v);
@@ -158,7 +186,7 @@ static void attach_target(struct spazz_viz *v)
 	if (!v->target_name || !*v->target_name)
 		return;
 
-	obs_source_t *src = obs_get_source_by_name(v->target_name);
+	obs_source_t *src = find_target(v->target_name);
 	if (!src)
 		return;
 
@@ -374,6 +402,10 @@ static void viz_tick(void *data, float seconds)
 	}
 	pthread_mutex_unlock(&v->target_mutex);
 
+	/* not in any scene being shown: skip the analysis and animation */
+	if (!obs_source_showing(v->source))
+		return;
+
 	pthread_mutex_lock(&v->mutex);
 	uint64_t now = os_gettime_ns();
 	if (now - v->last_audio_ns > SILENCE_NS) {
@@ -401,8 +433,10 @@ static void viz_tick(void *data, float seconds)
 	/* keep floats small so the shader stays precise on long streams */
 	if (v->time > 3600.0f)
 		v->time -= 3600.0f;
-	if (v->flow > 4000.0f)
-		v->flow -= 4000.0f;
+	/* drop speeds are multiples of 1/16 in the shader, so wrapping at 64
+	 * lands every drop exactly where it was: no jump, and full precision */
+	if (v->flow >= 64.0f)
+		v->flow -= 64.0f;
 	v->hue -= floorf(v->hue);
 }
 

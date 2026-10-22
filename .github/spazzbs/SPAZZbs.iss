@@ -38,9 +38,24 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+; SPAZZbs holds this while running (see CheckIfAlreadyRunning), so setup can
+; ask you to close it first
+AppMutex=SPAZZbsCore
 
 [Tasks]
 Name: "desktopicon"; Description: "Put a SPAZZbs icon on my desktop"; GroupDescription: "Shortcuts:"
+
+[InstallDelete]
+; Clear the previous version's program files before copying the new ones, so
+; a plugin or library dropped in a newer build can't linger and crash it.
+; Your settings, scenes and playlist live in %APPDATA%\spazzbs and are kept.
+; Only folders SPAZZbs ships itself: plugins you added under obs-plugins or
+; data\obs-plugins are left alone.
+Type: filesandordirs; Name: "{app}\bin"
+Type: filesandordirs; Name: "{app}\core"
+Type: filesandordirs; Name: "{app}\data\libobs"
+Type: filesandordirs; Name: "{app}\data\obs-scripting"
+Type: filesandordirs; Name: "{app}\data\obs-studio"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

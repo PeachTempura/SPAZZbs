@@ -143,7 +143,7 @@ SpazzDockTabs::SpazzDockTabs(QMainWindow *mainWindow_) : QDockWidget(mainWindow_
 	bar->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(bar, &QTabBar::customContextMenuRequested, this, &SpazzDockTabs::ShowTabMenu);
 	connect(bar, &QTabBar::tabBarDoubleClicked, this, [this](int index) {
-		if (index > 0)
+		if (index >= 0)
 			RenameTab(index);
 	});
 

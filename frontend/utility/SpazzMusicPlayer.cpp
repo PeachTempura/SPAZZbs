@@ -27,7 +27,10 @@ extern "C" {
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRandomGenerator>
+#include <QHash>
+#include <QSet>
 #include <QTextStream>
+#include <QThread>
 
 #include <algorithm>
 #include <cmath>
@@ -140,11 +143,9 @@ void SpazzMusicPlayer::Bind()
 	OBSSourceAutoRelease src = find.found;
 
 	if (src) {
-		/* the last song was saved with the collection; don't start
-		 * blasting it the moment OBS opens */
-		OBSDataAutoRelease silence = obs_data_create();
-		obs_data_set_string(silence, "local_file", "");
-		obs_source_update(src, silence);
+		/* don't start blasting the last song the moment OBS opens, and undo
+		 * any property tweaks that would break the playlist */
+		ApplySafeSettings(src, "");
 	} else {
 		QString name = kSourceName;
 		for (int i = 2;; i++) {
@@ -162,6 +163,7 @@ void SpazzMusicPlayer::Bind()
 		obs_data_set_bool(settings, "close_when_inactive", false);
 		obs_data_set_bool(settings, "clear_on_media_end", true);
 		obs_data_set_bool(settings, "hw_decode", false);
+		obs_data_set_int(settings, "speed_percent", 100);
 
 		src = obs_source_create("ffmpeg_source", QT_TO_UTF8(name), settings, nullptr);
 		if (!src) {
@@ -187,6 +189,7 @@ void SpazzMusicPlayer::Bind()
 	sourceSignals.emplace_back(sh, "media_ended", MediaEndedSignal, this);
 	sourceSignals.emplace_back(sh, "media_started", MediaStartedSignal, this);
 	sourceSignals.emplace_back(sh, "volume", VolumeSignal, this);
+	sourceSignals.emplace_back(sh, "save", SaveSignal, this);
 
 	obs_source_add_audio_capture_callback(source, AudioCapture, this);
 
@@ -211,6 +214,54 @@ void SpazzMusicPlayer::Unbind()
 
 	emit SourceChanged();
 	emit StateChanged();
+}
+
+void SpazzMusicPlayer::ApplySafeSettings(obs_source_t *src, const char *localFile)
+{
+	/* a looping or sped-up source would break the playlist; anything else
+	 * in its properties (filters, sync offset, tracks) is left as you set it */
+	OBSDataAutoRelease settings = obs_data_create();
+	obs_data_set_bool(settings, "is_local_file", true);
+	obs_data_set_string(settings, "local_file", localFile);
+	obs_data_set_bool(settings, "looping", false);
+	obs_data_set_bool(settings, "restart_on_activate", true);
+	obs_data_set_bool(settings, "close_when_inactive", false);
+	obs_data_set_int(settings, "speed_percent", 100);
+	obs_source_update(src, settings);
+}
+
+/* OBS is about to write the source into the scene collection. Leave the song
+ * path out of the file, or a later moved/deleted song makes OBS show its
+ * Missing Files window at startup. The playing song isn't affected, and the
+ * path is put back right after the save finishes. */
+void SpazzMusicPlayer::SaveSignal(void *param, calldata_t *)
+{
+	auto *self = static_cast<SpazzMusicPlayer *>(param);
+
+	/* scene collections are saved on the UI thread; leave any other save alone */
+	if (QThread::currentThread() != self->thread() || !self->source)
+		return;
+
+	OBSDataAutoRelease settings = obs_source_get_settings(self->source);
+	obs_data_set_string(settings, "local_file", "");
+	QMetaObject::invokeMethod(self, "RestoreFileAfterSave", Qt::QueuedConnection);
+}
+
+void SpazzMusicPlayer::RestoreFileAfterSave()
+{
+	if (!source)
+		return;
+
+	int index = CurrentIndex();
+	obs_media_state state = State();
+	bool loaded = state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED ||
+		      state == OBS_MEDIA_STATE_ENDED || state == OBS_MEDIA_STATE_STOPPED;
+
+	/* only the stored value; no update, so playback isn't touched */
+	if (index >= 0 && loaded) {
+		OBSDataAutoRelease settings = obs_source_get_settings(source);
+		obs_data_set_string(settings, "local_file", QT_TO_UTF8(tracks[index].path));
+	}
 }
 
 void SpazzMusicPlayer::FrontendEvent(enum obs_frontend_event event, void *param)
@@ -323,7 +374,7 @@ void SpazzMusicPlayer::HandleMediaStarted()
 		Track &t = tracks[index];
 		if (t.durationMs != dur) {
 			t.durationMs = dur;
-			emit PlaylistChanged();
+			emit TrackUpdated(index);
 			QueueSave();
 		}
 
@@ -427,13 +478,14 @@ void SpazzMusicPlayer::RemoveIds(const QList<quint64> &ids)
 	if (ids.isEmpty())
 		return;
 
-	bool removingCurrent = ids.contains(currentId);
+	const QSet<quint64> gone(ids.begin(), ids.end());
+	bool removingCurrent = gone.contains(currentId);
 	int oldIndex = CurrentIndex();
 
-	tracks.erase(std::remove_if(tracks.begin(), tracks.end(), [&](const Track &t) { return ids.contains(t.id); }),
+	tracks.erase(std::remove_if(tracks.begin(), tracks.end(), [&](const Track &t) { return gone.contains(t.id); }),
 		     tracks.end());
 	shuffleHistory.erase(std::remove_if(shuffleHistory.begin(), shuffleHistory.end(),
-					    [&](quint64 id) { return ids.contains(id); }),
+					    [&](quint64 id) { return gone.contains(id); }),
 			     shuffleHistory.end());
 
 	if (removingCurrent) {
@@ -464,16 +516,25 @@ void SpazzMusicPlayer::Clear()
 
 void SpazzMusicPlayer::SetOrder(const QList<quint64> &ids)
 {
+	QHash<quint64, int> where;
+	where.reserve(tracks.size());
+	for (int i = 0; i < tracks.size(); i++)
+		where.insert(tracks[i].id, i);
+
 	QList<Track> reordered;
+	reordered.reserve(tracks.size());
+	QSet<quint64> placed;
 	for (quint64 id : ids) {
-		int i = IndexOf(id);
-		if (i >= 0)
-			reordered.push_back(tracks[i]);
+		auto it = where.constFind(id);
+		if (it != where.constEnd() && !placed.contains(id)) {
+			reordered.push_back(tracks[it.value()]);
+			placed.insert(id);
+		}
 	}
 
 	/* anything not mentioned keeps its place at the end */
 	for (const Track &t : tracks) {
-		if (!ids.contains(t.id))
+		if (!placed.contains(t.id))
 			reordered.push_back(t);
 	}
 
@@ -543,9 +604,10 @@ int SpazzMusicPlayer::PickNextIndex(bool userAction) const
 			return (repeat == Repeat::Off && !userAction) ? -1 : 0;
 
 		/* with repeat off, stop once everything has had a turn */
+		const QSet<quint64> played(shuffleHistory.begin(), shuffleHistory.end());
 		QList<int> fresh;
 		for (int i = 0; i < count; i++) {
-			if (i != cur && !shuffleHistory.contains(tracks[i].id))
+			if (i != cur && !played.contains(tracks[i].id))
 				fresh.push_back(i);
 		}
 

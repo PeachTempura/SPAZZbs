@@ -24,6 +24,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QScrollBar>
 #include <QSet>
 #include <QDir>
@@ -50,6 +51,11 @@ const QColor kText(0xd6, 0xd2, 0xe6);
 const QColor kTextDim(0x6c, 0x67, 0x84);
 
 enum Roles { IdRole = Qt::UserRole + 1, DurationRole, CurrentRole };
+
+/* the theme sets fonts with a stylesheet, which beats setFont(), so the
+ * LCD-style labels set theirs the same way */
+const char *kLabelStyle = "color: #6c6784; background: transparent; font-weight: bold; font-size: 10px;"
+			  "font-family: Consolas, 'Lucida Console', 'DejaVu Sans Mono', 'Courier New', monospace;";
 
 QString FormatTime(qint64 ms, bool padMinutes = false)
 {
@@ -91,12 +97,18 @@ void DrawLcdWell(QPainter &p, const QRectF &r, qreal radius = 3.0)
 	p.setBrush(kLcd);
 	p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
 
-	/* faint dot grid */
-	p.setPen(Qt::NoPen);
-	p.setBrush(QColor(255, 255, 255, 7));
-	for (qreal y = r.top() + 3; y < r.bottom() - 2; y += 3)
-		for (qreal x = r.left() + 3; x < r.right() - 2; x += 3)
-			p.drawRect(QRectF(x, y, 1, 1));
+	/* faint dot grid, one 3x3 tile repeated instead of a rect per dot */
+	static const QBrush dots = []() {
+		QPixmap tile(3, 3);
+		tile.fill(Qt::transparent);
+		QPainter tp(&tile);
+		tp.fillRect(QRect(0, 0, 1, 1), QColor(255, 255, 255, 7));
+		return QBrush(tile);
+	}();
+	p.save();
+	p.setBrushOrigin(r.left() + 3, r.top() + 3);
+	p.fillRect(QRectF(r.left() + 3, r.top() + 3, r.width() - 5, r.height() - 5), dots);
+	p.restore();
 
 	/* inner bevel: dark top, faint light bottom */
 	p.setBrush(Qt::NoBrush);
@@ -136,10 +148,9 @@ QFont LcdFont(int pixelSize, bool bold)
 void DrawGlowText(QPainter &p, const QRectF &r, int flags, const QString &text, const QColor &c, float glow)
 {
 	if (glow > 0.0f) {
-		QColor halo = WithAlpha(c, (int)(34 * glow));
+		QColor halo = WithAlpha(c, (int)(40 * glow));
 		p.setPen(halo);
-		static const QPointF offs[] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1},
-					       {-2, 0}, {2, 0}, {0, -2}, {0, 2}};
+		static const QPointF offs[] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-2, 0}, {2, 0}, {0, -2}, {0, 2}};
 		for (const QPointF &o : offs)
 			p.drawText(r.translated(o), flags, text);
 	}
@@ -685,6 +696,15 @@ void AmpDisplay::Tick(float dt)
 	update();
 }
 
+bool AmpDisplay::IsAnimating() const
+{
+	for (int i = 0; i < 19; i++) {
+		if (bars[i] > 0.002f || peaks[i] > 0.002f)
+			return true;
+	}
+	return false;
+}
+
 void AmpDisplay::mousePressEvent(QMouseEvent *e)
 {
 	if (e->position().x() < width() * 0.42) {
@@ -1011,7 +1031,7 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	auto *balLabel = new QLabel("BAL", playerPanel);
 	for (QLabel *l : {volLabel, balLabel}) {
 		l->setFont(LcdFont(10, true));
-		l->setStyleSheet("color: #6c6784; background: transparent;");
+		l->setStyleSheet(kLabelStyle);
 	}
 	volume = new AmpSlider(AmpSlider::Kind::Volume, playerPanel);
 	volume->setToolTip(QTStr("SPAZZ.Music.VolumeTooltip"));
@@ -1083,7 +1103,7 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	clrBtn->setToolTip(QTStr("SPAZZ.Music.ClearTooltip"));
 	totals = new QLabel(listPanel);
 	totals->setFont(LcdFont(11, true));
-	totals->setStyleSheet("color: #6c6784; background: transparent;");
+	totals->setStyleSheet(kLabelStyle);
 	footer->addWidget(addBtn);
 	footer->addWidget(remBtn);
 	footer->addWidget(clrBtn);
@@ -1219,6 +1239,7 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 
 	if (player) {
 		connect(player, &SpazzMusicPlayer::PlaylistChanged, this, &SpazzMusicDock::RebuildList);
+		connect(player, &SpazzMusicPlayer::TrackUpdated, this, &SpazzMusicDock::UpdateTrack);
 		connect(player, &SpazzMusicPlayer::CurrentChanged, this, &SpazzMusicDock::SyncCurrent);
 		connect(player, &SpazzMusicPlayer::StateChanged, this, &SpazzMusicDock::SyncState);
 		connect(player, &SpazzMusicPlayer::SourceChanged, this, &SpazzMusicDock::SyncState);
@@ -1228,6 +1249,12 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 		});
 		volume->SetValue(std::cbrt(std::max(player->Volume(), 0.0f)));
 		balance->SetValue(player->Balance());
+	}
+
+	/* everything that draws with the cycling accent colour */
+	for (QWidget *w : body->findChildren<QWidget *>()) {
+		if (qobject_cast<AmpButton *>(w) || qobject_cast<AmpSlider *>(w) || dynamic_cast<AmpTitle *>(w))
+			accentWidgets.push_back(w);
 	}
 
 	frameTimer.setInterval(33);
@@ -1291,22 +1318,38 @@ void SpazzMusicDock::Frame()
 	if (dt <= 0.0f || dt > 0.25f)
 		dt = 0.033f;
 
+	/* nothing on screen to draw while OBS is minimized */
+	if (window()->isMinimized())
+		return;
+
 	SetHue(Hue() + dt * 0.045f);
 	display->Tick(dt);
 
+	obs_media_state state = player ? player->State() : OBS_MEDIA_STATE_NONE;
 	if (player && !seek->IsDragging()) {
 		qint64 dur = player->DurationMs();
-		obs_media_state state = player->State();
 		bool active = state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED;
 		seek->SetValue(active && dur > 0 ? (float)player->PositionMs() / (float)dur : 0.0f);
 	}
 
-	/* accents everywhere follow the colour cycle */
-	for (QWidget *w : body->findChildren<QWidget *>()) {
-		if (w != list && w != display && w->isVisible())
-			w->update();
+	/* the colour cycle is slow, so the rest of the dock only repaints when
+	 * the accent has visibly moved (~11 times a second) instead of every
+	 * frame; panels and backgrounds never change and aren't touched */
+	int hueStep = (int)(Hue() * 240.0f);
+	if (hueStep != lastHueStep) {
+		lastHueStep = hueStep;
+		for (const QPointer<QWidget> &w : accentWidgets) {
+			if (w && w->isVisible())
+				w->update();
+		}
+		list->viewport()->update();
 	}
-	list->viewport()->update();
+
+	/* playing or settling: 30 fps; idle: 15 fps is plenty for the marquee */
+	bool lively = state == OBS_MEDIA_STATE_PLAYING || display->IsAnimating();
+	int interval = lively ? 33 : 66;
+	if (frameTimer.interval() != interval)
+		frameTimer.setInterval(interval);
 }
 
 QList<quint64> SpazzMusicDock::SelectedIds() const
@@ -1330,8 +1373,6 @@ void SpazzMusicDock::RebuildList()
 	QSignalBlocker block(list);
 	list->clear();
 
-	qint64 total = 0;
-	bool unknown = false;
 	const auto &tracks = player->Tracks();
 	for (const auto &t : tracks) {
 		auto *item = new QListWidgetItem(t.title, list);
@@ -1340,19 +1381,44 @@ void SpazzMusicDock::RebuildList()
 		item->setData(CurrentRole, t.id == player->CurrentId());
 		item->setToolTip(t.path);
 		item->setSelected(selected.contains(t.id));
+	}
+
+	if (list->verticalScrollBar())
+		list->verticalScrollBar()->setValue(scroll);
+
+	UpdateTotals();
+}
+
+void SpazzMusicDock::UpdateTotals()
+{
+	if (!player)
+		return;
+
+	qint64 total = 0;
+	bool unknown = false;
+	const auto &tracks = player->Tracks();
+	for (const auto &t : tracks) {
 		if (t.durationMs > 0)
 			total += t.durationMs;
 		else
 			unknown = true;
 	}
 
-	if (list->verticalScrollBar())
-		list->verticalScrollBar()->setValue(scroll);
-
 	totals->setText(tracks.isEmpty() ? QString()
 					 : QTStr("SPAZZ.Music.Totals")
 						   .arg(tracks.size())
 						   .arg(FormatTime(total) + (unknown ? "+" : "")));
+}
+
+void SpazzMusicDock::UpdateTrack(int index)
+{
+	if (!player || index < 0 || index >= player->Tracks().size())
+		return;
+
+	QListWidgetItem *item = list->item(index);
+	if (item)
+		item->setData(DurationRole, (qlonglong)player->Tracks()[index].durationMs);
+	UpdateTotals();
 }
 
 void SpazzMusicDock::SyncCurrent()

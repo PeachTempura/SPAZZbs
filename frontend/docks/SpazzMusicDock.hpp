@@ -97,6 +97,7 @@ class AmpDisplay : public QWidget {
 public:
 	explicit AmpDisplay(SpazzMusicPlayer *player, QWidget *parent = nullptr);
 	void Tick(float dt);
+	bool IsAnimating() const;
 	QSize sizeHint() const override;
 	QSize minimumSizeHint() const override;
 
@@ -166,9 +167,13 @@ private:
 
 	QTimer frameTimer;
 	QElapsedTimer clock;
+	QList<QPointer<QWidget>> accentWidgets;
+	int lastHueStep = -1;
 
 	void Frame();
 	void RebuildList();
+	void UpdateTrack(int index);
+	void UpdateTotals();
 	void SyncCurrent();
 	void SyncState();
 	void AddFilesDialog();

@@ -95,11 +95,14 @@ signals:
 	void StateChanged();
 	void VolumeChanged(float mul);
 	void SourceChanged();
+	/* one track's details changed (e.g. its length became known) */
+	void TrackUpdated(int index);
 
 private slots:
 	void HandleMediaEnded();
 	void HandleMediaStarted();
 	void SavePlaylist();
+	void RestoreFileAfterSave();
 
 private:
 	OBSSource source;
@@ -136,5 +139,7 @@ private:
 	static void MediaEndedSignal(void *param, calldata_t *data);
 	static void MediaStartedSignal(void *param, calldata_t *data);
 	static void VolumeSignal(void *param, calldata_t *data);
+	static void SaveSignal(void *param, calldata_t *data);
+	static void ApplySafeSettings(obs_source_t *src, const char *localFile);
 	static void AudioCapture(void *param, obs_source_t *src, const struct audio_data *audio, bool muted);
 };
