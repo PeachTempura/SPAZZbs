@@ -1,0 +1,718 @@
+// SPAZZ CRT: Phosphor's tube pipeline (WebGL2) ported to OBS effects.
+//
+// Passes, in the order spazz-crt.c runs them:
+//   Capture  what is already drawn under the box -> "page" at ln resolution
+//   Signal   composite / VHS / RF, colour grading, -> linear light
+//   Persist  phosphor afterglow / LCD response (ping-pong)
+//   Beam     curvature, gaussian beam, convergence, mask / LCD grid
+//   Down/Blur  bloom (1/4 res) and halation (1/16 res) chains
+//   Final    drawn straight into the scene: glow, glass, bezel, gamma
+//
+// Every pass works in uv with v = 0 at the top, and "fc" = uv * target size
+// (pixel centres), which matches Phosphor's own top-down convention.
+
+uniform float4x4 ViewProj;
+
+uniform texture2d image;
+uniform texture2d image2;
+uniform texture2d image3;
+
+uniform float2 in_size;
+uniform float2 out_size;
+uniform float uTime;
+uniform float uFrame;
+
+sampler_state lin_clamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+sampler_state pt_clamp {
+	Filter   = Point;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+/* ------------------------------------------------------------------ */
+/* helpers (GLSL semantics)                                            */
+
+float hash(float2 p)
+{
+	float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+/* GLSL mod() floors; HLSL fmod() truncates */
+float glmod(float x, float y)
+{
+	return x - y * floor(x / y);
+}
+
+float luma(float3 c)
+{
+	return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float3 rgb2yiq(float3 c)
+{
+	return float3(dot(c, float3(0.299, 0.587, 0.114)), dot(c, float3(0.596, -0.274, -0.322)),
+		      dot(c, float3(0.211, -0.523, 0.312)));
+}
+
+float3 yiq2rgb(float3 c)
+{
+	return float3(c.x + 0.956 * c.y + 0.621 * c.z, c.x - 0.272 * c.y - 0.647 * c.z,
+		      c.x - 1.106 * c.y + 1.703 * c.z);
+}
+
+/* ------------------------------------------------------------------ */
+/* CAPTURE: the backdrop under the box, area-averaged to ln res      */
+
+uniform float2 box_o;
+uniform float2 box_x;
+uniform float2 box_y;
+/* the part of "image" that holds copied pixels; beyond it is off-canvas */
+uniform float4 cap_valid;
+uniform float lin_canvas;
+
+float4 PSCapture(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 sx = box_x / out_size.x;
+	float2 sy = box_y / out_size.y;
+	float2 p = box_o + uv.x * box_x + uv.y * box_y;
+
+	/* 3x3 taps across the texel's footprint, so 240 lines from a 1080p
+	 * backdrop average properly instead of aliasing */
+	float3 acc = float3(0.0, 0.0, 0.0);
+	for (int j = -1; j <= 1; j++) {
+		for (int i = -1; i <= 1; i++) {
+			float2 q = p + sx * (float(i) / 3.0) + sy * (float(j) / 3.0);
+			float inside = step(cap_valid.x, q.x) * step(q.x, cap_valid.z) * step(cap_valid.y, q.y) *
+				       step(q.y, cap_valid.w);
+			q = clamp(q, cap_valid.xy, cap_valid.zw);
+			acc += image.SampleLevel(lin_clamp, q, 0.0).rgb * inside;
+		}
+	}
+	float3 c = acc / 9.0;
+
+	/* linear / HDR canvases hold light, Phosphor expects a video signal */
+	if (lin_canvas > 0.5)
+		c = pow(saturate(c), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+
+	return float4(c, 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* SIGNAL                                                              */
+
+uniform float uLumaBlur;
+uniform float uChromaBlur;
+uniform float uChromaShift;
+uniform float uArtifacts;
+uniform float uGhost;
+uniform float uGhostOff;
+uniform float uRinging;
+uniform float uNoise;
+uniform float uInterf;
+uniform float uJitter;
+uniform float uWobble;
+uniform float uTracking;
+uniform float uDropouts;
+uniform float uRollOff;
+uniform float uStatic;
+uniform float uBright;
+uniform float uContrast;
+uniform float uSat;
+uniform float uHue;
+uniform float uBlack;
+uniform float uGammaIn;
+uniform float3 uTemp;
+uniform float uMono;
+uniform float uMonoLevels;
+uniform float3 uMonoDark;
+uniform float3 uMonoLight;
+
+float3 fetch(float x, float y)
+{
+	return image.SampleLevel(lin_clamp, float2(x, y) / in_size, 0.0).rgb;
+}
+
+float lumaAt(float x, float y)
+{
+	return luma(fetch(x, y));
+}
+
+float4 PSSignal(VertData v_in) : TARGET
+{
+	float2 fc = floor(v_in.uv * out_size) + 0.5;
+	float W = in_size.x;
+	float H = in_size.y;
+	float t = uTime;
+	float vb = H * 0.07;
+	float yy = glmod(fc.y + uRollOff, H + vb);
+
+	if (yy > H) {
+		/* vertical blanking bar visible while the picture rolls */
+		float bar = step(H + vb * 0.35, yy) * step(yy, H + vb * 0.6);
+		float v = 0.004 + 0.02 * hash(fc + t);
+		return float4(v * (1.0 - bar), v * (1.0 - bar), v * (1.0 - bar), 1.0);
+	}
+
+	float ln = floor(yy);
+	float yn = yy / H;
+	float xoff = 0.0;
+	xoff += (hash(float2(ln, floor(t * 60.0))) - 0.5) * uJitter * 2.0;
+	xoff += sin(yn * 11.0 + t * 2.3) * uWobble * 0.6 + sin(yn * 29.0 - t * 5.3) * uWobble * 0.25;
+
+	float trackNoise = 0.0;
+	if (uTracking > 0.0) {
+		float bc = frac(t * 0.045) * 1.4 - 0.2;
+		float bw = 0.03 + 0.07 * uTracking;
+		float d = abs(yn - bc) / bw;
+		if (d < 1.0) {
+			float k = (1.0 - d) * (1.0 - d);
+			xoff += (hash(float2(ln, floor(t * 30.0))) - 0.5) * uTracking * 45.0 * k;
+			trackNoise += k * uTracking;
+		}
+		float hs = smoothstep(0.95, 1.0, yn);
+		xoff += hs * hs * uTracking * 40.0 * (0.6 + 0.4 * hash(float2(ln, floor(t * 20.0))));
+		trackNoise += hs * uTracking * 0.7;
+	}
+
+	float x = fc.x + xoff;
+	float yc = ln + 0.5;
+
+	/* luma bandwidth */
+	float Y = 0.0;
+	float ws = 0.0;
+	float Ym1 = 0.0;
+	float Yp1 = 0.0;
+	float sl = max(uLumaBlur, 0.001);
+	for (int i = -6; i <= 6; i++) {
+		float fi = float(i);
+		float y = lumaAt(x + fi, yc);
+		float w = exp(-fi * fi / (2.0 * sl * sl));
+		Y += y * w;
+		ws += w;
+		if (i == -1)
+			Ym1 = y;
+		if (i == 1)
+			Yp1 = y;
+	}
+	Y /= ws;
+
+	if (uRinging > 0.0) {
+		float Yr = 0.5 * (lumaAt(x - 2.5, yc) + lumaAt(x + 2.5, yc));
+		Y += uRinging * (Y - Yr) * 0.9;
+	}
+
+	/* chroma bandwidth + delay */
+	float2 IQ = float2(0.0, 0.0);
+	float cw = 0.0;
+	float sc = max(uChromaBlur, 0.001);
+	float st = max(1.0, sc / 3.0);
+	for (int k2 = -6; k2 <= 6; k2++) {
+		float o = float(k2) * st;
+		float3 c = fetch(x - uChromaShift + o, yc);
+		float w2 = exp(-o * o / (2.0 * sc * sc));
+		IQ += rgb2yiq(c).yz * w2;
+		cw += w2;
+	}
+	IQ /= cw;
+
+	/* multipath ghost */
+	if (uGhost > 0.0) {
+		float3 g = 0.5 * (fetch(x - uGhostOff, yc) + fetch(x - uGhostOff - 1.5, yc));
+		float3 gy = rgb2yiq(g);
+		Y = Y * (1.0 - 0.3 * uGhost) + gy.x * 0.5 * uGhost;
+		IQ += gy.yz * 0.3 * uGhost;
+	}
+
+	/* NTSC cross-colour / dot crawl */
+	if (uArtifacts > 0.0) {
+		float ph = fc.x * 2.0944 + ln * 3.14159 + glmod(uFrame, 2.0) * 3.14159;
+		float2 cp = float2(cos(ph), sin(ph));
+		IQ += uArtifacts * (Yp1 - Ym1) * cp * 0.9;
+		Y += uArtifacts * dot(IQ, cp) * 0.35;
+	}
+
+	IQ *= uSat;
+	float cs = cos(uHue);
+	float sn = sin(uHue);
+	IQ = float2(cs * IQ.x - sn * IQ.y, sn * IQ.x + cs * IQ.y);
+
+	/* noise */
+	float n1 = hash(fc + frac(t * 13.37) * float2(371.0, 113.0));
+	float n2 = hash(fc * 1.7 + frac(t * 7.13) * float2(91.0, 377.0));
+	float n3 = hash(fc.yx * 0.9 + frac(t * 3.71) * float2(33.0, 271.0));
+	float nAmt = uNoise + trackNoise * 0.6;
+	Y += (n1 - 0.5) * nAmt * 0.9;
+	IQ += (float2(n2, n3) - 0.5) * nAmt * 0.3;
+
+	if (uInterf > 0.0) {
+		Y += uInterf * 0.09 * sin(fc.x * 0.73 + yy * 0.41 - t * 37.0);
+		Y *= 1.0 - uInterf * 0.2 * (0.5 + 0.5 * sin(yn * 6.2832 - t * 1.3));
+		IQ += uInterf * 0.05 * float2(sin(fc.x * 0.31 - t * 11.0), cos(yy * 0.17 + t * 5.0));
+	}
+
+	if (uDropouts > 0.0) {
+		float tt = floor(t * 24.0);
+		if (hash(float2(ln * 0.37, tt)) > 1.0 - uDropouts * 0.03) {
+			float sx = hash(float2(ln, tt + 1.0)) * W;
+			float len = 15.0 + hash(float2(ln + 3.0, tt)) * W * 0.3;
+			float kk = step(sx, fc.x) * step(fc.x, sx + len);
+			Y = lerp(Y, 0.85 + 0.15 * n1, kk * 0.85);
+			IQ *= 1.0 - kk;
+		}
+	}
+
+	float3 rgb = yiq2rgb(float3(Y, IQ.x, IQ.y));
+
+	if (uStatic > 0.0) {
+		float s = hash(floor(fc) + frac(t * 61.0) * float2(17.0, 59.0));
+		s = s * s * 1.4 * (0.8 + 0.2 * sin(yy * 0.5 + t * 90.0));
+		rgb = lerp(rgb, float3(s, s, s), uStatic);
+	}
+
+	rgb = (rgb - 0.5) * uContrast + 0.5 + uBright;
+	rgb *= uTemp;
+
+	if (uMono > 0.5) {
+		float l = saturate(luma(rgb));
+		if (uMonoLevels > 1.5)
+			l = floor(l * (uMonoLevels - 1.0) + 0.5) / (uMonoLevels - 1.0);
+		rgb = lerp(uMonoDark, uMonoLight, l);
+	}
+
+	rgb = rgb * (1.0 - uBlack) + uBlack;
+	rgb = pow(clamp(rgb, 0.0, 1.5), float3(uGammaIn, uGammaIn, uGammaIn));
+	return float4(rgb, 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* PERSIST: image = current, image2 = previous                         */
+
+uniform float uDecay;
+uniform float uMode;
+uniform float3 uTint;
+
+float4 PSPersist(VertData v_in) : TARGET
+{
+	float3 c = image.SampleLevel(pt_clamp, v_in.uv, 0.0).rgb;
+	float3 pr = image2.SampleLevel(pt_clamp, v_in.uv, 0.0).rgb;
+	float3 o = uMode > 0.5 ? lerp(c, pr, uDecay) : max(c, pr * uDecay * uTint);
+	return float4(o, 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* BEAM                                                                */
+
+uniform float4 uRect;
+uniform float2 uCurv;
+uniform float uOverscan;
+uniform float2 uPower;
+uniform float uScan;
+uniform float uBeamMin;
+uniform float uBeamMax;
+uniform float uBeamShape;
+uniform float uSharp;
+uniform float uInterlace;
+uniform float uAntiMoire;
+uniform float2 uConvR;
+uniform float2 uConvB;
+uniform float uConvEdge;
+uniform float uDegauss;
+uniform float uMaskType;
+uniform float uMaskStr;
+uniform float uMaskSize;
+uniform float uMaskCurve;
+uniform float uMaskBoost;
+uniform float uLcdGap;
+uniform float uLcdGapLight;
+uniform float uLcdSub;
+uniform float uLcdBGR;
+uniform float uLcdShadow;
+uniform float uLcdShadowOff;
+uniform float3 uGapColor;
+
+float2 warpTube(float2 uv)
+{
+	float2 c = uv * 2.0 - 1.0;
+	c *= float2(1.0 + c.y * c.y * uCurv.x, 1.0 + c.x * c.x * uCurv.y);
+	c /= uOverscan;
+	return c * 0.5 + 0.5;
+}
+
+float2 warpPic(float2 uv)
+{
+	float2 c = warpTube(uv) * 2.0 - 1.0;
+	c /= uPower;
+	return c * 0.5 + 0.5;
+}
+
+float3 rowSample(float x, float row)
+{
+	float xf = x - 0.5;
+	float xi = floor(xf);
+	float fx = xf - xi;
+	fx = saturate((fx - 0.5) * uSharp + 0.5);
+	return image.SampleLevel(lin_clamp, float2(xi + fx + 0.5, row + 0.5) / in_size, 0.0).rgb;
+}
+
+float3 beam(float2 s, float scanAmt)
+{
+	float y = s.y - 0.5;
+	float y0 = floor(y);
+	float f = y - y0;
+	float3 acc = float3(0.0, 0.0, 0.0);
+	float3 r0 = float3(0.0, 0.0, 0.0);
+	float3 r1 = float3(0.0, 0.0, 0.0);
+
+	for (int j = -1; j <= 2; j++) {
+		float row = y0 + float(j);
+		if (row >= 0.0 && row <= in_size.y - 1.0) {
+			float3 v = rowSample(s.x, row);
+			v *= 1.0 - uInterlace * 0.85 * glmod(row + uFrame, 2.0);
+			if (j == 0)
+				r0 = v;
+			if (j == 1)
+				r1 = v;
+			float3 w = lerp(float3(uBeamMin, uBeamMin, uBeamMin), float3(uBeamMax, uBeamMax, uBeamMax),
+					saturate(v));
+			float3 d = abs(f - float(j)) / w;
+			acc += v * exp(-pow(d, float3(uBeamShape, uBeamShape, uBeamShape))) / (1.8 * w);
+		}
+	}
+
+	float3 flatC = lerp(r0, r1, f);
+	return lerp(flatC, acc, scanAmt);
+}
+
+float3 crtMask(float2 mp, out float mean)
+{
+	float2 q = uMaskCurve > 0.5 ? mp / uMaskSize : floor(mp) / uMaskSize;
+	float3 m;
+
+	if (uMaskType < 1.5) {
+		/* aperture grille */
+		m = 0.5 + 0.5 * cos(6.28318 * q.x / 3.0 - float3(0.0, 2.0944, 4.18879));
+		mean = 0.375;
+		m = m * m;
+	} else if (uMaskType < 2.5) {
+		/* slot mask */
+		m = 0.5 + 0.5 * cos(6.28318 * q.x / 3.0 - float3(0.0, 2.0944, 4.18879));
+		m *= m;
+		float tc = floor(q.x / 3.0 + 0.5);
+		float fy = frac((q.y + glmod(tc, 2.0) * 2.0) / 4.0);
+		float k = smoothstep(0.0, 0.25, fy);
+		mean = 0.314;
+		m = m * lerp(0.3, 1.0, k);
+	} else {
+		/* shadow mask (staggered triads) */
+		float2 pp = q;
+		pp.x += floor(pp.y) * 3.0;
+		float fx = frac(pp.x / 6.0);
+		m = float3(1.0 - step(0.3333, fx), step(0.3333, fx) * (1.0 - step(0.6667, fx)), step(0.6667, fx));
+		float dy = frac(pp.y) - 0.5;
+		if (uMaskCurve > 0.5)
+			m *= 1.0 - smoothstep(0.35, 0.5, abs(dy)) * 0.6;
+		mean = 0.3333;
+	}
+
+	return m;
+}
+
+float pulse(float k, float a)
+{
+	return smoothstep(a, a + 0.22, k) * (1.0 - smoothstep(a + 0.78, a + 1.0, k));
+}
+
+float4 PSBeam(VertData v_in) : TARGET
+{
+	float2 fc = floor(v_in.uv * out_size) + 0.5;
+	float2 uv = (fc - uRect.xy) / uRect.zw;
+	float2 p = warpPic(uv);
+
+	if (p.x < 0.0 || p.y < 0.0 || p.x > 1.0 || p.y > 1.0)
+		return float4(0.0, 0.0, 0.0, 1.0);
+
+	float2 s = p * in_size;
+	float pxPerLine = uRect.w / in_size.y;
+	float3 col;
+
+	if (uMaskType < 3.5) {
+		/* CRT */
+		float moire = uAntiMoire > 0.5 ? smoothstep(1.4, 2.7, pxPerLine) : 1.0;
+		float scanAmt = uScan * moire;
+		float2 cc = p * 2.0 - 1.0;
+		float2 edge = uConvEdge * cc * dot(cc, cc) * float2(1.0, 0.35);
+		float2 dg = uDegauss * float2(sin(uTime * 31.0 + p.y * 23.0), cos(uTime * 27.0 + p.x * 19.0)) * 4.0;
+		float2 oR = uConvR + edge + dg;
+		float2 oB = uConvB - edge - dg.yx;
+
+		if (dot(oR, oR) + dot(oB, oB) < 1e-6) {
+			col = beam(s, scanAmt);
+		} else {
+			col = float3(beam(s + oR, scanAmt).r, beam(s, scanAmt).g, beam(s + oB, scanAmt).b);
+		}
+
+		if (uMaskType > 0.5 && uMaskStr > 0.0) {
+			float mean;
+			float2 mp = uMaskCurve > 0.5 ? p * uRect.zw : (fc - uRect.xy);
+			float3 m = crtMask(mp, mean);
+			col *= lerp(float3(1.0, 1.0, 1.0), m, uMaskStr);
+			col *= lerp(1.0, 1.0 / lerp(1.0, mean, uMaskStr), uMaskBoost);
+		}
+	} else {
+		/* LCD */
+		float2 xf = s - 0.5;
+		float2 xi = floor(xf);
+		float2 f2 = xf - xi;
+		f2 = saturate((f2 - 0.5) * uSharp + 0.5);
+		col = image.SampleLevel(lin_clamp, (xi + f2 + 0.5) / in_size, 0.0).rgb;
+		float2 f = frac(s);
+		float gridFade = smoothstep(1.6, 3.5, pxPerLine);
+		float subFade = smoothstep(3.0, 6.0, pxPerLine);
+
+		if (uLcdShadow > 0.0) {
+			float3 sh = image.SampleLevel(lin_clamp, (floor(s - uLcdShadowOff) + 0.5) / in_size, 0.0).rgb;
+			float lumL = max(luma(uGapColor), 0.05);
+			float amt = uLcdShadow * saturate(1.0 - luma(sh) / lumL);
+			col *= 1.0 - amt * 0.5;
+		}
+
+		float meanSub = 1.0;
+		if (uMaskType < 4.5) {
+			/* RGB stripe */
+			float k = f.x * 3.0;
+			float3 sub = float3(pulse(k, 0.0), pulse(k, 1.0), pulse(k, 2.0));
+			if (uLcdBGR > 0.5)
+				sub = sub.bgr;
+			float a = uLcdSub * subFade;
+			col *= lerp(float3(1.0, 1.0, 1.0), sub, a);
+			meanSub = lerp(1.0, 0.29, a);
+		} else if (uMaskType > 5.5) {
+			/* pentile-ish: G + (R|B) alternating */
+			float par = glmod(xi.x + xi.y + 1.0, 2.0);
+			float left = 1.0 - smoothstep(0.4, 0.5, f.x);
+			float3 sub = float3(0.0, left, 0.0) +
+				     (1.0 - left) * (par > 0.5 ? float3(1.0, 0.0, 0.0) : float3(0.0, 0.0, 1.0));
+			float a = uLcdSub * subFade;
+			col *= lerp(float3(1.0, 1.0, 1.0), sub * 1.4, a);
+			meanSub = lerp(1.0, 0.55, a);
+		}
+
+		col *= lerp(1.0, 1.0 / meanSub, uMaskBoost);
+		float gap = max(uLcdGap, 0.002);
+		float2 g2 = smoothstep(gap * 0.35, gap, f) * smoothstep(gap * 0.35, gap, 1.0 - f);
+		float g = lerp(1.0, g2.x * g2.y, uMaskStr * gridFade);
+		col = lerp(uGapColor * uLcdGapLight, col, g);
+	}
+
+	return float4(col, 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* BLOOM / HALO                                                        */
+
+uniform float2 uInTexel;
+uniform float uThresh;
+uniform float2 uDir;
+
+float4 PSDown(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float3 c = image.SampleLevel(lin_clamp, uv + uInTexel * float2(-1.0, -1.0), 0.0).rgb +
+		   image.SampleLevel(lin_clamp, uv + uInTexel * float2(1.0, -1.0), 0.0).rgb +
+		   image.SampleLevel(lin_clamp, uv + uInTexel * float2(-1.0, 1.0), 0.0).rgb +
+		   image.SampleLevel(lin_clamp, uv + uInTexel * float2(1.0, 1.0), 0.0).rgb;
+	c *= 0.25;
+	c = max(c - uThresh, 0.0) / (1.0 - min(uThresh, 0.95));
+	return float4(c, 1.0);
+}
+
+float4 PSBlur(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float3 c = image.SampleLevel(lin_clamp, uv, 0.0).rgb * 0.2270270;
+	c += (image.SampleLevel(lin_clamp, uv + uDir * 1.3846154, 0.0).rgb +
+	      image.SampleLevel(lin_clamp, uv - uDir * 1.3846154, 0.0).rgb) *
+	     0.3162162;
+	c += (image.SampleLevel(lin_clamp, uv + uDir * 3.2307692, 0.0).rgb +
+	      image.SampleLevel(lin_clamp, uv - uDir * 3.2307692, 0.0).rgb) *
+	     0.0702703;
+	return float4(c, 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* FINAL: drawn into the scene. image = beam, image2 = bloom,          */
+/* image3 = halo. out_size = the box in screen pixels.                 */
+
+uniform float uCorner;
+uniform float uEdgeSoft;
+uniform float uBezelReflect;
+uniform float uBloomAmt;
+uniform float uHalation;
+uniform float uVignette;
+uniform float uAmbient;
+uniform float uGlare;
+uniform float uFlicker;
+uniform float uLcdBleed;
+uniform float uTN;
+uniform float uGammaOut;
+uniform float uPowerGain;
+uniform float3 uBezelColor;
+uniform float uClearOutside;
+
+float4 PSFinal(VertData v_in) : TARGET
+{
+	float2 tuv = v_in.uv;
+	float2 fc = tuv * out_size;
+	float2 uv = (fc - uRect.xy) / uRect.zw;
+	float2 p = warpTube(uv);
+
+	/* rounded tube face (aspect-correct) */
+	float2 asp = float2(uRect.z / uRect.w, 1.0);
+	float2 pp = abs((p - 0.5) * asp);
+	float2 b = 0.5 * asp - uCorner;
+	float sd = length(max(pp - b, 0.0)) + min(max(pp.x - b.x, pp.y - b.y), 0.0) - uCorner;
+	float inside = 1.0 - smoothstep(-uEdgeSoft, 0.0, sd);
+
+	float3 bl = image2.SampleLevel(lin_clamp, tuv, 0.0).rgb;
+	float3 ha = image3.SampleLevel(lin_clamp, tuv, 0.0).rgb;
+	float3 col = image.SampleLevel(lin_clamp, tuv, 0.0).rgb * uPowerGain;
+	col += (bl * uBloomAmt + ha * uHalation) * uPowerGain;
+
+	float2 pc = saturate(p);
+	float2 vp = pc * (1.0 - pc);
+	col *= pow(saturate(vp.x * vp.y * 16.0), uVignette * 0.6);
+	col *= uFlicker;
+
+	if (uLcdBleed > 0.0) {
+		float2 e = min(pc, 1.0 - pc);
+		float bb = exp(-e.x * 16.0) * 0.5 + exp(-e.y * 12.0) * 0.45 + exp(-length(e) * 9.0) * 0.9;
+		col += uLcdBleed * 0.07 * bb * float3(0.92, 0.95, 1.0);
+	}
+
+	if (uTN > 0.0) {
+		float a = pc.y - 0.45;
+		float lum = dot(col, float3(0.2126, 0.7152, 0.0722));
+		col = lerp(col, float3(lum, lum, lum), uTN * max(a, 0.0) * 0.9);
+		col = col * (1.0 - uTN * max(a, 0.0) * 0.45) + uTN * max(-a, 0.0) * 0.06;
+	}
+
+	if (uDegauss > 0.0) {
+		float ang = atan2(pc.y - 0.5, pc.x - 0.5);
+		float3 tint = 0.5 + 0.5 * cos(float3(0.0, 2.1, 4.2) + ang * 2.0 + uTime * 9.0 + length(pc - 0.5) * 14.0);
+		col = lerp(col, col * tint * 1.8 + tint * 0.03, uDegauss * 0.7);
+	}
+
+	/* glass */
+	col += uAmbient * float3(0.82, 0.92, 0.86);
+	float2 gp = (pc - float2(0.27, 0.17)) * float2(1.25, 2.1);
+	col += uGlare * (0.16 * exp(-dot(gp, gp) * 5.0) + 0.035 * (1.0 - pc.y)) * float3(1.0, 1.0, 0.98);
+
+	/* bezel */
+	float3 bez = uBezelColor * (0.6 + 0.55 * (1.0 - saturate(uv.y)));
+	float dist = max(sd, 0.0);
+	bez *= 1.0 + 1.2 * exp(-dist * 90.0) * step(0.0, sd);
+	float2 m = uv;
+	m = lerp(m, -m, step(m, float2(0.0, 0.0)));
+	m = lerp(m, 2.0 - m, step(float2(1.0, 1.0), m));
+	float2 muv = (uRect.xy + m * uRect.zw) / out_size;
+	float3 refl = image3.SampleLevel(lin_clamp, muv, 0.0).rgb * 0.7 + image2.SampleLevel(lin_clamp, muv, 0.0).rgb * 0.6;
+	bez += refl * uBezelReflect * exp(-dist * 14.0) * uPowerGain;
+	bez += ha * 0.12 * uHalation * uPowerGain;
+	col = lerp(bez, col, inside);
+
+	col = pow(saturate(col), float3(1.0 / uGammaOut, 1.0 / uGammaOut, 1.0 / uGammaOut));
+	col += (hash(fc + frac(uTime) * 100.0) - 0.5) / 255.0;
+
+	if (lin_canvas > 0.5)
+		col = pow(saturate(col), float3(2.2, 2.2, 2.2));
+
+	/* optional: let the scene show through outside the tube face */
+	float alpha = lerp(1.0, inside, uClearOutside);
+	return float4(col, alpha);
+}
+
+/* ------------------------------------------------------------------ */
+
+technique Capture
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSCapture(v_in);
+	}
+}
+
+technique Signal
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSSignal(v_in);
+	}
+}
+
+technique Persist
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPersist(v_in);
+	}
+}
+
+technique Beam
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBeam(v_in);
+	}
+}
+
+technique Down
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDown(v_in);
+	}
+}
+
+technique Blur
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlur(v_in);
+	}
+}
+
+technique Final
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFinal(v_in);
+	}
+}

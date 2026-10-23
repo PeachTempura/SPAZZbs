@@ -23,6 +23,8 @@
 extern "C" {
 #endif
 
+struct matrix4;
+
 EXPORT const char *device_get_name(void);
 EXPORT const char *gpu_get_driver_version(void);
 EXPORT const char *gpu_get_renderer(void);
@@ -126,6 +128,12 @@ EXPORT void device_frustum(gs_device_t *device, float left, float right, float t
 			   float zfar);
 EXPORT void device_projection_push(gs_device_t *device);
 EXPORT void device_projection_pop(gs_device_t *device);
+/* SPAZZbs: lets a source map itself to screen pixels (optional export) */
+EXPORT void device_projection_get(const gs_device_t *device, struct matrix4 *dst);
+EXPORT bool device_get_target_info(const gs_device_t *device, uint32_t *cx, uint32_t *cy,
+				   enum gs_color_format *format);
+EXPORT bool device_copy_from_target(gs_device_t *device, gs_texture_t *dst, uint32_t src_x, uint32_t src_y,
+				    uint32_t src_w, uint32_t src_h);
 EXPORT void device_debug_marker_begin(gs_device_t *device, const char *markername, const float color[4]);
 EXPORT void device_debug_marker_end(gs_device_t *device);
 EXPORT bool device_is_monitor_hdr(gs_device_t *device, void *monitor);

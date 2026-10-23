@@ -25,6 +25,7 @@
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
 #include <dialogs/OBSBasicSourceSelect.hpp>
+#include <dialogs/SpazzLiveControls.hpp>
 #include <utility/item-widget-helpers.hpp>
 
 #include <qt-wrappers.hpp>
@@ -756,6 +757,12 @@ void OBSBasic::CreateSourcePopupMenu(int idx, bool preview)
 		QAction *action =
 			popup.addAction(QTStr("Properties"), this, &OBSBasic::on_actionSourceProperties_triggered);
 		action->setEnabled(obs_source_configurable(source));
+
+		/* SPAZZbs: the same settings in a floater that applies changes live */
+		OBSSource liveSource = source;
+		QAction *live = popup.addAction(QTStr("SpazzLive.Menu"), this,
+						[this, liveSource]() { SpazzLiveControls::Open(liveSource, this); });
+		live->setEnabled(obs_source_configurable(source));
 	} else {
 		popup.addAction(ui->actionPasteRef);
 		popup.addAction(ui->actionPasteDup);

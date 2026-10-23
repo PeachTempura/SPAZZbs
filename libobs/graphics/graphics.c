@@ -2211,6 +2211,43 @@ void gs_projection_pop(void)
 	graphics->exports.device_projection_pop(graphics->device);
 }
 
+bool gs_projection_get(struct matrix4 *dst)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid_p("gs_projection_get", dst))
+		return false;
+	if (!graphics->exports.device_projection_get)
+		return false;
+
+	graphics->exports.device_projection_get(graphics->device, dst);
+	return true;
+}
+
+bool gs_get_target_info(uint32_t *cx, uint32_t *cy, enum gs_color_format *format)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid_p3("gs_get_target_info", cx, cy, format))
+		return false;
+	if (!graphics->exports.device_get_target_info)
+		return false;
+
+	return graphics->exports.device_get_target_info(graphics->device, cx, cy, format);
+}
+
+bool gs_copy_from_target(gs_texture_t *dst, uint32_t src_x, uint32_t src_y, uint32_t src_w, uint32_t src_h)
+{
+	graphics_t *graphics = thread_graphics;
+
+	if (!gs_valid_p("gs_copy_from_target", dst))
+		return false;
+	if (!graphics->exports.device_copy_from_target)
+		return false;
+
+	return graphics->exports.device_copy_from_target(graphics->device, dst, src_x, src_y, src_w, src_h);
+}
+
 void gs_swapchain_destroy(gs_swapchain_t *swapchain)
 {
 	graphics_t *graphics = thread_graphics;

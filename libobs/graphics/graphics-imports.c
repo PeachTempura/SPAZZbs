@@ -122,6 +122,9 @@ bool load_graphics_imports(struct gs_exports *exports, void *module, const char 
 	GRAPHICS_IMPORT(device_frustum);
 	GRAPHICS_IMPORT(device_projection_push);
 	GRAPHICS_IMPORT(device_projection_pop);
+	GRAPHICS_IMPORT_OPTIONAL(device_projection_get);
+	GRAPHICS_IMPORT_OPTIONAL(device_get_target_info);
+	GRAPHICS_IMPORT_OPTIONAL(device_copy_from_target);
 
 	GRAPHICS_IMPORT(gs_swapchain_destroy);
 

@@ -723,6 +723,14 @@ EXPORT void gs_frustum(float left, float right, float top, float bottom, float z
 
 EXPORT void gs_projection_push(void);
 EXPORT void gs_projection_pop(void);
+/* SPAZZbs: current projection matrix; false if the backend can't say */
+EXPORT bool gs_projection_get(struct matrix4 *dst);
+
+/* SPAZZbs: size/format of whatever is being drawn to right now (a texture or
+ * a display's swap chain), and a copy of part of it into "dst" at 0,0. "dst"
+ * must have the same colour format. Both return false if the backend can't. */
+EXPORT bool gs_get_target_info(uint32_t *cx, uint32_t *cy, enum gs_color_format *format);
+EXPORT bool gs_copy_from_target(gs_texture_t *dst, uint32_t src_x, uint32_t src_y, uint32_t src_w, uint32_t src_h);
 
 EXPORT void gs_swapchain_destroy(gs_swapchain_t *swapchain);
 

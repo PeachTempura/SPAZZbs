@@ -17,7 +17,7 @@ jobs:
   # OBS's own effect parser. OBS's stock default.effect goes through the same
   # path as a control.
   shader-check:
-    name: Visualizer Shader 🌈
+    name: SPAZZ Shaders 🌈
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -27,8 +27,9 @@ jobs:
           # surface any error as an annotation so it's visible without logs
           report() { while IFS= read -r line; do echo "$line"; echo "::error::$line"; done; }
           .github/spazzbs/fxcheck/build.sh ./fxparse 2>&1 | report; test -x ./fxparse
-          mkdir -p hlsl/spazz hlsl/control
+          mkdir -p hlsl/spazz hlsl/crt hlsl/control
           ./fxparse plugins/spazz-visualizer/data/spazz-visualizer.effect hlsl/spazz 2> >(report)
+          ./fxparse plugins/spazz-crt/data/spazz-crt.effect hlsl/crt 2> >(report)
           ./fxparse libobs/data/default.effect hlsl/control 2> >(report)
 
       - name: Upload HLSL 📡
@@ -67,7 +68,7 @@ jobs:
           Write-Host "Using $($Fxc.FullName)"
           $Failed = 0
           $Files = Get-ChildItem -Path "${{ github.workspace }}/spazz_hlsl" -Recurse -Filter *.hlsl
-          if ( $Files.Count -lt 8 ) { throw "Expected HLSL for the visualizer and the control, got $($Files.Count)" }
+          if ( $Files.Count -lt 22 ) { throw "Expected HLSL for the visualizer, the CRT and the control, got $($Files.Count)" }
           foreach ( $File in $Files ) {
             $Target = if ( $File.Name -like '*_vs.hlsl' ) { 'vs_4_0' } else { 'ps_4_0' }
             & $Fxc.FullName /nologo /T $Target /E main /O3 /Fo NUL $File.FullName

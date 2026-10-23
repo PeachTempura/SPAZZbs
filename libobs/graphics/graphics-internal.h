@@ -130,6 +130,11 @@ struct gs_exports {
 			       float zfar);
 	void (*device_projection_push)(gs_device_t *device);
 	void (*device_projection_pop)(gs_device_t *device);
+	void (*device_projection_get)(const gs_device_t *device, struct matrix4 *dst);
+	bool (*device_get_target_info)(const gs_device_t *device, uint32_t *cx, uint32_t *cy,
+				       enum gs_color_format *format);
+	bool (*device_copy_from_target)(gs_device_t *device, gs_texture_t *dst, uint32_t src_x, uint32_t src_y,
+					uint32_t src_w, uint32_t src_h);
 
 	void (*gs_swapchain_destroy)(gs_swapchain_t *swapchain);
 

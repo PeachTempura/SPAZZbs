@@ -2225,6 +2225,109 @@ void device_copy_texture(gs_device_t *device, gs_texture_t *dst, gs_texture_t *s
 	device_copy_texture_region(device, dst, 0, 0, src, 0, 0, 0, 0);
 }
 
+/* SPAZZbs: read back from whatever is being drawn to, swap chains included */
+static DXGI_FORMAT TypelessFamily(DXGI_FORMAT f)
+{
+	switch (f) {
+	case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+	case DXGI_FORMAT_R8G8B8A8_UNORM:
+	case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+		return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+	case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+	case DXGI_FORMAT_B8G8R8A8_UNORM:
+	case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+		return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+	case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+	case DXGI_FORMAT_B8G8R8X8_UNORM:
+	case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+		return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+	case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+	case DXGI_FORMAT_R10G10B10A2_UNORM:
+		return DXGI_FORMAT_R10G10B10A2_TYPELESS;
+	case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+	case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		return DXGI_FORMAT_R16G16B16A16_TYPELESS;
+	default:
+		return f;
+	}
+}
+
+static bool TargetColorFormat(DXGI_FORMAT f, gs_color_format *out)
+{
+	switch (TypelessFamily(f)) {
+	case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+		*out = GS_RGBA;
+		return true;
+	case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+		*out = GS_BGRA;
+		return true;
+	case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+		*out = GS_BGRX;
+		return true;
+	case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+		*out = GS_R10G10B10A2;
+		return true;
+	case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+		if (f != DXGI_FORMAT_R16G16B16A16_FLOAT)
+			return false;
+		*out = GS_RGBA16F;
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool device_get_target_info(const gs_device_t *device, uint32_t *cx, uint32_t *cy, gs_color_format *format)
+{
+	gs_texture_2d *rt = device->curRenderTarget;
+	if (!rt || !rt->texture)
+		return false;
+
+	D3D11_TEXTURE2D_DESC desc;
+	rt->texture->GetDesc(&desc);
+	if (desc.SampleDesc.Count != 1 || !TargetColorFormat(desc.Format, format))
+		return false;
+
+	*cx = desc.Width;
+	*cy = desc.Height;
+	return true;
+}
+
+bool device_copy_from_target(gs_device_t *device, gs_texture_t *dst, uint32_t src_x, uint32_t src_y, uint32_t src_w,
+			     uint32_t src_h)
+{
+	gs_texture_2d *rt = device->curRenderTarget;
+	if (!rt || !rt->texture || !dst || dst->type != GS_TEXTURE_2D)
+		return false;
+
+	gs_texture_2d *dst2d = static_cast<gs_texture_2d *>(dst);
+	if (!dst2d->texture)
+		return false;
+
+	D3D11_TEXTURE2D_DESC sd, dd;
+	rt->texture->GetDesc(&sd);
+	dst2d->texture->GetDesc(&dd);
+	if (sd.SampleDesc.Count != 1 || TypelessFamily(sd.Format) != TypelessFamily(dd.Format))
+		return false;
+	if (src_x >= sd.Width || src_y >= sd.Height)
+		return false;
+
+	src_w = std::min({src_w, sd.Width - src_x, dd.Width});
+	src_h = std::min({src_h, sd.Height - src_y, dd.Height});
+	if (!src_w || !src_h)
+		return false;
+
+	D3D11_BOX box;
+	box.left = src_x;
+	box.top = src_y;
+	box.front = 0;
+	box.right = src_x + src_w;
+	box.bottom = src_y + src_h;
+	box.back = 1;
+	device->context->CopySubresourceRegion(dst2d->texture, 0, 0, 0, 0, rt->texture, 0, &box);
+	return true;
+}
+
 void device_stage_texture(gs_device_t *device, gs_stagesurf_t *dst, gs_texture_t *src)
 {
 	try {
@@ -2687,6 +2790,11 @@ void device_projection_push(gs_device_t *device)
 	mat4float mat;
 	memcpy(&mat, &device->curProjMatrix, sizeof(matrix4));
 	device->projStack.push_back(mat);
+}
+
+void device_projection_get(const gs_device_t *device, matrix4 *dst)
+{
+	memcpy(dst, &device->curProjMatrix, sizeof(matrix4));
 }
 
 void device_projection_pop(gs_device_t *device)
