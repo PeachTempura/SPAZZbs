@@ -1152,6 +1152,14 @@ void OBSBasic::OBSInit()
 
 	SetupSpazzTabs();
 
+	/* SPAZZbs: File > Import from OBS Studio... */
+	{
+		QAction *importObs = new QAction(QTStr("SpazzImport.Menu"), this);
+		ui->menu_File->insertAction(ui->action_Settings, importObs);
+		ui->menu_File->insertSeparator(ui->action_Settings);
+		connect(importObs, &QAction::triggered, this, [this]() { SpazzImportFromOBS(false); });
+	}
+
 	bool docksLocked = config_get_bool(App()->GetUserConfig(), "BasicWindow", "DocksLocked");
 	on_lockDocks_toggled(docksLocked);
 	ui->lockDocks->blockSignals(true);
@@ -1178,7 +1186,20 @@ void OBSBasic::OBSInit()
 		config_save_safe(App()->GetUserConfig(), "tmp", nullptr);
 	}
 
-	if (!first_run && !has_last_version && !Active()) {
+	const bool runWizard = !first_run && !has_last_version && !Active();
+
+	/* SPAZZbs: offer once to bring the user's OBS Studio setup over. If
+	 * they do, their profile already has settings, so skip the wizard. */
+	if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "ObsImportOffered") && !Active() &&
+	    SpazzObsSetupFound()) {
+		QMetaObject::invokeMethod(
+			this,
+			[this, runWizard]() {
+				if (!SpazzImportFromOBS(true) && runWizard)
+					on_autoConfigure_triggered();
+			},
+			Qt::QueuedConnection);
+	} else if (runWizard) {
 		QMetaObject::invokeMethod(this, &OBSBasic::on_autoConfigure_triggered, Qt::QueuedConnection);
 	}
 

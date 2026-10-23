@@ -466,6 +466,11 @@ private:
 	QPointer<SpazzMusicDock> spazzMusicDock;
 	void PlaceSpazzMusicDock();
 
+	/* SPAZZbs: copy scene collections, profiles and browser docks over
+	 * from a regular OBS Studio install */
+	bool SpazzObsSetupFound();
+	bool SpazzImportFromOBS(bool startup);
+
 public:
 	void AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool extraBrowser = false);
 	void RemoveDockWidget(const QString &name);

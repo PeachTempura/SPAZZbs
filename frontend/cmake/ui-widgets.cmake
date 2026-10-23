@@ -33,6 +33,7 @@ target_sources(
     widgets/OBSBasic_ReplayBuffer.cpp
     widgets/OBSBasic_SceneCollections.cpp
     widgets/OBSBasic_SceneItems.cpp
+    widgets/OBSBasic_SpazzImport.cpp
     widgets/OBSBasic_Scenes.cpp
     widgets/OBSBasic_Screenshots.cpp
     widgets/OBSBasic_Service.cpp
