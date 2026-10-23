@@ -389,6 +389,10 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 	if (dlg.exec() != QDialog::Accepted)
 		return false;
 
+	/* read this now: once the dialog has closed, nothing in it is
+	 * "visible" any more, so isVisible() would always say no */
+	const bool wantSwitch = !switchTo->isHidden() && switchTo->isChecked();
+
 	/* ---- do it ---- */
 	std::vector<int> wantCollections, wantProfiles, wantDocks;
 	for (int g = 0; g < tree->topLevelItemCount(); g++) {
@@ -504,7 +508,14 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 	/* switch to what OBS was using: profile first (it sets the canvas size
 	 * the collection is laid out for), then the scenes */
 	QString switchNote;
-	if (switchTo->isVisible() && switchTo->isChecked() && (!switchProfile.empty() || !switchCollection.empty())) {
+	/* imported on an earlier run: switch to that copy */
+	if (switchCollection.empty() && !setup.currentCollection.empty() &&
+	    existingCollection(setup.currentCollection + " (OBS)"))
+		switchCollection = setup.currentCollection + " (OBS)";
+	if (switchProfile.empty() && !setup.currentProfile.empty() && existingProfile(setup.currentProfile + " (OBS)"))
+		switchProfile = setup.currentProfile + " (OBS)";
+
+	if (wantSwitch && (!switchProfile.empty() || !switchCollection.empty())) {
 		if (Active()) {
 			switchNote = QTStr("SpazzImport.SwitchLater");
 		} else {
@@ -516,6 +527,9 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 				OnEvent(OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING);
 				ActivateSceneCollection(c.value());
 			}
+			switchNote = QTStr("SpazzImport.Switched")
+					     .arg(QString::fromStdString(switchCollection.empty() ? "-" : switchCollection),
+						  QString::fromStdString(switchProfile.empty() ? "-" : switchProfile));
 		}
 	}
 
@@ -535,6 +549,8 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 		report += "\n\n" + switchNote;
 	if (report.isEmpty())
 		report = QTStr("SpazzImport.Nothing");
+	else if (done.isEmpty() && failed.isEmpty() && missingTypes.empty())
+		report = switchNote;
 
 	OBSMessageBox::information(this, QTStr("SpazzImport.Title"), report);
 	return !done.isEmpty();
