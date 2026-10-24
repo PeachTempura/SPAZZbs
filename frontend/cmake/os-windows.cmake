@@ -69,6 +69,20 @@ endif()
 
 set_source_files_properties(utility/AutoUpdateThread.cpp PROPERTIES COMPILE_DEFINITIONS OBS_COMMIT="${OBS_COMMIT}")
 
+# SPAZZbs: the exact commit this build came from, so the updater can tell
+# whether the newest release is newer
+set(SPAZZBS_COMMIT "$ENV{GITHUB_SHA}")
+if(NOT SPAZZBS_COMMIT)
+  execute_process(
+    COMMAND git rev-parse HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE SPAZZBS_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+endif()
+set_source_files_properties(utility/SpazzUpdater.cpp PROPERTIES COMPILE_DEFINITIONS SPAZZBS_COMMIT="${SPAZZBS_COMMIT}")
+
 add_subdirectory(updater)
 
 set_property(TARGET obs-studio APPEND PROPERTY AUTORCC_OPTIONS --format-version 1)

@@ -4,6 +4,8 @@ target_sources(
     utility/AdvancedOutput.cpp
     utility/AdvancedOutput.hpp
     utility/SpazzMusicPlayer.cpp
+    utility/SpazzUpdater.cpp
+    utility/SpazzUpdater.hpp
     utility/SpazzMusicPlayer.hpp
     utility/BaseLexer.hpp
     utility/BasicOutputHandler.cpp

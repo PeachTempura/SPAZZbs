@@ -141,10 +141,23 @@ jobs:
             throw "SPAZZbs.exe not found in package"
           }
 
+          # Debug symbols are half the size and aren't needed to run
+          Get-ChildItem -Path $Stage -Recurse -Filter *.pdb | Remove-Item -Force
+
           # One-click launcher for the portable zip
           Set-Content -Path "$Stage/Open SPAZZbs.cmd" -Encoding ascii -Value @(
             '@echo off',
             'start "" /D "%~dp0bin\64bit" "%~dp0bin\64bit\SPAZZbs.exe" %*'
+          )
+
+          # One-click updater: fetches the newest build into this folder
+          Set-Content -Path "$Stage/Update SPAZZbs.cmd" -Encoding ascii -Value @(
+            '@echo off',
+            'title Updating SPAZZbs',
+            'set "SRC=%~dp0data\obs-studio\spazzbs-update.ps1"',
+            'if not exist "%SRC%" set "SRC=%~dp0spazzbs-update.ps1"',
+            'copy /y "%SRC%" "%TEMP%\spazzbs-update.ps1" >nul',
+            'powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\spazzbs-update.ps1" -AppDir "%~dp0." -Shortcut'
           )
 
           # Zip with 7-Zip using plain Deflate so Windows' built-in zip
@@ -156,6 +169,7 @@ jobs:
           if ( $LASTEXITCODE -ne 0 ) { throw "Zipping failed" }
           Pop-Location
           Remove-Item "$Stage/Open SPAZZbs.cmd"
+          Remove-Item "$Stage/Update SPAZZbs.cmd"
 
           "SPAZZBS_STAGE=$Stage" >> $env:GITHUB_ENV
 

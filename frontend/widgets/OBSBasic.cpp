@@ -33,6 +33,7 @@
 #include <components/SpazzDockTabs.hpp>
 #include <docks/SpazzMusicDock.hpp>
 #include <utility/SpazzMusicPlayer.hpp>
+#include <utility/SpazzUpdater.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -1158,6 +1159,18 @@ void OBSBasic::OBSInit()
 		ui->menu_File->insertAction(ui->action_Settings, importObs);
 		ui->menu_File->insertSeparator(ui->action_Settings);
 		connect(importObs, &QAction::triggered, this, [this]() { SpazzImportFromOBS(false); });
+	}
+
+	/* SPAZZbs: Help > Update SPAZZbs..., plus a quiet check on launch */
+	spazzUpdater = new SpazzUpdater(this);
+	{
+		QAction *update = new QAction(QTStr("SpazzUpdate.Menu"), this);
+		if (ui->actionCheckForUpdates)
+			ui->menuBasic_MainMenu_Help->insertAction(ui->actionCheckForUpdates, update);
+		else
+			ui->menuBasic_MainMenu_Help->addAction(update);
+		connect(update, &QAction::triggered, this, [this]() { spazzUpdater->Check(true); });
+		QTimer::singleShot(6000, spazzUpdater, [this]() { spazzUpdater->Check(false); });
 	}
 
 	bool docksLocked = config_get_bool(App()->GetUserConfig(), "BasicWindow", "DocksLocked");
