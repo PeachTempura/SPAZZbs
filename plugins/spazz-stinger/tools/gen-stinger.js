@@ -84,6 +84,7 @@ struct stg_preset {
 `;
 PRESETS.forEach((pr, i) => {
   const style = STYLES.find((s) => s.id === pr.style);
+  if (PRESETS.filter((q) => q.name === pr.name).length > 1) throw new Error('duplicate preset ' + pr.name);
   if (!style) throw new Error('unknown style ' + pr.style);
   const vals = Object.entries(pr.p).map(([k, v]) => {
     const def = style.params.find((p) => p.key === k);

@@ -28,6 +28,7 @@ struct stg_param {
 
 static const struct stg_style stg_styles[] = {
 	{"matrix", "Matrix Code", "Matrix"},
+	{"smoke", "Colorful Smoke", "Smoke"},
 	{"glitch", "Glitch", "Glitch"},
 	{"sunset", "Sunset Wipe", "Sunset"},
 	{"pixel", "Pixel Storm", "Pixel"},
@@ -39,6 +40,7 @@ static const struct stg_style stg_styles[] = {
 };
 #define STG_STYLE_COUNT ((int)(sizeof(stg_styles) / sizeof(stg_styles[0])))
 
+static const struct stg_option stg_opts_k_from[] = {{0, "Bottom"}, {1, "Left"}, {2, "Right"}, {3, "Top"}, {4, "Centre burst"}};
 static const struct stg_option stg_opts_i_shape[] = {{0, "Circle"}, {1, "Diamond"}, {2, "Star"}};
 
 static const struct stg_param stg_params[] = {
@@ -52,53 +54,64 @@ static const struct stg_param stg_params[] = {
 	{"m_image", "Picture in the code", "The code takes its brightness from the scene, so you can still make out the picture in it.", STG_SLIDER, 0, 9, 0.0, 1.0, 0.01, 0.7, NULL, 0},
 	{"m_heads", "Bright drop heads", NULL, STG_SLIDER, 0, 10, 0.0, 1.0, 0.01, 0.9, NULL, 0},
 	{"m_flicker", "Glyph flicker", NULL, STG_SLIDER, 0, 11, 0.0, 2.0, 0.05, 0.8, NULL, 0},
-	{"g_amount", "Amount", NULL, STG_SLIDER, 1, 4, 0.0, 1.5, 0.01, 1.0, NULL, 0},
-	{"g_slice", "Slice height (px)", NULL, STG_SLIDER, 1, 5, 2.0, 80.0, 1.0, 18.0, NULL, 0},
-	{"g_split", "Colour split (px)", NULL, STG_SLIDER, 1, 6, 0.0, 40.0, 0.5, 14.0, NULL, 0},
-	{"g_blocks", "Corrupt blocks", NULL, STG_SLIDER, 1, 7, 0.0, 1.0, 0.01, 0.6, NULL, 0},
-	{"g_flash", "Flash at the cut", NULL, STG_SLIDER, 1, 8, 0.0, 1.0, 0.01, 0.6, NULL, 0},
-	{"g_flashc", "Flash colour", NULL, STG_COLOR, 1, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
-	{"g_blockc", "Block colour", NULL, STG_COLOR, 1, 1, 0.0, 0.0, 0.0, 0xff2bd6, NULL, 0},
-	{"s_c1", "Colour 1", NULL, STG_COLOR, 2, 0, 0.0, 0.0, 0.0, 0x3a1c71, NULL, 0},
-	{"s_c2", "Colour 2", NULL, STG_COLOR, 2, 1, 0.0, 0.0, 0.0, 0xb8336a, NULL, 0},
-	{"s_c3", "Colour 3", NULL, STG_COLOR, 2, 2, 0.0, 0.0, 0.0, 0xf2545b, NULL, 0},
-	{"s_c4", "Colour 4 (edge)", NULL, STG_COLOR, 2, 3, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
-	{"s_angle", "Angle", "0 sweeps left to right, 90 top to bottom.", STG_SLIDER, 2, 4, -180.0, 180.0, 1.0, 35.0, NULL, 0},
-	{"s_stripes", "Stripes", NULL, STG_SLIDER, 2, 5, 0.25, 8.0, 0.05, 2.0, NULL, 0},
-	{"s_glow", "Edge glow", NULL, STG_SLIDER, 2, 6, 0.0, 1.0, 0.01, 0.6, NULL, 0},
-	{"s_soft", "Edge softness", NULL, STG_SLIDER, 2, 7, 0.001, 0.3, 0.001, 0.02, NULL, 0},
-	{"s_drift", "Stripe drift", NULL, STG_SLIDER, 2, 8, 0.0, 2.0, 0.05, 0.4, NULL, 0},
-	{"p_max", "Biggest block (px)", NULL, STG_SLIDER, 3, 4, 4.0, 160.0, 1.0, 64.0, NULL, 0},
-	{"p_levels", "Colour levels", NULL, STG_SLIDER, 3, 5, 2.0, 32.0, 1.0, 6.0, NULL, 0},
-	{"p_sparkle", "Sparkle", NULL, STG_SLIDER, 3, 6, 0.0, 1.0, 0.01, 0.5, NULL, 0},
-	{"p_color", "Sparkle colour", NULL, STG_COLOR, 3, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
-	{"b_count", "Slats", NULL, STG_SLIDER, 4, 4, 2.0, 40.0, 1.0, 12.0, NULL, 0},
-	{"b_vertical", "Vertical slats", NULL, STG_TOGGLE, 4, 5, 0.0, 0.0, 0.0, 0.0, NULL, 0},
-	{"b_shine", "Shine", NULL, STG_SLIDER, 4, 6, 0.0, 1.5, 0.01, 0.7, NULL, 0},
-	{"b_stagger", "Stagger", NULL, STG_SLIDER, 4, 7, 0.0, 1.5, 0.01, 0.6, NULL, 0},
-	{"b_color", "Slat colour", NULL, STG_COLOR, 4, 0, 0.0, 0.0, 0.0, 0x463c78, NULL, 0},
-	{"b_edge", "Edge colour", NULL, STG_COLOR, 4, 1, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
-	{"c_color", "Beam colour", NULL, STG_COLOR, 5, 0, 0.0, 0.0, 0.0, 0xbfe6ff, NULL, 0},
-	{"c_flash", "Flash", NULL, STG_SLIDER, 5, 4, 0.0, 1.5, 0.01, 0.8, NULL, 0},
-	{"c_hold", "Time spent off", NULL, STG_SLIDER, 5, 5, 0.0, 0.9, 0.01, 0.25, NULL, 0},
-	{"c_glow", "Beam glow", NULL, STG_SLIDER, 5, 6, 0.0, 2.0, 0.01, 1.0, NULL, 0},
-	{"v_noise", "Static", NULL, STG_SLIDER, 6, 4, 0.0, 1.5, 0.01, 1.0, NULL, 0},
-	{"v_roll", "Roll speed", NULL, STG_SLIDER, 6, 5, 0.0, 3.0, 0.05, 1.0, NULL, 0},
-	{"v_bleed", "Colour bleed", NULL, STG_SLIDER, 6, 6, 0.0, 2.0, 0.05, 1.0, NULL, 0},
-	{"v_osd", "Show rewind / play arrows", NULL, STG_TOGGLE, 6, 7, 0.0, 0.0, 0.0, 1.0, NULL, 0},
-	{"v_osdc", "Arrow colour", NULL, STG_COLOR, 6, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
-	{"h_static", "Static", NULL, STG_SLIDER, 7, 4, 0.0, 1.2, 0.01, 1.0, NULL, 0},
-	{"h_roll", "Vertical roll", "How far the picture rolls as the old channel loses hold and the new one locks in.", STG_SLIDER, 7, 5, 0.0, 2.0, 0.05, 1.0, NULL, 0},
-	{"h_jolt", "Tuner jolt", NULL, STG_SLIDER, 7, 8, 0.0, 1.5, 0.01, 0.8, NULL, 0},
-	{"h_osd", "Show the channel number", NULL, STG_TOGGLE, 7, 7, 0.0, 0.0, 0.0, 1.0, NULL, 0},
-	{"h_number", "Channel number", NULL, STG_SLIDER, 7, 6, 0.0, 99.0, 1.0, 4.0, NULL, 0},
-	{"h_color", "Number colour", NULL, STG_COLOR, 7, 0, 0.0, 0.0, 0.0, 0x3dff6a, NULL, 0},
-	{"i_shape", "Shape", NULL, STG_SELECT, 8, 7, 0.0, 0.0, 0.0, 0.0, stg_opts_i_shape, 3},
-	{"i_x", "Centre across", NULL, STG_SLIDER, 8, 4, 0.0, 1.0, 0.01, 0.5, NULL, 0},
-	{"i_y", "Centre down", NULL, STG_SLIDER, 8, 5, 0.0, 1.0, 0.01, 0.5, NULL, 0},
-	{"i_width", "Ring glow (px)", NULL, STG_SLIDER, 8, 6, 1.0, 60.0, 1.0, 10.0, NULL, 0},
-	{"i_ring", "Ring colour", NULL, STG_COLOR, 8, 0, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
-	{"i_fill", "Fill colour", NULL, STG_COLOR, 8, 1, 0.0, 0.0, 0.0, 0x000000, NULL, 0},
+	{"k_from", "Comes from", NULL, STG_SELECT, 1, 4, 0.0, 0.0, 0.0, 0.0, stg_opts_k_from, 5},
+	{"k_c1", "Colour 1", NULL, STG_COLOR, 1, 0, 0.0, 0.0, 0.0, 0x7b2bff, NULL, 0},
+	{"k_c2", "Colour 2", NULL, STG_COLOR, 1, 1, 0.0, 0.0, 0.0, 0xff3fa4, NULL, 0},
+	{"k_c3", "Colour 3", NULL, STG_COLOR, 1, 2, 0.0, 0.0, 0.0, 0xff8a3d, NULL, 0},
+	{"k_c4", "Colour 4", NULL, STG_COLOR, 1, 3, 0.0, 0.0, 0.0, 0xffd23d, NULL, 0},
+	{"k_swirl", "Swirl", NULL, STG_SLIDER, 1, 5, 0.0, 2.0, 0.01, 1.0, NULL, 0},
+	{"k_size", "Puff size", NULL, STG_SLIDER, 1, 6, 0.2, 2.5, 0.05, 1.0, NULL, 0},
+	{"k_thick", "Thickness", "Low = soft, see-through wisps. High = dense clouds with sharp edges.", STG_SLIDER, 1, 7, 0.3, 2.0, 0.01, 1.0, NULL, 0},
+	{"k_speed", "Drift speed", NULL, STG_SLIDER, 1, 8, 0.0, 3.0, 0.05, 1.0, NULL, 0},
+	{"k_light", "Lighting", NULL, STG_SLIDER, 1, 9, 0.0, 2.0, 0.01, 1.0, NULL, 0},
+	{"k_mix", "Colour mixing", "Low = big separate clouds of each colour. High = colours swirl through each other.", STG_SLIDER, 1, 10, 0.0, 2.0, 0.01, 0.8, NULL, 0},
+	{"g_amount", "Amount", NULL, STG_SLIDER, 2, 4, 0.0, 1.5, 0.01, 1.0, NULL, 0},
+	{"g_slice", "Slice height (px)", NULL, STG_SLIDER, 2, 5, 2.0, 80.0, 1.0, 18.0, NULL, 0},
+	{"g_split", "Colour split (px)", NULL, STG_SLIDER, 2, 6, 0.0, 40.0, 0.5, 14.0, NULL, 0},
+	{"g_blocks", "Corrupt blocks", NULL, STG_SLIDER, 2, 7, 0.0, 1.0, 0.01, 0.6, NULL, 0},
+	{"g_flash", "Flash at the cut", NULL, STG_SLIDER, 2, 8, 0.0, 1.0, 0.01, 0.6, NULL, 0},
+	{"g_flashc", "Flash colour", NULL, STG_COLOR, 2, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
+	{"g_blockc", "Block colour", NULL, STG_COLOR, 2, 1, 0.0, 0.0, 0.0, 0xff2bd6, NULL, 0},
+	{"s_c1", "Colour 1", NULL, STG_COLOR, 3, 0, 0.0, 0.0, 0.0, 0x3a1c71, NULL, 0},
+	{"s_c2", "Colour 2", NULL, STG_COLOR, 3, 1, 0.0, 0.0, 0.0, 0xb8336a, NULL, 0},
+	{"s_c3", "Colour 3", NULL, STG_COLOR, 3, 2, 0.0, 0.0, 0.0, 0xf2545b, NULL, 0},
+	{"s_c4", "Colour 4 (edge)", NULL, STG_COLOR, 3, 3, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
+	{"s_angle", "Angle", "0 sweeps left to right, 90 top to bottom.", STG_SLIDER, 3, 4, -180.0, 180.0, 1.0, 35.0, NULL, 0},
+	{"s_stripes", "Stripes", NULL, STG_SLIDER, 3, 5, 0.25, 8.0, 0.05, 2.0, NULL, 0},
+	{"s_glow", "Edge glow", NULL, STG_SLIDER, 3, 6, 0.0, 1.0, 0.01, 0.6, NULL, 0},
+	{"s_soft", "Edge softness", NULL, STG_SLIDER, 3, 7, 0.001, 0.3, 0.001, 0.02, NULL, 0},
+	{"s_drift", "Stripe drift", NULL, STG_SLIDER, 3, 8, 0.0, 2.0, 0.05, 0.4, NULL, 0},
+	{"p_max", "Biggest block (px)", NULL, STG_SLIDER, 4, 4, 4.0, 160.0, 1.0, 64.0, NULL, 0},
+	{"p_levels", "Colour levels", NULL, STG_SLIDER, 4, 5, 2.0, 32.0, 1.0, 6.0, NULL, 0},
+	{"p_sparkle", "Sparkle", NULL, STG_SLIDER, 4, 6, 0.0, 1.0, 0.01, 0.5, NULL, 0},
+	{"p_color", "Sparkle colour", NULL, STG_COLOR, 4, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
+	{"b_count", "Slats", NULL, STG_SLIDER, 5, 4, 2.0, 40.0, 1.0, 12.0, NULL, 0},
+	{"b_vertical", "Vertical slats", NULL, STG_TOGGLE, 5, 5, 0.0, 0.0, 0.0, 0.0, NULL, 0},
+	{"b_shine", "Shine", NULL, STG_SLIDER, 5, 6, 0.0, 1.5, 0.01, 0.7, NULL, 0},
+	{"b_stagger", "Stagger", NULL, STG_SLIDER, 5, 7, 0.0, 1.5, 0.01, 0.6, NULL, 0},
+	{"b_color", "Slat colour", NULL, STG_COLOR, 5, 0, 0.0, 0.0, 0.0, 0x463c78, NULL, 0},
+	{"b_edge", "Edge colour", NULL, STG_COLOR, 5, 1, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
+	{"c_color", "Beam colour", NULL, STG_COLOR, 6, 0, 0.0, 0.0, 0.0, 0xbfe6ff, NULL, 0},
+	{"c_flash", "Flash", NULL, STG_SLIDER, 6, 4, 0.0, 1.5, 0.01, 0.8, NULL, 0},
+	{"c_hold", "Time spent off", NULL, STG_SLIDER, 6, 5, 0.0, 0.9, 0.01, 0.25, NULL, 0},
+	{"c_glow", "Beam glow", NULL, STG_SLIDER, 6, 6, 0.0, 2.0, 0.01, 1.0, NULL, 0},
+	{"v_noise", "Static", NULL, STG_SLIDER, 7, 4, 0.0, 1.5, 0.01, 1.0, NULL, 0},
+	{"v_roll", "Roll speed", NULL, STG_SLIDER, 7, 5, 0.0, 3.0, 0.05, 1.0, NULL, 0},
+	{"v_bleed", "Colour bleed", NULL, STG_SLIDER, 7, 6, 0.0, 2.0, 0.05, 1.0, NULL, 0},
+	{"v_osd", "Show rewind / play arrows", NULL, STG_TOGGLE, 7, 7, 0.0, 0.0, 0.0, 1.0, NULL, 0},
+	{"v_osdc", "Arrow colour", NULL, STG_COLOR, 7, 0, 0.0, 0.0, 0.0, 0xffffff, NULL, 0},
+	{"h_static", "Static", NULL, STG_SLIDER, 8, 4, 0.0, 1.2, 0.01, 1.0, NULL, 0},
+	{"h_roll", "Vertical roll", "How far the picture rolls as the old channel loses hold and the new one locks in.", STG_SLIDER, 8, 5, 0.0, 2.0, 0.05, 1.0, NULL, 0},
+	{"h_jolt", "Tuner jolt", NULL, STG_SLIDER, 8, 8, 0.0, 1.5, 0.01, 0.8, NULL, 0},
+	{"h_osd", "Show the channel number", NULL, STG_TOGGLE, 8, 7, 0.0, 0.0, 0.0, 1.0, NULL, 0},
+	{"h_number", "Channel number", NULL, STG_SLIDER, 8, 6, 0.0, 99.0, 1.0, 4.0, NULL, 0},
+	{"h_color", "Number colour", NULL, STG_COLOR, 8, 0, 0.0, 0.0, 0.0, 0x3dff6a, NULL, 0},
+	{"i_shape", "Shape", NULL, STG_SELECT, 9, 7, 0.0, 0.0, 0.0, 0.0, stg_opts_i_shape, 3},
+	{"i_x", "Centre across", NULL, STG_SLIDER, 9, 4, 0.0, 1.0, 0.01, 0.5, NULL, 0},
+	{"i_y", "Centre down", NULL, STG_SLIDER, 9, 5, 0.0, 1.0, 0.01, 0.5, NULL, 0},
+	{"i_width", "Ring glow (px)", NULL, STG_SLIDER, 9, 6, 1.0, 60.0, 1.0, 10.0, NULL, 0},
+	{"i_ring", "Ring colour", NULL, STG_COLOR, 9, 0, 0.0, 0.0, 0.0, 0xffc15e, NULL, 0},
+	{"i_fill", "Fill colour", NULL, STG_COLOR, 9, 1, 0.0, 0.0, 0.0, 0x000000, NULL, 0},
 };
 #define STG_PARAM_COUNT ((int)(sizeof(stg_params) / sizeof(stg_params[0])))
 
@@ -122,22 +135,38 @@ static const struct stg_preset_val stg_preset_2[] = {{"m_color", 0x38c8ff}, {"m_
 static const struct stg_preset_val stg_preset_3[] = {{"m_color", 0xffc15e}, {"m_bg", 0x3a1c71}, {"m_image", 0.8}, {"m_glow", 1.0}};
 static const struct stg_preset_val stg_preset_4[] = {{"m_rain", 1.0}, {"m_speed", 1.8}, {"m_trail", 0.55}, {"m_size", 16.0}};
 static const struct stg_preset_val stg_preset_5[] = {{"m_size", 40.0}, {"m_rain", 0.4}, {"m_glow", 1.1}, {"m_flicker", 0.5}};
-static const struct stg_preset_val stg_preset_6[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_7[] = {{"g_amount", 0.5}, {"g_blocks", 0.2}, {"g_flash", 0.2}, {"g_split", 8.0}};
+static const struct stg_preset_val stg_preset_6[] = {{"m_color", 0xd9f3ff}, {"m_bg", 0x0b1622}, {"m_glow", 1.2}, {"m_image", 0.85}};
+static const struct stg_preset_val stg_preset_7[] = {{"m_color", 0xff6ad5}, {"m_bg", 0x1a0b3a}, {"m_rain", 0.8}, {"m_trail", 0.5}};
 static const struct stg_preset_val stg_preset_8[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_9[] = {{"s_angle", 90.0}, {"s_stripes", 4.0}};
-static const struct stg_preset_val stg_preset_10[] = {{"s_c1", 0x7b2bff}, {"s_c2", 0xff00a8}, {"s_c3", 0x00e5ff}, {"s_c4", 0x00ff9c}, {"s_angle", -25.0}, {"s_glow", 0.9}};
-static const struct stg_preset_val stg_preset_11[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_12[] = {{"p_max", 120.0}, {"p_levels", 3.0}, {"p_sparkle", 0.8}};
+static const struct stg_preset_val stg_preset_9[] = {{"k_from", 4.0}, {"k_c1", 0xff2d8a}, {"k_c2", 0xffe14d}, {"k_c3", 0x2de0ff}, {"k_c4", 0x5dff7a}, {"k_mix", 1.2}, {"k_swirl", 1.3}};
+static const struct stg_preset_val stg_preset_10[] = {{"k_from", 1.0}, {"k_c1", 0x3a1cff}, {"k_c2", 0x9a2bff}, {"k_c3", 0x00d5ff}, {"k_c4", 0xff3fd8}, {"k_thick", 0.7}, {"k_speed", 0.7}};
+static const struct stg_preset_val stg_preset_11[] = {{"k_from", 3.0}, {"k_c1", 0xe9eef5}, {"k_c2", 0xb8c2d1}, {"k_c3", 0xffffff}, {"k_c4", 0x9aa6b8}, {"k_thick", 0.8}, {"k_speed", 0.5}, {"k_light", 1.4}};
+static const struct stg_preset_val stg_preset_12[] = {{"k_from", 2.0}, {"k_c1", 0x7dff2b}, {"k_c2", 0xd6ff3d}, {"k_c3", 0x1f8f2a}, {"k_c4", 0x2bffb0}, {"k_swirl", 1.6}, {"k_size", 0.7}};
 static const struct stg_preset_val stg_preset_13[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_14[] = {{"b_vertical", 1.0}, {"b_count", 8.0}, {"b_color", 0x3a2a10}, {"b_edge", 0xfff2a8}};
-static const struct stg_preset_val stg_preset_15[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_14[] = {{"g_amount", 0.5}, {"g_blocks", 0.2}, {"g_flash", 0.2}, {"g_split", 8.0}};
+static const struct stg_preset_val stg_preset_15[] = {{"g_amount", 1.3}, {"g_flashc", 0xff2bd6}, {"g_blockc", 0x00e5ff}, {"g_split", 24.0}, {"g_blocks", 0.9}};
 static const struct stg_preset_val stg_preset_16[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_17[] = {{"h_roll", 0.6}, {"h_jolt", 1.1}, {"h_number", 12.0}};
-static const struct stg_preset_val stg_preset_18[] = {{"h_static", 1.2}, {"h_roll", 1.6}, {"h_color", 0xffd23d}, {"h_number", 3.0}};
-static const struct stg_preset_val stg_preset_19[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_20[] = {{NULL, 0.0}};
-static const struct stg_preset_val stg_preset_21[] = {{"i_shape", 2.0}, {"i_ring", 0xff7ad9}, {"i_width", 16.0}};
+static const struct stg_preset_val stg_preset_17[] = {{"s_angle", 90.0}, {"s_stripes", 4.0}};
+static const struct stg_preset_val stg_preset_18[] = {{"s_c1", 0x7b2bff}, {"s_c2", 0xff00a8}, {"s_c3", 0x00e5ff}, {"s_c4", 0x00ff9c}, {"s_angle", -25.0}, {"s_glow", 0.9}};
+static const struct stg_preset_val stg_preset_19[] = {{"s_c1", 0xff71ce}, {"s_c2", 0x01cdfe}, {"s_c3", 0x05ffa1}, {"s_c4", 0xb967ff}, {"s_angle", 0.0}, {"s_stripes", 3.0}, {"s_drift", 0.8}};
+static const struct stg_preset_val stg_preset_20[] = {{"s_c1", 0x5a3a00}, {"s_c2", 0xc98a12}, {"s_c3", 0xffd25e}, {"s_c4", 0xfff4c2}, {"s_angle", 150.0}, {"s_stripes", 5.0}, {"s_glow", 0.9}};
+static const struct stg_preset_val stg_preset_21[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_22[] = {{"p_max", 120.0}, {"p_levels", 3.0}, {"p_sparkle", 0.8}};
+static const struct stg_preset_val stg_preset_23[] = {{"p_max", 90.0}, {"p_levels", 4.0}, {"p_sparkle", 0.9}, {"p_color", 0xffe14d}};
+static const struct stg_preset_val stg_preset_24[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_25[] = {{"b_vertical", 1.0}, {"b_count", 8.0}, {"b_color", 0x3a2a10}, {"b_edge", 0xfff2a8}};
+static const struct stg_preset_val stg_preset_26[] = {{"b_count", 20.0}, {"b_color", 0xe8e6e0}, {"b_edge", 0xffffff}, {"b_shine", 1.0}, {"b_stagger", 0.3}};
+static const struct stg_preset_val stg_preset_27[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_28[] = {{"c_color", 0xffb000}, {"c_hold", 0.35}, {"c_glow", 1.3}};
+static const struct stg_preset_val stg_preset_29[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_30[] = {{"v_noise", 1.4}, {"v_roll", 1.6}, {"v_bleed", 1.8}};
+static const struct stg_preset_val stg_preset_31[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_32[] = {{"h_roll", 0.6}, {"h_jolt", 1.1}, {"h_number", 12.0}};
+static const struct stg_preset_val stg_preset_33[] = {{"h_static", 1.2}, {"h_roll", 1.6}, {"h_color", 0xffd23d}, {"h_number", 3.0}};
+static const struct stg_preset_val stg_preset_34[] = {{"h_color", 0x5ab8ff}, {"h_number", 13.0}, {"h_static", 0.9}};
+static const struct stg_preset_val stg_preset_35[] = {{NULL, 0.0}};
+static const struct stg_preset_val stg_preset_36[] = {{"i_shape", 2.0}, {"i_ring", 0xff7ad9}, {"i_width", 16.0}};
+static const struct stg_preset_val stg_preset_37[] = {{"i_shape", 1.0}, {"i_ring", 0xffd25e}, {"i_width", 14.0}};
 
 static const struct stg_preset stg_presets[] = {
 	{"Matrix \302\267 Classic", "matrix", 1800, 50, stg_preset_0, 0},
@@ -146,21 +175,37 @@ static const struct stg_preset stg_presets[] = {
 	{"Matrix \302\267 Sunset Code", "matrix", 1800, 50, stg_preset_3, 4},
 	{"Matrix \302\267 Downpour", "matrix", 1400, 45, stg_preset_4, 4},
 	{"Matrix \302\267 Big Glyphs", "matrix", 2000, 50, stg_preset_5, 4},
-	{"Glitch \302\267 Datamosh", "glitch", 900, 50, stg_preset_6, 0},
-	{"Glitch \302\267 Subtle", "glitch", 600, 50, stg_preset_7, 4},
-	{"Sunset \302\267 Diagonal", "sunset", 1200, 50, stg_preset_8, 0},
-	{"Sunset \302\267 Drop", "sunset", 1100, 50, stg_preset_9, 2},
-	{"Neon Wipe", "sunset", 1000, 50, stg_preset_10, 6},
-	{"Pixel Storm", "pixel", 1000, 50, stg_preset_11, 0},
-	{"8-bit Crunch", "pixel", 900, 50, stg_preset_12, 3},
-	{"Blinds \302\267 Night", "blinds", 1100, 50, stg_preset_13, 0},
-	{"Blinds \302\267 Gold", "blinds", 1100, 50, stg_preset_14, 4},
-	{"CRT Power Cycle", "crt", 1400, 50, stg_preset_15, 0},
-	{"Channel Change", "channel", 1300, 45, stg_preset_16, 0},
-	{"Channel Change \302\267 Quick Flip", "channel", 700, 40, stg_preset_17, 3},
-	{"Channel Change \302\267 Bad Antenna", "channel", 1800, 50, stg_preset_18, 4},
-	{"VHS Rewind", "vhs", 1600, 55, stg_preset_19, 0},
-	{"Iris \302\267 Spotlight", "iris", 1200, 50, stg_preset_20, 0},
-	{"Iris \302\267 Star", "iris", 1300, 50, stg_preset_21, 3},
+	{"Matrix \302\267 Ghost Code", "matrix", 1800, 50, stg_preset_6, 4},
+	{"Matrix \302\267 Vapor", "matrix", 1800, 50, stg_preset_7, 4},
+	{"Smoke \302\267 Color Bomb", "smoke", 2000, 50, stg_preset_8, 0},
+	{"Smoke \302\267 Holi Burst", "smoke", 2000, 45, stg_preset_9, 7},
+	{"Smoke \302\267 Neon Haze", "smoke", 2200, 50, stg_preset_10, 7},
+	{"Smoke \302\267 Ghost", "smoke", 2400, 50, stg_preset_11, 8},
+	{"Smoke \302\267 Toxic", "smoke", 1800, 50, stg_preset_12, 7},
+	{"Glitch \302\267 Datamosh", "glitch", 900, 50, stg_preset_13, 0},
+	{"Glitch \302\267 Subtle", "glitch", 600, 50, stg_preset_14, 4},
+	{"Glitch \302\267 Neon Corrupt", "glitch", 1000, 50, stg_preset_15, 5},
+	{"Sunset \302\267 Diagonal", "sunset", 1200, 50, stg_preset_16, 0},
+	{"Sunset \302\267 Drop", "sunset", 1100, 50, stg_preset_17, 2},
+	{"Neon Wipe", "sunset", 1000, 50, stg_preset_18, 6},
+	{"Vaporwave Wipe", "sunset", 1200, 50, stg_preset_19, 7},
+	{"Gold Rush Wipe", "sunset", 1000, 50, stg_preset_20, 7},
+	{"Pixel Storm", "pixel", 1000, 50, stg_preset_21, 0},
+	{"8-bit Crunch", "pixel", 900, 50, stg_preset_22, 3},
+	{"Retro Arcade", "pixel", 1100, 50, stg_preset_23, 4},
+	{"Blinds \302\267 Night", "blinds", 1100, 50, stg_preset_24, 0},
+	{"Blinds \302\267 Gold", "blinds", 1100, 50, stg_preset_25, 4},
+	{"Blinds \302\267 Venetian White", "blinds", 1000, 50, stg_preset_26, 5},
+	{"CRT Power Cycle", "crt", 1400, 50, stg_preset_27, 0},
+	{"CRT \302\267 Amber Terminal", "crt", 1400, 50, stg_preset_28, 3},
+	{"VHS Rewind", "vhs", 1600, 55, stg_preset_29, 0},
+	{"VHS \302\267 Worn Tape", "vhs", 2000, 55, stg_preset_30, 3},
+	{"Channel Change", "channel", 1300, 45, stg_preset_31, 0},
+	{"Channel Change \302\267 Quick Flip", "channel", 700, 40, stg_preset_32, 3},
+	{"Channel Change \302\267 Bad Antenna", "channel", 1800, 50, stg_preset_33, 4},
+	{"Channel Change \302\267 Late Night", "channel", 1500, 45, stg_preset_34, 3},
+	{"Iris \302\267 Spotlight", "iris", 1200, 50, stg_preset_35, 0},
+	{"Iris \302\267 Star", "iris", 1300, 50, stg_preset_36, 3},
+	{"Iris \302\267 Diamond Gold", "iris", 1100, 50, stg_preset_37, 3},
 };
 #define STG_PRESET_COUNT ((int)(sizeof(stg_presets) / sizeof(stg_presets[0])))
