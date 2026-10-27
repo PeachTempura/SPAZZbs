@@ -34,6 +34,7 @@
 #include <docks/SpazzMusicDock.hpp>
 #include <utility/SpazzMusicPlayer.hpp>
 #include <utility/SpazzUpdater.hpp>
+#include <dialogs/SpazzStingerStudio.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -1159,6 +1160,19 @@ void OBSBasic::OBSInit()
 		ui->menu_File->insertAction(ui->action_Settings, importObs);
 		ui->menu_File->insertSeparator(ui->action_Settings);
 		connect(importObs, &QAction::triggered, this, [this]() { SpazzImportFromOBS(false); });
+	}
+
+	/* SPAZZbs: Tools > Stinger Studio... */
+	{
+		QAction *studio = new QAction(QTStr("SpazzStudio.Menu"), this);
+		QList<QAction *> tools = ui->menuTools->actions();
+		if (tools.isEmpty()) {
+			ui->menuTools->addAction(studio);
+		} else {
+			ui->menuTools->insertAction(tools.first(), studio);
+			ui->menuTools->insertSeparator(tools.first());
+		}
+		connect(studio, &QAction::triggered, this, [this]() { SpazzStingerStudio::Open(this); });
 	}
 
 	/* SPAZZbs: Help > Update SPAZZbs..., plus a quiet check on launch */

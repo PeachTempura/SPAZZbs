@@ -1,0 +1,912 @@
+// SPAZZ Stinger: procedural stinger transitions, drawn live.
+//
+// Every style gets both scenes, the transition time t (0..1) and the cut
+// point; before the cut the picture is scene A, after it scene B, and each
+// style covers the swap its own way. Style settings arrive as generic
+// colours (u_c1..u_c4) and numbers (u_p1..u_p8); spazz-stinger.c says which
+// is which for each style.
+//
+// uv has v = 0 at the top; px = uv * res is in output pixels.
+
+uniform float4x4 ViewProj;
+uniform texture2d tex_a;
+uniform texture2d tex_b;
+
+uniform float has_a;
+uniform float has_b;
+uniform float t;
+uniform float cut;
+uniform float2 res;
+uniform float time_s;
+uniform float seed;
+uniform float lin_out;
+
+uniform float3 u_c1;
+uniform float3 u_c2;
+uniform float3 u_c3;
+uniform float3 u_c4;
+uniform float u_p1;
+uniform float u_p2;
+uniform float u_p3;
+uniform float u_p4;
+uniform float u_p5;
+uniform float u_p6;
+uniform float u_p7;
+uniform float u_p8;
+
+sampler_state lin_clamp {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+
+float hash12(float2 p)
+{
+	float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float glmod(float x, float y)
+{
+	return x - y * floor(x / y);
+}
+
+/* colours chosen in the UI are display (sRGB) values; linear canvases
+ * need them converted */
+float3 gen(float3 c)
+{
+	if (lin_out > 0.5)
+		return pow(max(c, float3(0.0, 0.0, 0.0)), float3(2.2, 2.2, 2.2));
+	return c;
+}
+
+float lumaOf(float3 c)
+{
+	float3 d = c;
+	if (lin_out > 0.5)
+		d = pow(max(c, float3(0.0, 0.0, 0.0)), float3(1.0 / 2.2, 1.0 / 2.2, 1.0 / 2.2));
+	return dot(d, float3(0.299, 0.587, 0.114));
+}
+
+float3 sceneA(float2 uv)
+{
+	if (has_a < 0.5)
+		return float3(0.0, 0.0, 0.0);
+	return tex_a.SampleLevel(lin_clamp, uv, 0.0).rgb;
+}
+
+float3 sceneB(float2 uv)
+{
+	if (has_b < 0.5)
+		return float3(0.0, 0.0, 0.0);
+	return tex_b.SampleLevel(lin_clamp, uv, 0.0).rgb;
+}
+
+/* A before the cut, B after */
+float3 sceneAt(float2 uv)
+{
+	if (t < cut)
+		return sceneA(uv);
+	return sceneB(uv);
+}
+
+float phaseIn()
+{
+	return saturate(t / max(cut, 0.001));
+}
+
+float phaseOut()
+{
+	return saturate((t - cut) / max(1.0 - cut, 0.001));
+}
+
+/* 0 -> 1 at the cut -> 0 */
+float coverage()
+{
+	if (t < cut)
+		return phaseIn();
+	return 1.0 - phaseOut();
+}
+
+float ease(float x)
+{
+	return x * x * (3.0 - 2.0 * x);
+}
+
+float4 finish(float3 c)
+{
+	return float4(max(c, float3(0.0, 0.0, 0.0)), 1.0);
+}
+
+/* ------------------------------------------------------------------ */
+/* MATRIX                                                              */
+/* c1 code colour, c2 background tint                                  */
+/* p1 glyph size (px at 1080p), p2 extra rain, p3 rain speed,          */
+/* p4 trail length, p5 glow, p6 picture in the code, p7 head           */
+/* brightness, p8 glyph flicker                                        */
+
+/* distance to a horizontal (dir 0) or vertical (dir 1) stroke */
+float strokeDist(float2 g, float2 a, float len, float dir)
+{
+	float2 d = g - a;
+	if (dir < 0.5) {
+		float x = clamp(d.x, 0.0, len);
+		return length(float2(d.x - x, d.y));
+	}
+	float y = clamp(d.y, 0.0, len);
+	return length(float2(d.x, d.y - y));
+}
+
+/* a character-like glyph made of strokes on a 3 x 5 lattice; "id"
+ * picks which one. f is the position inside the cell (0..1). */
+float glyph(float id, float2 f, float cellPx)
+{
+	float2 g = (f - float2(0.18, 0.12)) / float2(0.64, 0.76);
+	if (g.x < -0.15 || g.y < -0.15 || g.x > 1.15 || g.y > 1.15)
+		return 0.0;
+
+	/* half of them mirrored, like the film's flipped katakana */
+	if (hash12(float2(id, 3.3)) > 0.5)
+		g.x = 1.0 - g.x;
+
+	float d = 10.0;
+	/* horizontal strokes: 5 rows x 2 */
+	for (int r = 0; r < 5; r++) {
+		for (int c = 0; c < 2; c++) {
+			float fr = float(r);
+			float fc = float(c);
+			if (hash12(float2(id * 1.7 + fr * 3.1, fc * 5.3 + 1.0)) < 0.26)
+				d = min(d, strokeDist(g, float2(fc * 0.5, fr * 0.25), 0.5, 0.0));
+		}
+	}
+	/* vertical strokes: 3 columns x 4 */
+	for (int c2 = 0; c2 < 3; c2++) {
+		for (int r2 = 0; r2 < 4; r2++) {
+			float fr2 = float(r2);
+			float fc2 = float(c2);
+			float p = c2 == 1 ? 0.42 : 0.3;
+			if (hash12(float2(id * 2.3 + fc2 * 7.7, fr2 * 2.9 + 11.0)) < p)
+				d = min(d, strokeDist(g, float2(fc2 * 0.5, fr2 * 0.25), 0.25, 1.0));
+		}
+	}
+
+	float w = 0.085;
+	float aa = 1.2 / max(cellPx * 0.7, 1.0);
+	return 1.0 - smoothstep(w - aa, w + aa, d);
+}
+
+/* falling streams in one column: x = brightness, y = head */
+float2 streams(float col, float row, float rows, float speed, float trail, float salt)
+{
+	float bright = 0.0;
+	float headv = 0.0;
+	for (int k = 0; k < 3; k++) {
+		float fk = float(k);
+		float hs = hash12(float2(col, 17.0 + fk * 31.0 + salt));
+		float spd = rows * (0.45 + 0.8 * hs) * speed;
+		float loopLen = rows * (1.3 + 1.2 * hash12(float2(col, 2.0 + fk * 5.0 + salt)));
+		float off = hash12(float2(col, 5.0 + fk * 7.0 + salt)) * loopLen;
+		float headRow = glmod((time_s + 7.0) * spd + off, loopLen) - rows * 0.15;
+		float d = headRow - row;
+		float tr = max(rows * trail * (0.35 + 0.65 * hs), 1.5);
+		if (d >= 0.0) {
+			bright = max(bright, exp(-d / tr));
+			headv = max(headv, saturate(1.0 - d));
+		}
+	}
+	return float2(bright, headv);
+}
+
+float4 PSMatrix(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float size = max(u_p1, 6.0) * res.y / 1080.0;
+	float2 cellSize = float2(size * 0.68, size);
+	float2 cell = floor(px / cellSize);
+	float2 f = frac(px / cellSize);
+	float rows = ceil(res.y / cellSize.y);
+	float2 cellUv = (cell + 0.5) * cellSize / res;
+
+	float pin = phaseIn();
+	float pout = phaseOut();
+	float cover = coverage();
+
+	/* the code pours down each column, slightly out of step, and drains
+	 * away the same way after the cut */
+	float colDelay = hash12(float2(cell.x, 3.7 + seed));
+	float colSpeed = 0.8 + 0.4 * hash12(float2(cell.x, 8.1 + seed));
+	float frontIn = (ease(pin) * 1.5 * colSpeed - colDelay * 0.5) * (rows + 6.0) - 3.0;
+	float frontOut = (ease(pout) * 1.5 * colSpeed - colDelay * 0.5) * (rows + 6.0) - 3.0;
+
+	float wall;
+	float behind;
+	if (t < cut) {
+		wall = step(cell.y, frontIn);
+		behind = frontIn - cell.y;
+	} else {
+		wall = step(frontOut, cell.y);
+		behind = cell.y - frontOut;
+	}
+	if (cover > 0.999)
+		wall = 1.0;
+
+	/* the picture lives in the code: bright parts of the scene make
+	 * bright glyphs */
+	float swapMix = smoothstep(cut - 0.05, cut + 0.05, t);
+	float lum = lerp(lumaOf(sceneA(cellUv)), lumaOf(sceneB(cellUv)), swapMix);
+	float picB = pow(saturate(lum), 1.3) * 1.25;
+
+	/* rain inside the wall gives it structure */
+	float2 sw = streams(cell.x, cell.y, rows, u_p3 * 1.4, u_p4, seed);
+	float flick = hash12(float2(cell.x * 1.3 + floor(time_s * 6.0 * (0.3 + u_p8)), cell.y + seed));
+	float wallB = max(sw.x * lerp(1.0, 0.35 + 0.9 * picB, u_p6), lerp(0.10 + 0.1 * flick, picB * 0.85, u_p6));
+
+	/* glowing trail just behind the moving front, white head on it */
+	float trailRows = max(rows * u_p4 * 0.25, 1.5);
+	float edge = 0.0;
+	float frontHead = 0.0;
+	if (behind >= 0.0) {
+		edge = exp(-behind / trailRows);
+		frontHead = t < cut ? saturate(1.0 - behind) : 0.0;
+	}
+	if (cover > 0.999)
+		edge = 0.0;
+
+	/* loose rain over the visible picture, mostly around the cut */
+	float env = smoothstep(0.0, 0.35, t) * (1.0 - smoothstep(0.65, 1.0, t));
+	float colOn = step(hash12(float2(cell.x, 41.0 + seed)), u_p2);
+	float2 fr = streams(cell.x, cell.y, rows, u_p3, u_p4, seed + 19.0) * colOn * env;
+
+	/* glyphs keep changing while lit, fastest at the heads */
+	float lit = saturate(max(wallB * wall, max(edge, fr.x)));
+	float rate = u_p8 * (2.0 + 14.0 * lit);
+	float gid = floor(hash12(cell + seed * 0.37) * 4096.0 + time_s * rate * (0.4 + hash12(cell.yx + 2.0)));
+	float gm = glyph(gid, f, size);
+
+	float headAmt = saturate(max(max(sw.y * wall, frontHead), fr.y)) * u_p7;
+
+	float3 code = gen(u_c1);
+	float3 bg = gen(u_c2);
+	float3 hot = lerp(code, float3(1.0, 1.0, 1.0), 0.8);
+
+	/* soft haze around lit glyphs stands in for bloom */
+	float2 cf = (f - 0.5) * float2(0.68, 1.0);
+	float haze = exp(-dot(cf, cf) * 6.0);
+
+	float wallLit = max(wallB, edge);
+	float3 wallCol = bg * 0.18 + code * gm * wallLit * 1.2 + hot * gm * max(sw.y, frontHead) * u_p7 +
+			 code * haze * wallLit * u_p5 * 0.35;
+
+	/* the picture darkens and greens up as the code takes over */
+	float3 pic = sceneAt(uv);
+	float picL = lumaOf(pic);
+	pic = lerp(pic, bg * 0.6 + code * picL * 0.35, cover * 0.7) * (1.0 - cover * 0.55);
+
+	float3 rainCol = code * gm * fr.x + hot * gm * fr.y * u_p7 + code * haze * fr.x * u_p5 * 0.3;
+	float3 frontCol = (code * gm * edge + hot * gm * frontHead * u_p7) * (1.0 - wall);
+
+	float3 outc = lerp(pic + rainCol + frontCol, wallCol, wall);
+	return finish(outc);
+}
+
+/* ------------------------------------------------------------------ */
+/* GLITCH                                                              */
+/* c1 flash colour, c2 block colour                                    */
+/* p1 amount, p2 slice height px, p3 colour split px, p4 blocks,       */
+/* p5 flash                                                            */
+
+float4 PSGlitch(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float cover = coverage();
+	float env = cover * cover * u_p1;
+	float frameT = floor(time_s * 24.0) + seed * 17.0;
+
+	/* torn horizontal slices */
+	float sliceH = max(u_p2, 2.0) * (0.5 + hash12(float2(frameT, 1.0)));
+	float row = floor(px.y / sliceH);
+	float hr = hash12(float2(row, frameT));
+	float tear = step(1.0 - env * 0.85, hash12(float2(row, frameT + 3.0)));
+	float shift = (hr - 0.5) * 0.5 * env * tear;
+	float2 suv = float2(uv.x + shift, uv.y);
+
+	/* stutter: some slices already show the other scene */
+	bool useB = t >= cut;
+	float stutter = hash12(float2(row, frameT + 9.0));
+	if (t < cut && stutter < env * 0.25)
+		useB = true;
+	if (t >= cut && stutter < env * 0.25)
+		useB = false;
+
+	float split = u_p3 * env * (0.4 + hr) / res.x;
+	float3 c;
+	if (useB) {
+		c = float3(sceneB(suv + float2(split, 0.0)).r, sceneB(suv).g, sceneB(suv - float2(split, 0.0)).b);
+	} else {
+		c = float3(sceneA(suv + float2(split, 0.0)).r, sceneA(suv).g, sceneA(suv - float2(split, 0.0)).b);
+	}
+
+	/* corrupted blocks */
+	float2 blk = floor(px / float2(48.0, 24.0));
+	float hb = hash12(blk + frameT * 0.71);
+	if (hb < env * u_p4 * 0.35) {
+		float2 from = (blk + float2(hash12(blk + 5.0), hash12(blk + 6.0)) * 6.0 - 3.0) * float2(48.0, 24.0) / res;
+		float3 moved = useB ? sceneB(frac(from + frac(uv * res / float2(48.0, 24.0)) * float2(48.0, 24.0) / res))
+				    : sceneA(frac(from + frac(uv * res / float2(48.0, 24.0)) * float2(48.0, 24.0) / res));
+		float pick = hash12(blk + frameT * 1.3);
+		c = pick < 0.5 ? floor(moved * 4.0) / 4.0 : (pick < 0.75 ? gen(u_c2) : moved.gbr);
+	}
+
+	/* scanline crawl and noise */
+	c *= 1.0 - env * 0.25 * step(0.5, frac(px.y * 0.5));
+	c += (hash12(px + frameT) - 0.5) * env * 0.25;
+
+	/* flash right at the cut */
+	float flash = exp(-abs(t - cut) * 40.0) * u_p5;
+	c = lerp(c, gen(u_c1), saturate(flash));
+
+	return finish(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* SUNSET WIPE                                                         */
+/* c1..c4 palette stops                                                */
+/* p1 angle deg, p2 stripes, p3 edge glow, p4 edge softness,           */
+/* p5 stripe drift                                                     */
+
+float3 palette4(float x)
+{
+	float y = frac(x) * 4.0;
+	float3 a = gen(u_c1);
+	float3 b = gen(u_c2);
+	float3 c = gen(u_c3);
+	float3 d = gen(u_c4);
+	if (y < 1.0)
+		return lerp(a, b, ease(y));
+	if (y < 2.0)
+		return lerp(b, c, ease(y - 1.0));
+	if (y < 3.0)
+		return lerp(c, d, ease(y - 2.0));
+	return lerp(d, a, ease(y - 3.0));
+}
+
+float4 PSSunset(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float ang = u_p1 * 3.14159265 / 180.0;
+	float2 dir = float2(cos(ang), sin(ang));
+
+	/* position along the wipe, -1 .. 1 across the whole frame */
+	float2 c = px - res * 0.5;
+	float span = abs(dir.x) * res.x * 0.5 + abs(dir.y) * res.y * 0.5;
+	float s = dot(c, dir) / span;
+
+	float soft = max(u_p4, 0.001);
+	float edgeIn = -1.0 - soft + ease(phaseIn()) * (2.0 + 2.0 * soft);
+	float edgeOut = -1.0 - soft + ease(phaseOut()) * (2.0 + 2.0 * soft);
+
+	float inside;
+	float edgeDist;
+	if (t < cut) {
+		inside = 1.0 - smoothstep(edgeIn - soft, edgeIn, s);
+		edgeDist = abs(s - edgeIn);
+	} else {
+		inside = smoothstep(edgeOut, edgeOut + soft, s);
+		edgeDist = abs(s - edgeOut);
+	}
+	if (coverage() > 0.999)
+		inside = 1.0;
+
+	/* diagonal stripes of the palette, drifting */
+	float2 perp = float2(-dir.y, dir.x);
+	float along = dot(c, perp) / span;
+	float stripe = (s * 0.5 + along * 0.35) * max(u_p2, 0.25) + time_s * u_p5;
+	float3 band = palette4(stripe);
+	/* subtle bevel on each stripe */
+	float sf = frac(stripe * 4.0);
+	band *= 0.88 + 0.12 * smoothstep(0.0, 0.08, sf) * (1.0 - smoothstep(0.92, 1.0, sf));
+
+	/* hot leading edge: thin white line plus glow */
+	float edgePx = edgeDist * span;
+	float hotLine = exp(-edgePx / 1.5) * 0.9;
+	float glow = exp(-edgePx / (12.0 + 30.0 * u_p3)) * u_p3;
+	float3 hot = lerp(gen(u_c4), float3(1.0, 1.0, 1.0), 0.6);
+
+	float3 pic = sceneAt(uv);
+	/* the picture darkens a little ahead of the band */
+	pic *= 1.0 - 0.35 * exp(-edgePx / 60.0) * (1.0 - inside);
+
+	float3 col = lerp(pic, band, inside) + hot * (hotLine + glow) * (1.0 - step(0.999, coverage()));
+	return finish(col);
+}
+
+/* ------------------------------------------------------------------ */
+/* PIXEL STORM                                                         */
+/* c1 sparkle colour                                                   */
+/* p1 biggest block px, p2 colour levels, p3 sparkle                   */
+
+float4 PSPixel(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float cover = coverage();
+	float e = ease(cover);
+	float size = max(1.0, lerp(1.0, max(u_p1, 2.0), e * e));
+	float2 blk = floor(px / size);
+	float2 center = (blk + 0.5) * size / res;
+
+	/* blocks flip from A to B one by one around the cut */
+	float flipAt = cut + (hash12(blk + seed) - 0.5) * 0.14;
+	float3 c = t < flipAt ? sceneA(center) : sceneB(center);
+	if (size < 1.5)
+		c = sceneAt(uv);
+
+	float levels = lerp(64.0, max(u_p2, 2.0), e);
+	c = floor(c * levels + 0.5) / levels;
+
+	float frameT = floor(time_s * 20.0);
+	/* only real blocks sparkle, never single pixels */
+	float sp = step(hash12(blk + frameT + seed * 3.0), u_p3 * cover * 0.25) * smoothstep(3.0, 8.0, size);
+	c = lerp(c, gen(u_c1), sp * 0.85);
+
+	/* fine grid between big blocks */
+	float2 fb = frac(px / size);
+	float grid = step(fb.x, 1.0 / size) + step(fb.y, 1.0 / size);
+	c *= 1.0 - saturate(grid) * 0.35 * step(4.0, size);
+
+	return finish(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* BLINDS                                                              */
+/* c1 slat colour, c2 edge colour                                      */
+/* p1 slats, p2 vertical (0/1), p3 shine, p4 stagger                   */
+
+float4 PSBlinds(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float cover = coverage();
+	float a = u_p2 > 0.5 ? uv.x : uv.y;
+	float b = u_p2 > 0.5 ? uv.y : uv.x;
+	float n = max(u_p1, 2.0);
+	float idx = floor(a * n);
+	float f = frac(a * n);
+
+	/* each slat closes a little after the one before it */
+	float order = idx / n;
+	float closed = saturate(cover * (1.0 + u_p4) - u_p4 * (t < cut ? order : 1.0 - order));
+	closed = ease(closed);
+	float halfW = closed * 0.5;
+	float on = step(abs(f - 0.5), halfW + 0.0001);
+
+	/* a slat seen at an angle: shaded across, with a moving highlight */
+	float across = (f - 0.5) / max(halfW, 0.001);
+	float shade = 0.55 + 0.45 * cos(across * 1.4) * lerp(0.6, 1.0, closed);
+	float spec = pow(saturate(1.0 - abs(across + 0.35 - b * 0.4)), 18.0) * u_p3;
+	float3 slat = gen(u_c1) * shade + float3(1.0, 1.0, 1.0) * spec;
+	float rim = exp(-abs(abs(f - 0.5) - halfW) * n * 60.0) * closed;
+	slat = lerp(slat, gen(u_c2), rim * 0.6);
+
+	float3 pic = sceneAt(uv);
+	/* light leaking between nearly closed slats */
+	pic *= 1.0 - 0.5 * closed;
+
+	return finish(lerp(pic, slat, on));
+}
+
+/* ------------------------------------------------------------------ */
+/* CRT POWER                                                           */
+/* c1 beam colour                                                      */
+/* p1 flash, p2 black hold (share of the time), p3 glow                */
+
+float4 PSCrt(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float hold = saturate(u_p2) * 0.5;
+	float inEnd = max(cut - hold * cut, 0.001);
+	float outStart = min(cut + hold * (1.0 - cut), 0.999);
+
+	float k;
+	bool goingIn = t < cut;
+	if (goingIn)
+		k = saturate(t / inEnd);
+	else
+		k = 1.0 - saturate((t - outStart) / max(1.0 - outStart, 0.001));
+
+	/* k: 0 = full picture, 1 = gone. collapse to a line, then a dot */
+	float sy = max(0.003, 1.0 - ease(saturate(k / 0.6)));
+	float sx = max(0.003, 1.0 - ease(saturate((k - 0.6) / 0.4)) * 0.997);
+	float2 c = uv - 0.5;
+	float2 src = c / float2(sx, sy) + 0.5;
+	float inside = step(abs(c.x), sx * 0.5) * step(abs(c.y), sy * 0.5);
+
+	float3 pic = goingIn ? sceneA(src) : sceneB(src);
+	float gain = min(1.0 / sqrt(sx * sy), 6.0);
+	float3 col = pic * inside * lerp(1.0, gain, 0.35);
+
+	/* the beam: a glowing line, then a glowing dot */
+	float2 pxd = c * res;
+	float lineGlow = exp(-abs(pxd.y) / (1.5 + 30.0 * sy)) * step(abs(c.x), sx * 0.5 + 0.02) * step(0.02, k);
+	float dotGlow = exp(-length(pxd) / (4.0 + 60.0 * sx)) * step(0.6, k);
+	float alive = 1.0 - step(0.999, k);
+	float3 beam = lerp(gen(u_c1), float3(1.0, 1.0, 1.0), 0.5);
+	col += beam * (lineGlow * 0.9 + dotGlow) * u_p3 * alive;
+
+	float flash = exp(-abs(t - cut) * 30.0) * u_p1 * 0.6;
+	col += beam * flash * exp(-length(c) * 2.5);
+	return finish(col);
+}
+
+/* ------------------------------------------------------------------ */
+/* VHS REWIND                                                          */
+/* c1 OSD colour                                                       */
+/* p1 noise, p2 roll speed, p3 colour bleed, p4 show OSD (0/1)         */
+
+float tri(float2 p, float2 a, float2 b, float2 c)
+{
+	float2 e0 = b - a;
+	float2 e1 = c - b;
+	float2 e2 = a - c;
+	float d0 = (p.x - a.x) * e0.y - (p.y - a.y) * e0.x;
+	float d1 = (p.x - b.x) * e1.y - (p.y - b.y) * e1.x;
+	float d2 = (p.x - c.x) * e2.y - (p.y - c.y) * e2.x;
+	return step(0.0, d0) * step(0.0, d1) * step(0.0, d2) + step(d0, 0.0) * step(d1, 0.0) * step(d2, 0.0);
+}
+
+float4 PSVhs(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float cover = coverage();
+	float env = ease(cover);
+	float frameT = floor(time_s * 30.0) + seed;
+
+	/* the picture rolls and wobbles as the tape speeds up */
+	float roll = time_s * u_p2 * env * env * 2.5;
+	float2 suv = float2(uv.x, frac(uv.y + roll));
+	float lineN = floor(px.y / 2.0);
+	suv.x += (hash12(float2(lineN, frameT)) - 0.5) * 0.02 * env + sin(uv.y * 40.0 + time_s * 25.0) * 0.004 * env;
+
+	/* tracking bands */
+	float bandY = frac(time_s * 0.7 + seed * 0.1);
+	float band = exp(-abs(uv.y - bandY) * 30.0) * env;
+	suv.x += band * 0.05 * (hash12(float2(lineN, frameT + 2.0)) - 0.5);
+
+	float bleed = u_p3 * env / res.x * 6.0;
+	float3 c;
+	if (t < cut)
+		c = float3(sceneA(suv + float2(bleed, 0.0)).r, sceneA(suv).g, sceneA(suv - float2(bleed, 0.0)).b);
+	else
+		c = float3(sceneB(suv + float2(bleed, 0.0)).r, sceneB(suv).g, sceneB(suv - float2(bleed, 0.0)).b);
+
+	/* snow, heaviest at the cut */
+	float snow = hash12(floor(px / 2.0) + frameT * 1.7);
+	float amt = saturate(env * env * env * u_p1 + band * 0.6 * u_p1);
+	c = lerp(c, float3(snow, snow, snow) * 0.9, amt);
+	c *= 1.0 - 0.2 * env * step(0.5, frac(px.y * 0.5));
+
+	/* on-screen display: rewind arrows on the way in, play on the way out */
+	if (u_p4 > 0.5 && cover > 0.05 && glmod(floor(time_s * 3.0), 2.0) < 1.0) {
+		float s = res.y / 1080.0;
+		float2 o = float2(80.0, 70.0) * s;
+		float2 p = px - o;
+		float h = 26.0 * s;
+		float icon;
+		if (t < cut)
+			icon = max(tri(p, float2(0.0, h), float2(36.0 * s, 0.0), float2(36.0 * s, 2.0 * h)),
+				   tri(p, float2(36.0 * s, h), float2(72.0 * s, 0.0), float2(72.0 * s, 2.0 * h)));
+		else
+			icon = tri(p, float2(0.0, 0.0), float2(0.0, 2.0 * h), float2(48.0 * s, h));
+		float shadow = 0.0;
+		if (t < cut)
+			shadow = max(tri(p - 3.0 * s, float2(0.0, h), float2(36.0 * s, 0.0), float2(36.0 * s, 2.0 * h)),
+				     tri(p - 3.0 * s, float2(36.0 * s, h), float2(72.0 * s, 0.0), float2(72.0 * s, 2.0 * h)));
+		else
+			shadow = tri(p - 3.0 * s, float2(0.0, 0.0), float2(0.0, 2.0 * h), float2(48.0 * s, h));
+		c = lerp(c, float3(0.0, 0.0, 0.0), shadow * 0.7);
+		c = lerp(c, gen(u_c1), icon);
+	}
+
+	return finish(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* IRIS                                                                */
+/* c1 ring colour, c2 fill colour                                      */
+/* p1 centre x, p2 centre y, p3 ring width px, p4 shape (0 circle,     */
+/* 1 diamond, 2 star)                                                  */
+
+float4 PSIris(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float2 ctr = float2(u_p1, u_p2) * res;
+	float2 d = px - ctr;
+
+	float dist;
+	if (u_p4 > 1.5) {
+		float ang = atan2(d.y, d.x);
+		float r = length(d);
+		dist = r * (0.72 + 0.28 * cos(ang * 5.0 + 1.5708));
+	} else if (u_p4 > 0.5) {
+		dist = (abs(d.x) + abs(d.y)) * 0.7071;
+	} else {
+		dist = length(d);
+	}
+
+	/* farC enough to clear the farthest corner */
+	float2 farC = max(ctr, res - ctr);
+	float maxR = length(farC) * (u_p4 > 1.5 ? 1.45 : 1.05);
+	float radius;
+	if (t < cut)
+		radius = maxR * (1.0 - ease(phaseIn()));
+	else
+		radius = maxR * ease(phaseOut());
+
+	float inside = 1.0 - smoothstep(radius - 1.0, radius + 1.0, dist);
+	float3 pic = sceneAt(uv);
+	float3 col = lerp(gen(u_c2), pic, inside);
+
+	float w = max(u_p3, 1.0);
+	float ring = exp(-abs(dist - radius) / w) * step(0.5, radius) * (1.0 - step(0.999, coverage()));
+	col += gen(u_c1) * ring;
+	return finish(col);
+}
+
+/* ------------------------------------------------------------------ */
+/* CHANNEL CHANGE                                                      */
+/* c1 on-screen display colour                                         */
+/* p1 static, p2 vertical roll, p3 channel number, p4 show channel     */
+/* number (0/1), p5 jolt                                               */
+
+float segDist(float2 p, float2 a, float2 b)
+{
+	float2 pa = p - a;
+	float2 ba = b - a;
+	float h = saturate(dot(pa, ba) / dot(ba, ba));
+	return length(pa - ba * h);
+}
+
+float bitOf(float mask, float k)
+{
+	return glmod(floor(mask / pow(2.0, k)), 2.0);
+}
+
+/* seven-segment character in a 1 x 2 box; mask bits a..g = 1..64 */
+float sevenSeg(float2 p, float mask)
+{
+	float d = 10.0;
+	if (bitOf(mask, 0.0) > 0.5)
+		d = min(d, segDist(p, float2(0.12, 0.0), float2(0.88, 0.0)));
+	if (bitOf(mask, 1.0) > 0.5)
+		d = min(d, segDist(p, float2(1.0, 0.12), float2(1.0, 0.88)));
+	if (bitOf(mask, 2.0) > 0.5)
+		d = min(d, segDist(p, float2(1.0, 1.12), float2(1.0, 1.88)));
+	if (bitOf(mask, 3.0) > 0.5)
+		d = min(d, segDist(p, float2(0.12, 2.0), float2(0.88, 2.0)));
+	if (bitOf(mask, 4.0) > 0.5)
+		d = min(d, segDist(p, float2(0.0, 1.12), float2(0.0, 1.88)));
+	if (bitOf(mask, 5.0) > 0.5)
+		d = min(d, segDist(p, float2(0.0, 0.12), float2(0.0, 0.88)));
+	if (bitOf(mask, 6.0) > 0.5)
+		d = min(d, segDist(p, float2(0.12, 1.0), float2(0.88, 1.0)));
+	return d;
+}
+
+float digitMask(float n)
+{
+	if (n < 0.5)
+		return 63.0;
+	if (n < 1.5)
+		return 6.0;
+	if (n < 2.5)
+		return 91.0;
+	if (n < 3.5)
+		return 79.0;
+	if (n < 4.5)
+		return 102.0;
+	if (n < 5.5)
+		return 109.0;
+	if (n < 6.5)
+		return 125.0;
+	if (n < 7.5)
+		return 7.0;
+	if (n < 8.5)
+		return 127.0;
+	return 111.0;
+}
+
+/* "CH 12" in the top right corner; returns coverage, glow in .y */
+float2 channelOsd(float2 px, float number)
+{
+	float unit = 26.0 * res.y / 1080.0;
+	float advance = 1.75;
+	float width = advance * 4.0 + 1.0;
+	float2 origin = float2(res.x - 70.0 * res.y / 1080.0 - width * unit, 60.0 * res.y / 1080.0);
+	float2 p = (px - origin) / unit;
+
+	float n = clamp(floor(number + 0.5), 0.0, 99.0);
+	float d = 10.0;
+	d = min(d, sevenSeg(p, 57.0));                               /* C */
+	d = min(d, sevenSeg(p - float2(advance, 0.0), 118.0));       /* H */
+	d = min(d, sevenSeg(p - float2(advance * 3.0, 0.0), digitMask(floor(n / 10.0))));
+	d = min(d, sevenSeg(p - float2(advance * 4.0, 0.0), digitMask(glmod(n, 10.0))));
+
+	float w = 0.16;
+	float aa = 1.0 / unit;
+	return float2(1.0 - smoothstep(w - aa, w + aa, d), exp(-max(d - w, 0.0) * 6.0));
+}
+
+float4 PSChannel(VertData v_in) : TARGET
+{
+	float2 uv = v_in.uv;
+	float2 px = uv * res;
+	float frameT = floor(time_s * 30.0) + seed * 13.0;
+	bool goingOut = t < cut;
+	float k = goingOut ? phaseIn() : phaseOut();
+
+	/* losing vertical hold on the way out, rolling down and locking on
+	 * the way in */
+	float roll;
+	float snowAmt;
+	if (goingOut) {
+		roll = pow(ease(k), 2.0) * u_p2 * 1.6;
+		snowAmt = smoothstep(0.3, 1.0, k) * u_p1;
+	} else {
+		roll = pow(1.0 - ease(k), 2.0) * u_p2 * 1.2;
+		snowAmt = (1.0 - smoothstep(0.0, 0.45, k)) * u_p1;
+	}
+
+	/* the jolt of the tuner switching */
+	float jolt = goingOut ? exp(-abs(k - 0.12) * 40.0) : exp(-abs(k - 0.04) * 40.0);
+	jolt *= u_p5;
+	float lineN = floor(px.y / 2.0);
+	float tear = (hash12(float2(lineN, frameT)) - 0.5) * 0.06 * snowAmt;
+	float shake = (hash12(float2(frameT, 7.0)) - 0.5) * 0.04 * jolt;
+
+	float yy = uv.y + roll + jolt * 0.06 * sign(hash12(float2(frameT, 3.0)) - 0.5);
+	float2 suv = float2(uv.x + tear + shake, frac(yy));
+
+	float3 pic = goingOut ? sceneA(suv) : sceneB(suv);
+
+	/* black sync bar where the rolling picture wraps */
+	float seam = frac(yy);
+	float bar = (1.0 - smoothstep(0.0, 0.05, seam)) * step(0.001, roll);
+	bar = max(bar, smoothstep(0.95, 1.0, seam) * step(0.001, roll) * 0.6);
+	pic *= 1.0 - bar;
+
+	/* flicker and lost colour while the signal is weak */
+	float weak = saturate(snowAmt + jolt * 0.5);
+	float l = dot(pic, float3(0.299, 0.587, 0.114));
+	pic = lerp(pic, float3(l, l, l), weak * 0.5);
+	pic *= 1.0 - 0.3 * weak * hash12(float2(frameT, 11.0));
+
+	/* snow with brighter streaks; full snow right at the cut */
+	float snow = hash12(floor(px / 2.0) + frameT * 1.37);
+	float streak = hash12(float2(lineN * 0.5, frameT + 5.0));
+	snow = snow * 0.85 + step(0.92, streak) * 0.35;
+	float atCut = exp(-abs(t - cut) * 18.0);
+	float amt = saturate(max(snowAmt, atCut * u_p1));
+	float3 col = lerp(pic, gen(float3(snow, snow, snow)), amt);
+
+	/* rolling dark bands through the static */
+	float band = 0.5 + 0.5 * sin(uv.y * 6.0 + time_s * 9.0);
+	col *= 1.0 - amt * 0.35 * band;
+	col *= 1.0 - 0.15 * weak * step(0.5, frac(px.y * 0.5));
+
+	/* the new channel's number, like an old set's on-screen display */
+	if (u_p4 > 0.5 && !goingOut) {
+		float show = 1.0 - smoothstep(0.88, 1.0, t);
+		float2 sh = channelOsd(px - float2(3.0, 3.0) * res.y / 1080.0, u_p3);
+		float2 osd = channelOsd(px, u_p3);
+		float3 oc = gen(u_c1);
+		col = lerp(col, float3(0.0, 0.0, 0.0), sh.x * 0.7 * show);
+		col += oc * osd.y * 0.25 * show;
+		col = lerp(col, lerp(oc, float3(1.0, 1.0, 1.0), 0.25), osd.x * show);
+	}
+
+	return finish(col);
+}
+
+/* ------------------------------------------------------------------ */
+
+technique Matrix
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMatrix(v_in);
+	}
+}
+
+technique Glitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGlitch(v_in);
+	}
+}
+
+technique Sunset
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSSunset(v_in);
+	}
+}
+
+technique Pixel
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPixel(v_in);
+	}
+}
+
+technique Blinds
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSBlinds(v_in);
+	}
+}
+
+technique Crt
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSCrt(v_in);
+	}
+}
+
+technique Vhs
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSVhs(v_in);
+	}
+}
+
+technique Iris
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSIris(v_in);
+	}
+}
+
+technique Channel
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSChannel(v_in);
+	}
+}

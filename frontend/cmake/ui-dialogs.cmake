@@ -45,4 +45,6 @@ target_sources(
     dialogs/OBSWhatsNew.hpp
     dialogs/SpazzLiveControls.cpp
     dialogs/SpazzLiveControls.hpp
+    dialogs/SpazzStingerStudio.cpp
+    dialogs/SpazzStingerStudio.hpp
 )

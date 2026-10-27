@@ -27,9 +27,10 @@ jobs:
           # surface any error as an annotation so it's visible without logs
           report() { while IFS= read -r line; do echo "$line"; echo "::error::$line"; done; }
           .github/spazzbs/fxcheck/build.sh ./fxparse 2>&1 | report; test -x ./fxparse
-          mkdir -p hlsl/spazz hlsl/crt hlsl/control
+          mkdir -p hlsl/spazz hlsl/crt hlsl/stinger hlsl/control
           ./fxparse plugins/spazz-visualizer/data/spazz-visualizer.effect hlsl/spazz 2> >(report)
           ./fxparse plugins/spazz-crt/data/spazz-crt.effect hlsl/crt 2> >(report)
+          ./fxparse plugins/spazz-stinger/data/spazz-stinger.effect hlsl/stinger 2> >(report)
           ./fxparse libobs/data/default.effect hlsl/control 2> >(report)
 
       - name: Upload HLSL 📡
@@ -68,7 +69,7 @@ jobs:
           Write-Host "Using $($Fxc.FullName)"
           $Failed = 0
           $Files = Get-ChildItem -Path "${{ github.workspace }}/spazz_hlsl" -Recurse -Filter *.hlsl
-          if ( $Files.Count -lt 22 ) { throw "Expected HLSL for the visualizer, the CRT and the control, got $($Files.Count)" }
+          if ( $Files.Count -lt 40 ) { throw "Expected HLSL for the visualizer, CRT, stinger and control, got $($Files.Count)" }
           foreach ( $File in $Files ) {
             $Target = if ( $File.Name -like '*_vs.hlsl' ) { 'vs_4_0' } else { 'ps_4_0' }
             & $Fxc.FullName /nologo /T $Target /E main /O3 /Fo NUL $File.FullName

@@ -792,6 +792,10 @@ private:
 
 public:
 	bool Active() const;
+
+	/* SPAZZbs: add a transition with the given settings straight into the
+	 * transition list (no name prompt), for Stinger Studio */
+	OBSSource SpazzAddTransition(const char *id, const std::string &name, obs_data_t *settings);
 	void ResetOutputs();
 
 	inline void EnableOutputs(bool enable)

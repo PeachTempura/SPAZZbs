@@ -460,6 +460,32 @@ OBSSource OBSBasic::GetCurrentTransition()
 	return transition->second;
 }
 
+OBSSource OBSBasic::SpazzAddTransition(const char *id, const std::string &name, obs_data_t *settings)
+{
+	if (name.empty() || FindTransition(name.c_str()))
+		return nullptr;
+
+	obs_source_t *source = obs_source_create_private(id, name.c_str(), settings);
+	if (!source)
+		return nullptr;
+	InitTransition(source);
+
+	std::string uuid = obs_source_get_uuid(source);
+	transitions.insert({uuid, source});
+	transitionNameToUuids.insert({name, uuid});
+	transitionUuids.push_back(uuid);
+
+	emit TransitionAdded(QString::fromStdString(name), QString::fromStdString(uuid));
+	OnEvent(OBS_FRONTEND_EVENT_TRANSITION_LIST_CHANGED);
+
+	ClearQuickTransitionWidgets();
+	RefreshQuickTransitions();
+
+	OBSSource result = source;
+	obs_source_release(source);
+	return result;
+}
+
 void OBSBasic::AddTransition(const char *id)
 {
 	std::string name;
