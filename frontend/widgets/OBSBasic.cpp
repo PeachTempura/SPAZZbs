@@ -35,6 +35,7 @@
 #include <utility/SpazzMusicPlayer.hpp>
 #include <utility/SpazzUpdater.hpp>
 #include <dialogs/SpazzStingerStudio.hpp>
+#include <dialogs/SpazzSponsorCenter.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -1173,6 +1174,11 @@ void OBSBasic::OBSInit()
 			ui->menuTools->insertSeparator(tools.first());
 		}
 		connect(studio, &QAction::triggered, this, [this]() { SpazzStingerStudio::Open(this); });
+
+		/* Tools > SPONSORCENTER... */
+		QAction *sponsors = new QAction(QTStr("Sponsorcenter.Menu"), this);
+		ui->menuTools->insertAction(studio, sponsors);
+		connect(sponsors, &QAction::triggered, this, [this]() { SpazzSponsorCenter::Open(this); });
 	}
 
 	/* SPAZZbs: Help > Update SPAZZbs..., plus a quiet check on launch */

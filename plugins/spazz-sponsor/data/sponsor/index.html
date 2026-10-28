@@ -1,0 +1,625 @@
+<!doctype html>
+<!--
+  SPONSORCENTER: the sponsor animator that the SPAZZ Sponsor source shows.
+
+  The source loads this page in a hidden browser with ?cfg=<settings file>,
+  and then pushes live changes as events:
+    spazzSponsorConfig  (detail = settings)   restyle without reloading
+    spazzSponsorPlay                          play now (manual / on-show)
+    spazzSponsorHide                          take it off screen now
+  obs-browser also sends obsSourceActiveChanged when the scene goes live.
+
+  ?test=1 stops the clock so a test can render any moment with __render(ms).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+* { box-sizing: border-box; }
+#stage { position: absolute; inset: 0; }
+#pos { position: absolute; }
+#card { position: relative; display: flex; align-items: center; transform-origin: 50% 50%; will-change: transform, opacity; }
+.media { position: relative; flex: none; overflow: hidden; }
+.media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; will-change: transform, opacity; }
+.media.cover img { object-fit: cover; }
+.body { position: relative; display: flex; flex-direction: column; justify-content: center; min-width: 0; }
+.head { white-space: nowrap; line-height: 1.1; }
+.sub { white-space: nowrap; line-height: 1.2; opacity: .88; }
+.head span, .sub span { display: inline-block; white-space: pre; will-change: transform, opacity; }
+.badge { flex: none; white-space: nowrap; font-weight: 800; letter-spacing: .04em; }
+.caret { display: inline-block; width: .08em; height: 1em; margin-left: .06em; vertical-align: -.12em; background: currentColor; }
+.shine { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: inherit; }
+.shine::before { content: ""; position: absolute; top: -50%; bottom: -50%; width: 35%; left: var(--shine, -60%);
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.55), transparent); transform: skewX(-20deg); }
+
+/* ---------- styles. Sizes are rem: 1rem = 16px at 1080p x size ---------- */
+
+/* glass card */
+.st-glass #card { gap: 1.1rem; padding: .9rem 1.6rem .9rem .9rem; border-radius: 1.4rem;
+  background: linear-gradient(135deg, rgba(var(--bg),calc(var(--bga) * .95)), rgba(var(--bg),calc(var(--bga) * .7)));
+  border: .09rem solid rgba(255,255,255,.22);
+  box-shadow: 0 .6rem 2.4rem rgba(0,0,0,.45), inset 0 .08rem 0 rgba(255,255,255,.25), 0 0 1.6rem rgba(var(--accent),.35); }
+.st-glass .media { width: 6.2rem; height: 6.2rem; border-radius: 1rem; background: rgba(255,255,255,.08); }
+.st-glass .head { font-size: 2.3rem; font-weight: 800; color: rgb(var(--text)); }
+.st-glass .sub { font-size: 1.35rem; color: rgb(var(--text)); }
+.st-glass .badge { margin-left: .4rem; padding: .35rem .8rem; border-radius: .7rem; font-size: 1.2rem;
+  background: rgb(var(--accent)); color: #fff; box-shadow: 0 0 1rem rgba(var(--accent),.6); }
+
+/* broadcast lower third */
+.st-lower #card { gap: 0; align-items: stretch; }
+.st-lower .media { width: 7.2rem; height: 7.2rem; background: rgb(var(--accent)); padding: .7rem; }
+.st-lower .body { padding: .6rem 2.2rem .7rem 1.4rem; background: rgba(var(--bg),var(--bga));
+  border-bottom: .3rem solid rgb(var(--accent2)); }
+.st-lower .head { font-size: 2.4rem; font-weight: 800; color: rgb(var(--text)); text-transform: uppercase; letter-spacing: .02em; }
+.st-lower .sub { font-size: 1.35rem; color: rgb(var(--accent2)); font-weight: 600; }
+.st-lower .badge { align-self: flex-end; margin-left: -.2rem; padding: .45rem .9rem; font-size: 1.2rem; background: rgb(var(--accent2)); color: rgb(var(--bg)); }
+
+/* neon sign */
+.st-neon #card { gap: 1.2rem; padding: 1rem 1.8rem 1rem 1rem; border-radius: 1.2rem; background: rgba(var(--bg),calc(var(--bga) * .6));
+  border: .18rem solid rgb(var(--accent));
+  box-shadow: 0 0 .6rem rgb(var(--accent)), 0 0 2rem rgba(var(--accent),.7), inset 0 0 1.2rem rgba(var(--accent),.5); }
+.st-neon .media { width: 6rem; height: 6rem; border-radius: .8rem; filter: drop-shadow(0 0 .5rem rgba(var(--accent2),.9)); }
+.st-neon .head { font-size: 2.4rem; font-weight: 700; color: #fff;
+  text-shadow: 0 0 .25rem #fff, 0 0 .8rem rgb(var(--accent)), 0 0 1.8rem rgb(var(--accent)), 0 0 3rem rgb(var(--accent)); }
+.st-neon .sub { font-size: 1.35rem; color: rgb(var(--accent2)); text-shadow: 0 0 .6rem rgb(var(--accent2)); }
+.st-neon .badge { padding: .3rem .8rem; border-radius: .6rem; font-size: 1.2rem; color: rgb(var(--accent2)); border: .14rem solid rgb(var(--accent2));
+  box-shadow: 0 0 .8rem rgb(var(--accent2)), inset 0 0 .6rem rgba(var(--accent2),.6); text-shadow: 0 0 .6rem rgb(var(--accent2)); }
+
+/* sunset ribbon */
+.st-ribbon #card { gap: 1rem; padding: .8rem 3.2rem .8rem 1.6rem;
+  background: linear-gradient(100deg, rgb(var(--accent)), rgb(var(--accent2)));
+  clip-path: polygon(0 0, 100% 0, calc(100% - 1.6rem) 50%, 100% 100%, 0 100%, 1.2rem 50%);
+  filter: drop-shadow(0 .4rem 1rem rgba(0,0,0,.4)); }
+.st-ribbon .media { width: 5.4rem; height: 5.4rem; border-radius: 50%; background: rgba(255,255,255,.92); padding: .5rem; }
+.st-ribbon .head { font-size: 2.3rem; font-weight: 900; font-style: italic; color: rgb(var(--text)); text-shadow: 0 .15rem 0 rgba(0,0,0,.25); }
+.st-ribbon .sub { font-size: 1.3rem; font-weight: 700; color: rgb(var(--text)); }
+.st-ribbon .badge { padding: .35rem .9rem; border-radius: 2rem; font-size: 1.15rem; background: rgba(0,0,0,.35); color: #fff; }
+
+/* news ticker: full width along the bottom or top */
+.st-ticker #pos { left: 0 !important; right: 0 !important; transform: none !important; }
+.st-ticker #card { width: 100%; height: 4.6rem; gap: 0; align-items: stretch; background: rgba(var(--bg),var(--bga));
+  border-top: .22rem solid rgb(var(--accent)); box-shadow: 0 -.3rem 1.2rem rgba(0,0,0,.35); }
+.st-ticker .media { width: 9rem; height: auto; background: rgb(var(--accent)); padding: .45rem 1rem; }
+.st-ticker .body { flex: 1; overflow: hidden; justify-content: center; }
+.st-ticker .track { white-space: nowrap; font-size: 2rem; font-weight: 700; color: rgb(var(--text)); will-change: transform; }
+.st-ticker .track .sep { color: rgb(var(--accent)); padding: 0 1.4rem; }
+.st-ticker .track .tsub { color: rgb(var(--accent2)); font-weight: 600; }
+.st-ticker .badge { display: flex; align-items: center; padding: 0 1.4rem; font-size: 1.5rem; background: rgb(var(--accent2)); color: rgb(var(--bg)); }
+
+/* sticker */
+.st-sticker #card { gap: 1rem; padding: 1rem 1.8rem 1rem 1rem; border-radius: 2rem; background: #fff;
+  border: .35rem solid #fff; outline: .22rem solid rgba(0,0,0,.12); rotate: -3deg;
+  box-shadow: 0 .5rem 0 rgba(0,0,0,.18), 0 1.2rem 2rem rgba(0,0,0,.35); }
+.st-sticker .media { width: 6rem; height: 6rem; border-radius: 1.4rem; }
+.st-sticker .head { font-size: 2.5rem; font-weight: 900; color: rgb(var(--accent));
+  -webkit-text-stroke: .05rem rgba(0,0,0,.15); }
+.st-sticker .sub { font-size: 1.4rem; font-weight: 700; color: #333; }
+.st-sticker .badge { padding: .35rem .9rem; border-radius: 1rem; font-size: 1.2rem; background: rgb(var(--accent2)); color: #fff; rotate: 4deg; }
+
+/* 2001 window */
+.st-y2k #card { flex-direction: column; align-items: stretch; gap: 0; border-radius: .6rem .6rem .2rem .2rem; overflow: hidden;
+  border: .12rem solid #0b0712; box-shadow: .3rem .4rem 0 rgba(0,0,0,.35); background: #d8d4de; }
+.st-y2k .titlebar { display: flex; align-items: center; gap: .5rem; height: 2.1rem; padding: 0 .5rem 0 .8rem;
+  background: linear-gradient(90deg, rgb(var(--accent)), rgb(var(--accent2))); color: #fff; font-weight: 700; font-size: 1.1rem;
+  border-bottom: .1rem solid #0b0712; text-shadow: 0 .08rem 0 rgba(0,0,0,.4); }
+.st-y2k .titlebar .tt { flex: 1; }
+.st-y2k .titlebar i { width: 1.4rem; height: 1.4rem; border-radius: .25rem; background: rgba(255,255,255,.25); border: .08rem solid rgba(255,255,255,.6);
+  display: inline-flex; align-items: center; justify-content: center; font-style: normal; font-size: .9rem; line-height: 1; }
+.st-y2k .row { display: flex; align-items: center; gap: 1rem; padding: .9rem 1.6rem .9rem .9rem;
+  background: linear-gradient(#f1eef5, #c9c3d2); border-top: .1rem solid #fff; }
+.st-y2k .media { width: 5.6rem; height: 5.6rem; border: .12rem inset #b7b0c2; background: #fff; }
+.st-y2k .head { font-size: 2.1rem; font-weight: 800; color: #1e1530; }
+.st-y2k .sub { font-size: 1.25rem; color: #4a3f5f; }
+.st-y2k .badge { padding: .3rem .8rem; font-size: 1.1rem; color: #1e1530; background: linear-gradient(#fff, #d8d2e0);
+  border: .12rem outset #e9e4f0; border-radius: .3rem; }
+
+/* corner bug */
+.st-bug #card { gap: .7rem; padding: .45rem 1.1rem .45rem .45rem; border-radius: 3rem; background: rgba(var(--bg),calc(var(--bga) * .85)); }
+.st-bug .media { width: 3.6rem; height: 3.6rem; border-radius: 50%; background: #fff; }
+.st-bug .head { font-size: 1.3rem; font-weight: 700; color: rgb(var(--text)); }
+.st-bug .sub { font-size: .95rem; color: rgb(var(--text)); }
+.st-bug .badge { padding: .2rem .55rem; border-radius: 1rem; font-size: .85rem; background: rgb(var(--accent)); color: #fff; }
+
+/* spotlight */
+.st-spot #card { flex-direction: column; gap: .8rem; padding: 1.6rem 2.6rem 1.6rem; border-radius: 1.6rem;
+  background: rgba(var(--bg),var(--bga)); box-shadow: 0 1rem 3rem rgba(0,0,0,.55); isolation: isolate; }
+.st-spot #card::before { content: ""; position: absolute; inset: -.2rem; border-radius: 1.75rem; z-index: -1;
+  background: conic-gradient(from var(--spin, 0deg), rgb(var(--accent)), rgb(var(--accent2)), rgb(var(--accent))); }
+.st-spot #card::after { content: ""; position: absolute; inset: .15rem; border-radius: 1.5rem; z-index: -1; background: rgba(var(--bg),1); }
+.st-spot .media { width: 9rem; height: 9rem; border-radius: 1.2rem; }
+.st-spot .body { align-items: center; text-align: center; }
+.st-spot .head { font-size: 2.8rem; font-weight: 900; color: rgb(var(--text)); }
+.st-spot .sub { font-size: 1.5rem; color: rgb(var(--accent2)); }
+.st-spot .badge { padding: .4rem 1.1rem; border-radius: 1rem; font-size: 1.3rem; background: rgb(var(--accent)); color: #fff; }
+
+/* minimal */
+.st-minimal #card { gap: 1rem; }
+.st-minimal .media { width: 5rem; height: 5rem; filter: drop-shadow(0 .2rem .5rem rgba(0,0,0,.6)); }
+.st-minimal .head { font-size: 2.4rem; font-weight: 800; color: rgb(var(--text)); text-shadow: 0 .15rem .6rem rgba(0,0,0,.8); }
+.st-minimal .sub { font-size: 1.35rem; color: rgb(var(--text)); text-shadow: 0 .1rem .5rem rgba(0,0,0,.8); }
+.st-minimal .badge { padding: .3rem .8rem; border-radius: .5rem; font-size: 1.15rem; background: rgb(var(--accent)); color: #fff; }
+
+/* image shapes the user can force */
+.shape-square .media { border-radius: 0 !important; }
+.shape-rounded .media { border-radius: 1rem !important; }
+.shape-circle .media { border-radius: 50% !important; }
+.upper .head, .upper .sub, .upper .track { text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="pos"><div id="card"></div></div></div>
+<script>
+'use strict';
+
+const DEFAULTS = {
+  style: 'glass', enter: 'slide', exit: 'slide', textAnim: 'rise', imageAnim: 'crossfade', idle: 'float',
+  anchor: 'bl', marginX: 60, marginY: 60, size: 1,
+  accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#140f22', bgOpacity: 0.82,
+  font: '', upper: false, imageShape: 'style', imageFit: 'contain',
+  messages: [{ head: 'Your sponsor here', sub: 'Thanks for supporting the stream!' }], badge: '',
+  windowTitle: 'Sponsor.exe', images: [],
+  mode: 'loop', showSec: 12, gapSec: 45, enterMs: 700, exitMs: 600, imageSec: 4, messageSec: 6,
+  loops: 0, delaySec: 0,
+};
+
+const STYLE_FONTS = {
+  glass: "'Segoe UI', 'Helvetica Neue', Arial, sans-serif", lower: "'Bahnschrift', 'Segoe UI', Arial, sans-serif",
+  neon: "'Trebuchet MS', 'Segoe UI', sans-serif", ribbon: "'Segoe UI Black', 'Arial Black', sans-serif",
+  ticker: "'Bahnschrift', 'Segoe UI', Arial, sans-serif", sticker: "'Comic Sans MS', 'Chalkboard SE', 'Segoe UI', sans-serif",
+  y2k: "Tahoma, Verdana, sans-serif", bug: "'Segoe UI', Arial, sans-serif", spot: "'Segoe UI', Arial, sans-serif",
+  minimal: "'Segoe UI', Arial, sans-serif",
+};
+
+const TEST = new URLSearchParams(location.search).get('test') === '1';
+let cfg = Object.assign({}, DEFAULTS);
+let epoch = 0;          /* when the current loop started (ms) */
+let triggerAt = -1;     /* manual / on-show: when "play" happened */
+let hideAt = -1;        /* "hide now": when it started leaving */
+let liveNow = 0;
+let built = null;       /* DOM handles for the current config */
+let msgShown = -1, imgShown = -1, imgPrev = -1, imgSwapAt = 0, msgAt = 0;
+
+const $ = (s, r = document) => r.querySelector(s);
+const hexRgb = (h) => { const v = parseInt(String(h || '#000').replace('#', ''), 16) || 0; return `${(v >> 16) & 255},${(v >> 8) & 255},${v & 255}`; };
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeIn = (x) => x * x * x;
+const easeInOut = (x) => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const easeBack = (x) => { const c = 1.70158, c3 = c + 1; return 1 + c3 * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const easeElastic = (x) => x === 0 || x === 1 ? x : Math.pow(2, -10 * x) * Math.sin((x * 10 - .75) * (2 * Math.PI / 3)) + 1;
+const bounce = (x) => { const n = 7.5625, d = 2.75;
+  if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + .75;
+  if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + .9375; return n * (x -= 2.625 / d) * x + .984375; };
+const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+
+/* ---------------- building ---------------- */
+
+function messages() {
+  const m = (cfg.messages || []).filter((x) => x && (x.head || x.sub));
+  return m.length ? m : DEFAULTS.messages;
+}
+
+function build() {
+  const stage = $('#stage');
+  stage.className = `st-${cfg.style} shape-${cfg.imageShape}` + (cfg.upper ? ' upper' : '');
+  const card = $('#card');
+  card.innerHTML = '';
+  card.removeAttribute('style');
+  const s = stage.style;
+  s.setProperty('--accent', hexRgb(cfg.accent)); s.setProperty('--accent2', hexRgb(cfg.accent2));
+  s.setProperty('--text', hexRgb(cfg.text)); s.setProperty('--bg', hexRgb(cfg.bg)); s.setProperty('--bga', String(cfg.bgOpacity));
+  stage.style.fontFamily = cfg.font || STYLE_FONTS[cfg.style] || STYLE_FONTS.glass;
+
+  const imgs = (cfg.images || []).filter(Boolean);
+  let media = null;
+  if (imgs.length) {
+    media = document.createElement('div');
+    media.className = 'media' + (cfg.imageFit === 'cover' ? ' cover' : '');
+    media.innerHTML = '<img class="a"><img class="b">';
+  }
+  const body = document.createElement('div');
+  body.className = 'body';
+  let badge = null;
+  if (cfg.badge) { badge = document.createElement('div'); badge.className = 'badge'; badge.textContent = cfg.badge; }
+
+  if (cfg.style === 'ticker') {
+    body.innerHTML = '<div class="track"></div>';
+    if (media) card.appendChild(media);
+    card.appendChild(body);
+    if (badge) card.appendChild(badge);
+  } else if (cfg.style === 'y2k') {
+    const bar = document.createElement('div');
+    bar.className = 'titlebar';
+    bar.innerHTML = '<span class="tt"></span><i>_</i><i>□</i><i>×</i>';
+    $('.tt', bar).textContent = cfg.windowTitle || 'Sponsor.exe';
+    const row = document.createElement('div');
+    row.className = 'row';
+    if (media) row.appendChild(media);
+    body.innerHTML = '<div class="head"></div><div class="sub"></div>';
+    row.appendChild(body);
+    if (badge) row.appendChild(badge);
+    card.appendChild(bar); card.appendChild(row);
+  } else {
+    if (media) card.appendChild(media);
+    body.innerHTML = '<div class="head"></div><div class="sub"></div>';
+    card.appendChild(body);
+    if (badge) card.appendChild(badge);
+  }
+
+  const shine = document.createElement('div');
+  shine.className = 'shine';
+  if (cfg.idle === 'shine' && cfg.style !== 'ribbon') card.appendChild(shine);
+  if (cfg.style === 'ribbon' && cfg.idle === 'shine') card.appendChild(shine);
+
+  built = { card, media, body, imgs, head: $('.head', card), sub: $('.sub', card), track: $('.track', card), shine, badge,
+    a: media && $('img.a', media), b: media && $('img.b', media) };
+  if (built.a) { built.a.src = imgs[0]; built.b.src = imgs[0]; }
+  msgShown = -1; imgShown = -1; imgPrev = -1;
+  if (built.track) fillTicker();
+  place();
+}
+
+function fillTicker() {
+  const parts = [];
+  const msgs = messages();
+  for (let r = 0; r < 4; r++) for (const m of msgs) {
+    parts.push(`<span class="th"></span>`);
+    parts.push(`<span class="sep">◆</span>`);
+  }
+  built.track.innerHTML = parts.join('');
+  let i = 0;
+  built.track.querySelectorAll('.th').forEach((el) => {
+    const m = msgs[i++ % msgs.length];
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode((m.head || '') + (m.sub ? '  ' : '')));
+    if (m.sub) { const s = document.createElement('span'); s.className = 'tsub'; s.textContent = m.sub; el.appendChild(s); }
+  });
+}
+
+/* where the card sits */
+function place() {
+  const k = window.innerHeight / 1080;
+  document.documentElement.style.fontSize = (16 * k * (cfg.size || 1)) + 'px';
+  const p = $('#pos'); const mx = cfg.marginX * k, my = cfg.marginY * k;
+  p.style.left = p.style.right = p.style.top = p.style.bottom = ''; p.style.transform = '';
+  const a = cfg.anchor || 'bl';
+  const v = a[0], h = a[1];
+  if (v === 't') p.style.top = my + 'px'; else if (v === 'b') p.style.bottom = my + 'px'; else { p.style.top = '50%'; }
+  if (h === 'l') p.style.left = mx + 'px'; else if (h === 'r') p.style.right = mx + 'px'; else { p.style.left = '50%'; }
+  const tx = h === 'c' ? '-50%' : '0', ty = v === 'm' ? '-50%' : '0';
+  if (tx !== '0' || ty !== '0') p.style.transform = `translate(${tx}, ${ty})`;
+}
+window.addEventListener('resize', place);
+
+/* which way things slide, from the corner it lives in */
+function slideVec() {
+  const a = cfg.anchor || 'bl';
+  if (cfg.style === 'ticker') return a[0] === 't' ? [0, -1] : [0, 1];
+  if (a[1] === 'l') return [-1, 0];
+  if (a[1] === 'r') return [1, 0];
+  return a[0] === 't' ? [0, -1] : [0, 1];
+}
+
+/* ---------------- text ---------------- */
+
+const GLYPHS = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#$%&*+=?';
+
+function setText(el, text, mode) {
+  el.innerHTML = '';
+  if (!text) return [];
+  const spans = [];
+  if (mode === 'pop') {
+    text.split(/(\s+)/).forEach((w) => { const s = document.createElement('span'); s.textContent = w; el.appendChild(s); spans.push(s); });
+  } else {
+    for (const ch of Array.from(text)) { const s = document.createElement('span'); s.textContent = ch; s.dataset.ch = ch; el.appendChild(s); spans.push(s); }
+  }
+  return spans;
+}
+
+function showMessage(i) {
+  const m = messages()[i];
+  built.headSpans = setText(built.head, m.head, cfg.textAnim);
+  built.subSpans = setText(built.sub, m.sub, cfg.textAnim === 'pop' ? 'pop' : 'chars');
+  built.sub.style.display = m.sub ? '' : 'none';
+  if (cfg.textAnim === 'type') { const c = document.createElement('span'); c.className = 'caret'; built.head.appendChild(c); built.caret = c; }
+  else built.caret = null;
+}
+
+/* text animation at ms since this message appeared */
+function animateText(ms) {
+  const anim = cfg.textAnim;
+  const hs = built.headSpans || [], ss = built.subSpans || [];
+  const all = hs.concat(ss);
+  const reset = (s) => { s.style.transform = ''; s.style.opacity = ''; s.style.filter = ''; s.style.color = ''; s.style.textShadow = ''; };
+
+  if (anim === 'none') { all.forEach(reset); return; }
+
+  if (anim === 'type') {
+    const cps = 28;
+    const nH = Math.floor(ms / 1000 * cps);
+    hs.forEach((s, i) => { s.style.opacity = i < nH ? '1' : '0'; });
+    const nS = Math.floor((ms / 1000 - hs.length / cps - .15) * cps * 1.4);
+    ss.forEach((s, i) => { s.style.opacity = i < nS ? '1' : '0'; });
+    if (built.caret) {
+      const typing = nH < hs.length;
+      built.caret.style.opacity = typing || Math.floor(ms / 500) % 2 === 0 ? '1' : '0';
+      /* the caret follows the last typed letter */
+      const last = hs[Math.min(nH, hs.length) - 1];
+      if (last && last.nextSibling !== built.caret && !typing) built.head.appendChild(built.caret);
+      if (typing && hs[nH]) built.head.insertBefore(built.caret, hs[nH]);
+    }
+    return;
+  }
+
+  if (anim === 'rise' || anim === 'pop') {
+    const step = anim === 'pop' ? 90 : 28, dur = anim === 'pop' ? 420 : 520;
+    hs.forEach((s, i) => {
+      const p = clamp((ms - i * step) / dur);
+      if (anim === 'pop') { const e = easeBack(p); s.style.transform = `scale(${Math.max(0, e)})`; s.style.opacity = String(clamp(p * 3)); }
+      else { const e = easeBack(p); s.style.transform = `translateY(${(1 - e) * 0.9}em)`; s.style.opacity = String(clamp(p * 2)); }
+    });
+    const subStart = hs.length * step * .6 + 200;
+    ss.forEach((s, i) => { const p = clamp((ms - subStart - i * 10) / 400); s.style.opacity = String(easeOut(p)); s.style.transform = `translateY(${(1 - easeOut(p)) * .4}em)`; });
+    return;
+  }
+
+  if (anim === 'decode') {
+    const per = 45;
+    const frame = Math.floor(ms / 50);
+    const decodeChar = (s, i, start) => {
+      const ch = s.dataset.ch;
+      if (ch === undefined) return;
+      const settle = start + i * per + 260;
+      if (ms >= settle || ch.trim() === '') { s.textContent = ch; s.style.opacity = '1'; s.style.color = ''; return; }
+      if (ms < start + i * per) { s.style.opacity = '0'; return; }
+      s.style.opacity = '1';
+      s.textContent = GLYPHS[Math.floor(hash(i * 7.3 + frame) * GLYPHS.length)];
+      s.style.color = `rgb(${hexRgb(cfg.accent2)})`;
+    };
+    hs.forEach((s, i) => decodeChar(s, i, 0));
+    ss.forEach((s, i) => decodeChar(s, i, hs.length * per * .5 + 150));
+    return;
+  }
+
+  if (anim === 'wave') {
+    const intro = (s, i, start) => clamp((ms - start - i * 20) / 300);
+    hs.forEach((s, i) => { const y = Math.sin(ms / 1000 * 5 - i * .45) * .12; s.style.transform = `translateY(${y}em)`; s.style.opacity = String(intro(s, i, 0)); });
+    ss.forEach((s, i) => { s.style.opacity = String(intro(s, i, 200)); });
+    return;
+  }
+
+  if (anim === 'shimmer') {
+    const n = Math.max(hs.length, 1);
+    const pos = ((ms / 1000) * .55 % 1.6) - .3;
+    hs.forEach((s, i) => {
+      const d = Math.abs(i / n - pos);
+      const k = clamp(1 - d * 5);
+      s.style.color = k > 0 ? `color-mix(in srgb, #ffffff ${Math.round(k * 85)}%, currentColor)` : '';
+      s.style.textShadow = k > 0 ? `0 0 ${(.6 * k).toFixed(2)}em rgba(255,255,255,${(.8 * k).toFixed(2)})` : '';
+      s.style.opacity = String(clamp((ms - i * 15) / 250));
+    });
+    ss.forEach((s, i) => { s.style.opacity = String(clamp((ms - 200 - i * 8) / 300)); });
+    return;
+  }
+
+  if (anim === 'glow') {
+    const g = .5 + .5 * Math.sin(ms / 1000 * 3);
+    hs.forEach((s, i) => { s.style.opacity = String(clamp((ms - i * 15) / 300)); s.style.textShadow = `0 0 ${(.2 + .8 * g).toFixed(2)}em rgba(${hexRgb(cfg.accent)},.95)`; });
+    ss.forEach((s, i) => { s.style.opacity = String(clamp((ms - 200) / 300)); });
+  }
+}
+
+/* ---------------- images ---------------- */
+
+function animateImages(ms) {
+  if (!built.media || !built.imgs.length) return;
+  const n = built.imgs.length;
+  const per = Math.max(cfg.imageSec, .5) * 1000;
+  const idx = n > 1 ? Math.floor(ms / per) % n : 0;
+  if (idx !== imgShown) {
+    imgPrev = imgShown < 0 ? idx : imgShown;
+    imgShown = idx;
+    imgSwapAt = imgShown === imgPrev ? -1e9 : Math.floor(ms / per) * per;
+    built.b.src = built.imgs[imgPrev];
+    built.a.src = built.imgs[idx];
+  }
+  const swap = 650;
+  const p = clamp((ms - imgSwapAt) / swap);
+  const a = built.a.style, b = built.b.style;
+  if (p >= 1) { a.transform = ''; a.opacity = '1'; a.filter = ''; a.clipPath = ''; b.opacity = '0'; return; }
+  const e = easeInOut(p);
+  a.filter = ''; b.filter = ''; a.clipPath = ''; b.transform = ''; b.opacity = '1';
+  switch (cfg.imageAnim) {
+    case 'slide': a.transform = `translateY(${(1 - e) * 100}%)`; b.transform = `translateY(${-e * 100}%)`; a.opacity = '1'; break;
+    case 'flip': {
+      const first = p < .5;
+      a.opacity = first ? '0' : '1'; b.opacity = first ? '1' : '0';
+      a.transform = `perspective(30em) rotateY(${(1 - e) * 90}deg)`; b.transform = `perspective(30em) rotateY(${-e * 90}deg)`; break; }
+    case 'zoom': a.transform = `scale(${.4 + .6 * easeBack(p)})`; a.opacity = String(e); b.transform = `scale(${1 + e * .6})`; b.opacity = String(1 - e); break;
+    case 'blur': a.opacity = String(e); a.filter = `blur(${(1 - e) * 12}px)`; b.opacity = String(1 - e); b.filter = `blur(${e * 12}px)`; break;
+    case 'wipe': a.opacity = '1'; a.clipPath = `inset(0 ${(1 - e) * 100}% 0 0)`; break;
+    case 'spin': a.transform = `rotate(${(1 - e) * -180}deg) scale(${e})`; a.opacity = '1'; b.transform = `rotate(${e * 180}deg) scale(${1 - e})`; break;
+    default: a.opacity = String(e); a.transform = ''; b.opacity = String(1 - e);
+  }
+}
+
+/* ---------------- the card coming and going ---------------- */
+
+/* p: 0 = gone, 1 = fully in. leaving: true while it goes */
+function cardStyle(kind, p, leaving) {
+  const st = { transform: '', opacity: '1', filter: '', clipPath: '' };
+  if (p >= 1) return st;
+  if (p <= 0) { st.opacity = '0'; return st; }
+  const [vx, vy] = slideVec();
+  const e = leaving ? easeIn(1 - p) : 0;
+  const ei = leaving ? 1 - e : easeOut(p);
+  switch (kind) {
+    case 'slide': { const d = 1 - (leaving ? 1 - easeIn(1 - p) : easeOut(p)); st.transform = `translate(${vx * d * 120}%, ${vy * d * 160}%)`; st.opacity = String(clamp(p * 3)); break; }
+    case 'slideup': { const d = 1 - (leaving ? 1 - easeIn(1 - p) : easeBack(p)); st.transform = `translateY(${d * 140}%)`; st.opacity = String(clamp(p * 2.5)); break; }
+    case 'fade': st.opacity = String(easeInOut(p)); st.transform = `translateY(${(1 - easeOut(p)) * .8}rem)`; break;
+    case 'pop': { const s = leaving ? easeIn(p) * 1 : easeBack(p); st.transform = `scale(${Math.max(0, s)})`; st.opacity = String(clamp(p * 4)); break; }
+    case 'zoom': { const s = 1 + (1 - easeOut(p)) * .9; st.transform = `scale(${s})`; st.opacity = String(easeOut(p)); st.filter = `blur(${(1 - easeOut(p)) * 14}px)`; break; }
+    case 'flip': { const a = (1 - (leaving ? 1 - easeIn(1 - p) : easeBack(p))) * 90; st.transform = `perspective(50rem) rotateX(${a}deg)`; st.opacity = String(clamp(p * 3)); break; }
+    case 'drop': { const y = leaving ? (1 - p) * 140 : (1 - bounce(p)) * -160; st.transform = `translateY(${y}%)`; st.opacity = String(clamp(p * 4)); break; }
+    case 'wipe': { const r = (1 - easeInOut(p)) * 100; st.clipPath = vx > 0 ? `inset(0 0 0 ${r}%)` : `inset(0 ${r}% 0 0)`; break; }
+    case 'glitch': {
+      const f = Math.floor(liveNow / 45);
+      const on = hash(f * 3.1) < .3 + .7 * p;
+      st.opacity = on ? '1' : '0';
+      const j = (1 - p) * 30;
+      st.transform = `translate(${(hash(f) - .5) * j}px, ${(hash(f + 9) - .5) * j * .3}px) skewX(${(hash(f + 4) - .5) * (1 - p) * 20}deg)`;
+      const off = ((1 - p) * 8).toFixed(1);
+      st.filter = `drop-shadow(${off}px 0 0 rgba(255,0,90,.85)) drop-shadow(-${off}px 0 0 rgba(0,240,255,.85))`;
+      const sl = hash(f + 2) * 70;
+      st.clipPath = p < .85 ? `inset(${sl.toFixed(1)}% 0 ${(hash(f + 5) * (100 - sl) * .6).toFixed(1)}% 0)` : '';
+      break; }
+    case 'spin': st.transform = `rotate(${(1 - ei) * (leaving ? 200 : -200)}deg) scale(${ei})`; st.opacity = String(clamp(p * 3)); break;
+    case 'expand': { const s = leaving ? easeIn(p) : easeOut(p); st.transform = `scaleX(${Math.max(.001, s)})`; st.opacity = String(clamp(p * 3)); break; }
+    default: st.opacity = String(p);
+  }
+  return st;
+}
+
+/* subtle motion while it's on screen */
+function idle(ms) {
+  const c = built.card.style;
+  let t = '';
+  switch (cfg.idle) {
+    case 'float': t = `translateY(${Math.sin(ms / 1000 * 1.6) * .35}rem)`; break;
+    case 'tilt': t = `perspective(60rem) rotateY(${Math.sin(ms / 1000 * 1.1) * 5}deg) rotateX(${Math.cos(ms / 1000 * .9) * 3}deg)`; break;
+    case 'pulse': t = `scale(${1 + Math.sin(ms / 1000 * 3) * .025})`; break;
+    case 'flicker': {
+      const f = Math.floor(ms / 70);
+      const dim = hash(f * 1.7) < .05 ? .55 : 1;
+      built.card.style.setProperty('--flick', dim);
+      c.filter = dim < 1 ? 'brightness(.6)' : '';
+      break; }
+  }
+  if (cfg.idle === 'shine') {
+    const per = 3500, x = (ms % per) / 900;
+    built.shine.style.setProperty('--shine', x < 1 ? `${-60 + x * 200}%` : '-60%');
+  }
+  if (cfg.style === 'spot') built.card.style.setProperty('--spin', `${(ms / 1000 * 70) % 360}deg`);
+  return t;
+}
+
+/* ---------------- timeline ---------------- */
+
+/* returns { p (0..1 how far in), leaving, shownMs (ms since it started appearing) } or null */
+function timeline(now) {
+  const enter = Math.max(cfg.enterMs, 1), exit = Math.max(cfg.exitMs, 1);
+  const show = Math.max(cfg.showSec, .5) * 1000, gap = Math.max(cfg.gapSec, 0) * 1000;
+
+  if (hideAt >= 0) {
+    const p = 1 - (now - hideAt) / exit;
+    if (p <= 0) return null;
+    return { p, leaving: true, shownMs: now - (triggerAt >= 0 ? triggerAt : epoch) };
+  }
+
+  let local;
+  if (cfg.mode === 'manual' || cfg.mode === 'onshow') {
+    if (triggerAt < 0) return null;
+    local = now - triggerAt;
+    if (local > enter + show + exit) return null;
+  } else {
+    local = now - epoch - cfg.delaySec * 1000;
+    if (local < 0) return null;
+    if (cfg.mode === 'always') return { p: clamp(local / enter), leaving: false, shownMs: local };
+    const period = enter + show + exit + gap;
+    const k = Math.floor(local / period);
+    if (cfg.loops > 0 && k >= cfg.loops) return null;
+    local -= k * period;
+    if (local > enter + show + exit) return null;
+  }
+  if (local < enter) return { p: local / enter, leaving: false, shownMs: local };
+  if (local < enter + show) return { p: 1, leaving: false, shownMs: local };
+  return { p: 1 - (local - enter - show) / exit, leaving: true, shownMs: local };
+}
+
+function render(now) {
+  liveNow = now;
+  if (!built) return;
+  const tl = timeline(now);
+  const card = built.card;
+  if (!tl) { card.style.opacity = '0'; card.style.visibility = 'hidden'; msgShown = -1; imgShown = -1; return; }
+  card.style.visibility = '';
+
+  const st = cardStyle(tl.leaving ? cfg.exit : cfg.enter, clamp(tl.p), tl.leaving);
+  const motion = idle(tl.shownMs);
+  card.style.transform = [st.transform, motion].filter(Boolean).join(' ');
+  card.style.opacity = st.opacity;
+  if (cfg.idle !== 'flicker' || st.filter) card.style.filter = st.filter;
+  card.style.clipPath = st.clipPath;
+
+  /* messages rotate while it's up; the ticker scrolls them instead */
+  if (built.track) {
+    const w = built.track.scrollWidth / 4 || 1;
+    const speed = 160 * (window.innerHeight / 1080);
+    const x = -((tl.shownMs / 1000 * speed) % w);
+    built.track.style.transform = `translateX(${x}px)`;
+  } else {
+    const msgs = messages();
+    const per = Math.max(cfg.messageSec, 1) * 1000;
+    const idx = msgs.length > 1 ? Math.floor(tl.shownMs / per) % msgs.length : 0;
+    if (idx !== msgShown) { msgShown = idx; msgAt = msgs.length > 1 ? Math.floor(tl.shownMs / per) * per : 0; showMessage(idx); }
+    /* the first message animates as the card lands */
+    const textStart = msgAt === 0 ? Math.min(cfg.enterMs * .5, 400) : msgAt;
+    animateText(tl.shownMs - textStart);
+  }
+  animateImages(tl.shownMs);
+}
+
+/* ---------------- wiring ---------------- */
+
+function apply(next, restart) {
+  cfg = Object.assign({}, DEFAULTS, next || {});
+  build();
+  if (restart !== false) { epoch = TEST ? 0 : performance.now(); hideAt = -1; if (cfg.mode === 'manual' || cfg.mode === 'onshow') triggerAt = -1; }
+}
+
+function play() { const now = TEST ? liveNow : performance.now(); hideAt = -1; triggerAt = now; if (cfg.mode === 'loop' || cfg.mode === 'always') epoch = now; }
+function hideNow() { const now = TEST ? liveNow : performance.now(); if (timeline(now)) hideAt = now; }
+
+window.addEventListener('spazzSponsorConfig', (e) => {
+  const preview = e.detail && e.detail.__preview;
+  apply(e.detail, true);
+  if (preview) play();
+});
+window.addEventListener('spazzSponsorPlay', play);
+window.addEventListener('spazzSponsorHide', hideNow);
+window.addEventListener('obsSourceActiveChanged', (e) => {
+  const active = e.detail && e.detail.active;
+  if (active && cfg.mode === 'onshow') play();
+  if (!active && cfg.mode === 'onshow') { triggerAt = -1; hideAt = -1; }
+});
+
+async function boot() {
+  const q = new URLSearchParams(location.search);
+  if (TEST && q.get('bg')) { document.body.style.background = `url(${q.get('bg')}) center / cover`; }
+  const file = q.get('cfg');
+  let loaded = null;
+  if (file) {
+    try {
+      const r = await fetch(file + (file.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) loaded = await r.json();
+    } catch (_) { /* first run: defaults until the source sends settings */ }
+  }
+  apply(loaded, true);
+  if (!TEST) {
+    const tick = () => { render(performance.now()); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+}
+
+/* tests drive the clock themselves */
+window.__sponsor = {
+  apply: (c) => apply(c, true),
+  render: (ms) => render(ms),
+  play: (ms) => { liveNow = ms; play(); },
+  hide: (ms) => { liveNow = ms; hideNow(); },
+};
+boot();
+</script>
+</body>
+</html>

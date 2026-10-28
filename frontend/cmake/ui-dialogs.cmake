@@ -47,4 +47,6 @@ target_sources(
     dialogs/SpazzLiveControls.hpp
     dialogs/SpazzStingerStudio.cpp
     dialogs/SpazzStingerStudio.hpp
+    dialogs/SpazzSponsorCenter.cpp
+    dialogs/SpazzSponsorCenter.hpp
 )
