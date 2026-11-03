@@ -3,8 +3,8 @@ target_sources(
   PRIVATE
     utility/AdvancedOutput.cpp
     utility/AdvancedOutput.hpp
-    utility/SpazzKick.cpp
-    utility/SpazzKick.hpp
+    utility/SpazzMultistream.cpp
+    utility/SpazzMultistream.hpp
     utility/SpazzMusicPlayer.cpp
     utility/SpazzUpdater.cpp
     utility/SpazzUpdater.hpp

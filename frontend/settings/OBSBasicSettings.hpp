@@ -32,7 +32,7 @@ class Auth;
 class OBSBasic;
 class OBSHotkeyWidget;
 class OBSPropertiesView;
-class SpazzKickSettings;
+class SpazzMultistreamSettings;
 struct FFmpegFormat;
 struct OBSTheme;
 
@@ -93,7 +93,7 @@ private:
 	OBSPropertiesView *recordEncoderProps = nullptr;
 
 	QPointer<QLabel> advOutRecWarning;
-	QPointer<SpazzKickSettings> spazzKick;
+	QPointer<SpazzMultistreamSettings> spazzMulti;
 	QPointer<QLabel> simpleOutRecWarning;
 
 	QString curPreset;

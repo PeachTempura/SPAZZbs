@@ -69,7 +69,7 @@ class SpazzDockTabs;
 class SpazzMusicPlayer;
 class SpazzMusicDock;
 class SpazzUpdater;
-class SpazzKick;
+class SpazzMultistream;
 struct QuickTransition;
 
 namespace OBS {
@@ -475,10 +475,10 @@ private:
 
 	/* SPAZZbs: updates itself from the project's GitHub releases */
 	QPointer<SpazzUpdater> spazzUpdater;
-	QPointer<SpazzKick> spazzKick;
+	QPointer<SpazzMultistream> spazzMulti;
 
 public:
-	SpazzKick *GetSpazzKick() const;
+	SpazzMultistream *GetSpazzMultistream() const;
 
 private:
 

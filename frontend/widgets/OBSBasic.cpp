@@ -36,7 +36,7 @@
 #include <utility/SpazzUpdater.hpp>
 #include <dialogs/SpazzStingerStudio.hpp>
 #include <dialogs/SpazzSponsorCenter.hpp>
-#include <utility/SpazzKick.hpp>
+#include <utility/SpazzMultistream.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -119,9 +119,9 @@ std::once_flag saveOnceFlag;
 
 extern void setupDockAction(QDockWidget *dock);
 
-SpazzKick *OBSBasic::GetSpazzKick() const
+SpazzMultistream *OBSBasic::GetSpazzMultistream() const
 {
-	return spazzKick;
+	return spazzMulti;
 }
 
 OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new Ui::OBSBasic)
@@ -187,15 +187,10 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 	/* Add controls dock */
 	OBSBasicControls *controls = new OBSBasicControls(this);
 
-	/* SPAZZbs: "Multistream to Kick" right under Start Streaming */
-	spazzKick = new SpazzKick(this);
+	/* SPAZZbs: "Also go live on: Kick X Rumble" right under Start Streaming */
+	spazzMulti = new SpazzMultistream(this);
 	if (QVBoxLayout *buttons = controls->findChild<QVBoxLayout *>("buttonsVLayout"))
-		buttons->insertWidget(1, spazzKick->MakeToggle(controls));
-	controlsDock = new OBSDock(this);
-	controlsDock->setObjectName(QString::fromUtf8("controlsDock"));
-	controlsDock->setWindowTitle(QTStr("Basic.Main.Controls"));
-	/* Parenting is done there so controls will be deleted alongside controlsDock */
-	controlsDock->setWidget(controls);
+		buttons->insertWidget(1, spazzMulti->MakeToggles(controls));
 
 	connect(controls, &OBSBasicControls::StreamButtonClicked, this, &OBSBasic::StreamActionTriggered);
 

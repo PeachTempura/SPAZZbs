@@ -1,6 +1,6 @@
 #include "OBSBasicSettings.hpp"
 
-#include <utility/SpazzKick.hpp>
+#include <utility/SpazzMultistream.hpp>
 
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
@@ -93,25 +93,27 @@ void OBSBasicSettings::InitStreamPage()
 	connect(ui->multitrackVideoConfigOverrideEnable, &QCheckBox::toggled, this,
 		&OBSBasicSettings::UpdateMultitrackVideo);
 
-	/* SPAZZbs: a second stream to Kick, started with the main one */
-	spazzKick = new SpazzKickSettings(ui->streamPage);
+	/* SPAZZbs: extra streams to Kick, X and Rumble, started with the main one */
+	spazzMulti = new SpazzMultistreamSettings(ui->streamPage);
 	if (QBoxLayout *page = qobject_cast<QBoxLayout *>(ui->streamPage->layout())) {
 		int at = page->count();
 		if (at > 0 && page->itemAt(at - 1)->spacerItem())
 			at--;
-		page->insertWidget(at, spazzKick);
+		page->insertWidget(at, spazzMulti);
 	}
-	connect(spazzKick->enable, &QCheckBox::toggled, this, &OBSBasicSettings::Stream1Changed);
-	connect(spazzKick->server, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
-	connect(spazzKick->key, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
-	connect(spazzKick->encoder, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::Stream1Changed);
-	connect(spazzKick->bitrate, &QSpinBox::valueChanged, this, &OBSBasicSettings::Stream1Changed);
+	for (const SpazzMultistreamSettings::Page &pg : spazzMulti->pages) {
+		connect(pg.enable, &QCheckBox::toggled, this, &OBSBasicSettings::Stream1Changed);
+		connect(pg.server, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
+		connect(pg.key, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
+		connect(pg.encoder, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::Stream1Changed);
+		connect(pg.bitrate, &QSpinBox::valueChanged, this, &OBSBasicSettings::Stream1Changed);
+	}
 }
 
 void OBSBasicSettings::LoadStream1Settings()
 {
-	if (spazzKick)
-		spazzKick->Load(main->Config());
+	if (spazzMulti)
+		spazzMulti->Load(main->Config());
 
 	bool ignoreRecommended = config_get_bool(main->Config(), "Stream1", "IgnoreRecommended");
 	int whipSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
@@ -285,11 +287,11 @@ void OBSBasicSettings::SwapMultiTrack(const char *protocol)
 
 void OBSBasicSettings::SaveStream1Settings()
 {
-	/* SPAZZbs: the Kick section saves first; nothing below can skip it */
-	if (spazzKick) {
-		spazzKick->Save(main->Config());
-		if (SpazzKick *kick = main->GetSpazzKick())
-			kick->Refresh();
+	/* SPAZZbs: the Multistream section saves first; nothing below can skip it */
+	if (spazzMulti) {
+		spazzMulti->Save(main->Config());
+		if (SpazzMultistream *multi = main->GetSpazzMultistream())
+			multi->Refresh();
 	}
 
 	bool customServer = IsCustomService();
