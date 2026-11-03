@@ -5,6 +5,7 @@
   The source loads this page in a hidden browser with ?cfg=<settings file>,
   and then pushes live changes as events:
     spazzSponsorConfig  (detail = settings)   restyle without reloading
+                      settings.items = the sponsors, shown one after another
     spazzSponsorPlay                          play now (manual / on-show)
     spazzSponsorHide                          take it off screen now
   obs-browser also sends obsSourceActiveChanged when the scene goes live.
@@ -145,6 +146,57 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .shape-rounded .media { border-radius: 1rem !important; }
 .shape-circle .media { border-radius: 50% !important; }
 .upper .head, .upper .sub, .upper .track { text-transform: uppercase; }
+
+/* ---------- per-sponsor layouts: how the logo sits against the text ---------- */
+.cardrow { position: relative; }
+.media { zoom: var(--img, 1); }
+.media .lshine { position: absolute; inset: 0; pointer-events: none; overflow: hidden; border-radius: inherit; z-index: 2; }
+.media .lshine::before { content: ""; position: absolute; top: -50%; bottom: -50%; width: 40%; left: var(--lshine, -60%);
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.75), transparent); transform: skewX(-20deg); }
+
+/* logo on the right */
+#stage.lay-right .cardrow { flex-direction: row-reverse; }
+#stage.lay-right .cardrow > .media { order: 0; }
+#stage.lay-right .cardrow > .badge { order: 1; }
+#stage.lay-right .cardrow > .body { order: 2; }
+#stage.lay-right.st-glass .cardrow { padding: .9rem .9rem .9rem 1.6rem; }
+#stage.lay-right.st-neon .cardrow, #stage.lay-right.st-sticker .cardrow { padding: 1rem 1rem 1rem 1.8rem; }
+#stage.lay-right.st-bug .cardrow { padding: .45rem .45rem .45rem 1.1rem; }
+#stage.lay-right.st-y2k .cardrow { padding: .9rem .9rem .9rem 1.6rem; }
+#stage.lay-right .body { align-items: flex-end; text-align: right; }
+
+/* logo above the text */
+#stage.lay-above .cardrow { flex-direction: column; align-items: center; }
+#stage.lay-above .body { align-items: center; text-align: center; }
+#stage.lay-above:not(.st-lower):not(.st-minimal) .cardrow { padding-left: 1.8rem; padding-right: 1.8rem; }
+#stage.lay-above.st-ribbon .cardrow { padding-right: 3.2rem; padding-left: 2.6rem; }
+#stage.lay-above.st-lower .body { align-self: stretch; }
+#stage.lay-above .badge { margin-left: 0; align-self: center; }
+
+/* logo behind the text, as the card's background */
+#stage.lay-behind .cardrow { min-width: 24rem; min-height: 7.5rem; padding: 1.2rem 2rem; }
+#stage.lay-behind .media { position: absolute; inset: 0; zoom: 1; width: auto !important; height: auto !important; padding: 0 !important;
+  margin: 0 !important; border: 0 !important; background: none !important; filter: none !important; z-index: 0; border-radius: inherit !important; }
+#stage.lay-behind .media img { object-fit: cover; }
+#stage.lay-behind .media::after { content: ""; position: absolute; inset: 0; z-index: 1;
+  background: linear-gradient(90deg, rgba(var(--bg),.8), rgba(var(--bg),.35) 65%, rgba(var(--bg),.05)); }
+#stage.lay-behind .body, #stage.lay-behind .badge { position: relative; z-index: 1; }
+#stage.lay-behind.st-lower .body { background: none; }
+#stage.lay-behind.st-y2k .media::after, #stage.lay-behind.st-sticker .media::after {
+  background: linear-gradient(90deg, rgba(246,243,250,.9), rgba(246,243,250,.55) 65%, rgba(246,243,250,.15)); }
+
+/* the spotlight card stacks by default; "beside" puts them side by side */
+#stage.lay-left.st-spot .cardrow, #stage.lay-right.st-spot .cardrow { padding: 1.3rem 2rem; }
+#stage.lay-left.st-spot .cardrow { flex-direction: row; }
+#stage.lay-left.st-spot .body { align-items: flex-start; text-align: left; }
+#stage.lay-behind.st-lower .cardrow { border-bottom: .3rem solid rgb(var(--accent2)); }
+
+/* logo only / text only */
+#stage.lay-only .body, #stage.lay-only .badge { display: none; }
+#stage.lay-only:not(.st-minimal):not(.st-lower) .cardrow { padding: .9rem; }
+#stage.lay-text .media { display: none; }
+#stage.lay-text:not(.st-lower):not(.st-ticker):not(.st-minimal):not(.st-spot) .cardrow { padding-left: 1.6rem; padding-right: 1.6rem; }
+#stage.lay-text.st-ticker .body { padding-left: 1.4rem; }
 </style>
 </head>
 <body>
@@ -152,15 +204,19 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 <script>
 'use strict';
 
+/* one sponsor in the rotation */
+const ITEM = {
+  image: '', layout: 'left', imageSize: 1, head: '', sub: '', badge: '',
+  textAnim: 'rise', logoAnim: 'none', enter: 'slide', exit: 'slide', showSec: 8,
+};
+
+/* the shared look and timing */
 const DEFAULTS = {
-  style: 'glass', enter: 'slide', exit: 'slide', textAnim: 'rise', imageAnim: 'crossfade', idle: 'float',
-  anchor: 'bl', marginX: 60, marginY: 60, size: 1,
+  style: 'glass', idle: 'float', anchor: 'bl', marginX: 60, marginY: 60, size: 1,
   accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#140f22', bgOpacity: 0.82,
-  font: '', upper: false, imageShape: 'style', imageFit: 'contain',
-  messages: [{ head: 'Your sponsor here', sub: 'Thanks for supporting the stream!' }], badge: '',
-  windowTitle: 'Sponsor.exe', images: [],
-  mode: 'loop', showSec: 12, gapSec: 45, enterMs: 700, exitMs: 600, imageSec: 4, messageSec: 6,
-  loops: 0, delaySec: 0,
+  font: '', upper: false, imageShape: 'style', imageFit: 'contain', windowTitle: 'Sponsor.exe',
+  items: [Object.assign({}, ITEM, { head: 'Your sponsor here', sub: 'Thanks for supporting the stream!' })],
+  mode: 'loop', gapSec: 45, enterMs: 700, exitMs: 600, betweenSec: 0.4, loops: 0, delaySec: 0,
 };
 
 const STYLE_FONTS = {
@@ -173,12 +229,13 @@ const STYLE_FONTS = {
 
 const TEST = new URLSearchParams(location.search).get('test') === '1';
 let cfg = Object.assign({}, DEFAULTS);
+let list = [];          /* the sponsors, cleaned up */
+let focus = -1;         /* studio: hold this one sponsor on screen */
 let epoch = 0;          /* when the current loop started (ms) */
-let triggerAt = -1;     /* manual / on-show: when "play" happened */
-let hideAt = -1;        /* "hide now": when it started leaving */
+let triggerAt = -1;     /* manual / on-show / studio replay: when "play" happened */
+let hideAt = -1, hideFrom = null;  /* "hide now": when it started leaving, and from where */
 let liveNow = 0;
-let built = null;       /* DOM handles for the current config */
-let msgShown = -1, imgShown = -1, imgPrev = -1, imgSwapAt = 0, msgAt = 0;
+let built = null;       /* DOM handles for the sponsor on screen */
 
 const $ = (s, r = document) => r.querySelector(s);
 const hexRgb = (h) => { const v = parseInt(String(h || '#000').replace('#', ''), 16) || 0; return `${(v >> 16) & 255},${(v >> 8) & 255},${v & 255}`; };
@@ -187,93 +244,124 @@ const easeOut = (x) => 1 - Math.pow(1 - x, 3);
 const easeIn = (x) => x * x * x;
 const easeInOut = (x) => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 const easeBack = (x) => { const c = 1.70158, c3 = c + 1; return 1 + c3 * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
-const easeElastic = (x) => x === 0 || x === 1 ? x : Math.pow(2, -10 * x) * Math.sin((x * 10 - .75) * (2 * Math.PI / 3)) + 1;
 const bounce = (x) => { const n = 7.5625, d = 2.75;
   if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + .75;
   if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + .9375; return n * (x -= 2.625 / d) * x + .984375; };
 const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
 
-/* ---------------- building ---------------- */
+/* ---------------- the sponsor list ---------------- */
 
-function messages() {
-  const m = (cfg.messages || []).filter((x) => x && (x.head || x.sub));
-  return m.length ? m : DEFAULTS.messages;
+/* older settings files had one message list and one image pool: pair them up */
+function legacyItems(c) {
+  const msgs = (c.messages || []).filter((m) => m && (m.head || m.sub));
+  const imgs = (c.images || []).filter(Boolean);
+  const n = Math.max(msgs.length, imgs.length);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const m = msgs.length ? msgs[i % msgs.length] : {};
+    out.push({ image: imgs.length ? imgs[i % imgs.length] : '', head: m.head || '', sub: m.sub || '', badge: c.badge || '',
+      textAnim: c.textAnim, enter: c.enter, exit: c.exit, showSec: c.messageSec || 8 });
+  }
+  return out;
 }
 
-function build() {
+function cleanItems(c) {
+  const raw = Array.isArray(c.items) ? c.items : (c.messages || c.images) ? legacyItems(c) : [];
+  const out = [];
+  for (const r of raw) {
+    if (!r) continue;
+    const it = Object.assign({}, ITEM);
+    for (const k of Object.keys(ITEM)) if (r[k] !== undefined && r[k] !== null && r[k] !== '') it[k] = r[k];
+    it.imageSize = clamp(+it.imageSize || 1, .3, 3);
+    it.showSec = Math.max(+it.showSec || ITEM.showSec, .5);
+    if (it.image || it.head || it.sub || it.badge) out.push(it);
+  }
+  return out.length ? out : DEFAULTS.items.map((x) => Object.assign({}, x));
+}
+
+/* the layout a sponsor really gets, given what it has */
+function layoutOf(it) {
+  let lay = it.layout || 'left';
+  const hasText = !!(it.head || it.sub || it.badge);
+  if (!it.image) lay = 'text';
+  else if (!hasText && lay !== 'text') lay = 'only';
+  if (cfg.style === 'ticker' && (lay === 'above' || lay === 'behind')) lay = 'left';
+  return lay;
+}
+
+/* ---------------- building ---------------- */
+
+function styleStage() {
+  const s = $('#stage').style;
+  s.setProperty('--accent', hexRgb(cfg.accent)); s.setProperty('--accent2', hexRgb(cfg.accent2));
+  s.setProperty('--text', hexRgb(cfg.text)); s.setProperty('--bg', hexRgb(cfg.bg)); s.setProperty('--bga', String(cfg.bgOpacity));
+  s.fontFamily = cfg.font || STYLE_FONTS[cfg.style] || STYLE_FONTS.glass;
+}
+
+function build(idx) {
+  const it = list[idx];
+  const lay = layoutOf(it);
   const stage = $('#stage');
-  stage.className = `st-${cfg.style} shape-${cfg.imageShape}` + (cfg.upper ? ' upper' : '');
+  stage.className = `st-${cfg.style} shape-${cfg.imageShape} lay-${lay}` + (cfg.upper ? ' upper' : '');
+  stage.style.setProperty('--img', String(it.imageSize));
   const card = $('#card');
   card.innerHTML = '';
   card.removeAttribute('style');
-  const s = stage.style;
-  s.setProperty('--accent', hexRgb(cfg.accent)); s.setProperty('--accent2', hexRgb(cfg.accent2));
-  s.setProperty('--text', hexRgb(cfg.text)); s.setProperty('--bg', hexRgb(cfg.bg)); s.setProperty('--bga', String(cfg.bgOpacity));
-  stage.style.fontFamily = cfg.font || STYLE_FONTS[cfg.style] || STYLE_FONTS.glass;
+  card.className = '';
 
-  const imgs = (cfg.images || []).filter(Boolean);
   let media = null;
-  if (imgs.length) {
+  if (it.image && lay !== 'text') {
     media = document.createElement('div');
     media.className = 'media' + (cfg.imageFit === 'cover' ? ' cover' : '');
-    media.innerHTML = '<img class="a"><img class="b">';
+    const img = document.createElement('img');
+    img.src = it.image;
+    media.appendChild(img);
+    if (it.logoAnim === 'shine') { const sh = document.createElement('div'); sh.className = 'lshine'; media.appendChild(sh); }
   }
   const body = document.createElement('div');
   body.className = 'body';
   let badge = null;
-  if (cfg.badge) { badge = document.createElement('div'); badge.className = 'badge'; badge.textContent = cfg.badge; }
+  if (it.badge) { badge = document.createElement('div'); badge.className = 'badge'; badge.textContent = it.badge; }
 
+  let row = card;
   if (cfg.style === 'ticker') {
     body.innerHTML = '<div class="track"></div>';
-    if (media) card.appendChild(media);
-    card.appendChild(body);
-    if (badge) card.appendChild(badge);
-  } else if (cfg.style === 'y2k') {
-    const bar = document.createElement('div');
-    bar.className = 'titlebar';
-    bar.innerHTML = '<span class="tt"></span><i>_</i><i>□</i><i>×</i>';
-    $('.tt', bar).textContent = cfg.windowTitle || 'Sponsor.exe';
-    const row = document.createElement('div');
-    row.className = 'row';
-    if (media) row.appendChild(media);
-    body.innerHTML = '<div class="head"></div><div class="sub"></div>';
-    row.appendChild(body);
-    if (badge) row.appendChild(badge);
-    card.appendChild(bar); card.appendChild(row);
   } else {
-    if (media) card.appendChild(media);
     body.innerHTML = '<div class="head"></div><div class="sub"></div>';
-    card.appendChild(body);
-    if (badge) card.appendChild(badge);
+    if (cfg.style === 'y2k') {
+      const bar = document.createElement('div');
+      bar.className = 'titlebar';
+      bar.innerHTML = '<span class="tt"></span><i>_</i><i>□</i><i>×</i>';
+      $('.tt', bar).textContent = cfg.windowTitle || 'Sponsor.exe';
+      row = document.createElement('div');
+      row.className = 'row';
+      card.appendChild(bar); card.appendChild(row);
+    }
   }
+  row.classList.add('cardrow');
+  if (media) row.appendChild(media);
+  row.appendChild(body);
+  if (badge) row.appendChild(badge);
+  if (!it.head && !it.sub && cfg.style !== 'ticker') body.style.display = 'none';
 
   const shine = document.createElement('div');
   shine.className = 'shine';
-  if (cfg.idle === 'shine' && cfg.style !== 'ribbon') card.appendChild(shine);
-  if (cfg.style === 'ribbon' && cfg.idle === 'shine') card.appendChild(shine);
+  if (cfg.idle === 'shine') card.appendChild(shine);
 
-  built = { card, media, body, imgs, head: $('.head', card), sub: $('.sub', card), track: $('.track', card), shine, badge,
-    a: media && $('img.a', media), b: media && $('img.b', media) };
-  if (built.a) { built.a.src = imgs[0]; built.b.src = imgs[0]; }
-  msgShown = -1; imgShown = -1; imgPrev = -1;
-  if (built.track) fillTicker();
+  built = { idx, it, lay, card, media, body, badge, shine, img: media && $('img', media),
+    head: $('.head', card), sub: $('.sub', card), track: $('.track', card), textKey: '' };
+  if (built.track) fillTicker(it);
+  else showText(it);
   place();
 }
 
-function fillTicker() {
+function fillTicker(it) {
   const parts = [];
-  const msgs = messages();
-  for (let r = 0; r < 4; r++) for (const m of msgs) {
-    parts.push(`<span class="th"></span>`);
-    parts.push(`<span class="sep">◆</span>`);
-  }
+  for (let r = 0; r < 4; r++) parts.push('<span class="th"></span><span class="sep">◆</span>');
   built.track.innerHTML = parts.join('');
-  let i = 0;
   built.track.querySelectorAll('.th').forEach((el) => {
-    const m = msgs[i++ % msgs.length];
-    el.innerHTML = '';
-    el.appendChild(document.createTextNode((m.head || '') + (m.sub ? '  ' : '')));
-    if (m.sub) { const s = document.createElement('span'); s.className = 'tsub'; s.textContent = m.sub; el.appendChild(s); }
+    el.appendChild(document.createTextNode((it.head || '') + (it.sub ? '  ' : '')));
+    if (it.sub) { const s = document.createElement('span'); s.className = 'tsub'; s.textContent = it.sub; el.appendChild(s); }
   });
 }
 
@@ -317,18 +405,18 @@ function setText(el, text, mode) {
   return spans;
 }
 
-function showMessage(i) {
-  const m = messages()[i];
-  built.headSpans = setText(built.head, m.head, cfg.textAnim);
-  built.subSpans = setText(built.sub, m.sub, cfg.textAnim === 'pop' ? 'pop' : 'chars');
-  built.sub.style.display = m.sub ? '' : 'none';
-  if (cfg.textAnim === 'type') { const c = document.createElement('span'); c.className = 'caret'; built.head.appendChild(c); built.caret = c; }
+function showText(it) {
+  built.headSpans = setText(built.head, it.head, it.textAnim);
+  built.subSpans = setText(built.sub, it.sub, it.textAnim === 'pop' ? 'pop' : 'chars');
+  built.sub.style.display = it.sub ? '' : 'none';
+  built.head.style.display = it.head ? '' : 'none';
+  if (it.textAnim === 'type') { const c = document.createElement('span'); c.className = 'caret'; built.head.appendChild(c); built.caret = c; }
   else built.caret = null;
 }
 
-/* text animation at ms since this message appeared */
+/* text animation at ms since this sponsor's text started */
 function animateText(ms) {
-  const anim = cfg.textAnim;
+  const anim = built.it.textAnim;
   const hs = built.headSpans || [], ss = built.subSpans || [];
   const all = hs.concat(ss);
   const reset = (s) => { s.style.transform = ''; s.style.opacity = ''; s.style.filter = ''; s.style.color = ''; s.style.textShadow = ''; };
@@ -344,9 +432,7 @@ function animateText(ms) {
     if (built.caret) {
       const typing = nH < hs.length;
       built.caret.style.opacity = typing || Math.floor(ms / 500) % 2 === 0 ? '1' : '0';
-      /* the caret follows the last typed letter */
-      const last = hs[Math.min(nH, hs.length) - 1];
-      if (last && last.nextSibling !== built.caret && !typing) built.head.appendChild(built.caret);
+      if (!typing && built.caret !== built.head.lastChild) built.head.appendChild(built.caret);
       if (typing && hs[nH]) built.head.insertBefore(built.caret, hs[nH]);
     }
     return;
@@ -356,8 +442,9 @@ function animateText(ms) {
     const step = anim === 'pop' ? 90 : 28, dur = anim === 'pop' ? 420 : 520;
     hs.forEach((s, i) => {
       const p = clamp((ms - i * step) / dur);
-      if (anim === 'pop') { const e = easeBack(p); s.style.transform = `scale(${Math.max(0, e)})`; s.style.opacity = String(clamp(p * 3)); }
-      else { const e = easeBack(p); s.style.transform = `translateY(${(1 - e) * 0.9}em)`; s.style.opacity = String(clamp(p * 2)); }
+      const e = easeBack(p);
+      if (anim === 'pop') { s.style.transform = `scale(${Math.max(0, e)})`; s.style.opacity = String(clamp(p * 3)); }
+      else { s.style.transform = `translateY(${(1 - e) * 0.9}em)`; s.style.opacity = String(clamp(p * 2)); }
     });
     const subStart = hs.length * step * .6 + 200;
     ss.forEach((s, i) => { const p = clamp((ms - subStart - i * 10) / 400); s.style.opacity = String(easeOut(p)); s.style.transform = `translateY(${(1 - easeOut(p)) * .4}em)`; });
@@ -383,9 +470,9 @@ function animateText(ms) {
   }
 
   if (anim === 'wave') {
-    const intro = (s, i, start) => clamp((ms - start - i * 20) / 300);
-    hs.forEach((s, i) => { const y = Math.sin(ms / 1000 * 5 - i * .45) * .12; s.style.transform = `translateY(${y}em)`; s.style.opacity = String(intro(s, i, 0)); });
-    ss.forEach((s, i) => { s.style.opacity = String(intro(s, i, 200)); });
+    const intro = (i, start) => clamp((ms - start - i * 20) / 300);
+    hs.forEach((s, i) => { const y = Math.sin(ms / 1000 * 5 - i * .45) * .12; s.style.transform = `translateY(${y}em)`; s.style.opacity = String(intro(i, 0)); });
+    ss.forEach((s, i) => { s.style.opacity = String(intro(i, 200)); });
     return;
   }
 
@@ -393,8 +480,7 @@ function animateText(ms) {
     const n = Math.max(hs.length, 1);
     const pos = ((ms / 1000) * .55 % 1.6) - .3;
     hs.forEach((s, i) => {
-      const d = Math.abs(i / n - pos);
-      const k = clamp(1 - d * 5);
+      const k = clamp(1 - Math.abs(i / n - pos) * 5);
       s.style.color = k > 0 ? `color-mix(in srgb, #ffffff ${Math.round(k * 85)}%, currentColor)` : '';
       s.style.textShadow = k > 0 ? `0 0 ${(.6 * k).toFixed(2)}em rgba(255,255,255,${(.8 * k).toFixed(2)})` : '';
       s.style.opacity = String(clamp((ms - i * 15) / 250));
@@ -406,42 +492,31 @@ function animateText(ms) {
   if (anim === 'glow') {
     const g = .5 + .5 * Math.sin(ms / 1000 * 3);
     hs.forEach((s, i) => { s.style.opacity = String(clamp((ms - i * 15) / 300)); s.style.textShadow = `0 0 ${(.2 + .8 * g).toFixed(2)}em rgba(${hexRgb(cfg.accent)},.95)`; });
-    ss.forEach((s, i) => { s.style.opacity = String(clamp((ms - 200) / 300)); });
+    ss.forEach((s) => { s.style.opacity = String(clamp((ms - 200) / 300)); });
   }
 }
 
-/* ---------------- images ---------------- */
+/* ---------------- the logo's own little motion ---------------- */
 
-function animateImages(ms) {
-  if (!built.media || !built.imgs.length) return;
-  const n = built.imgs.length;
-  const per = Math.max(cfg.imageSec, .5) * 1000;
-  const idx = n > 1 ? Math.floor(ms / per) % n : 0;
-  if (idx !== imgShown) {
-    imgPrev = imgShown < 0 ? idx : imgShown;
-    imgShown = idx;
-    imgSwapAt = imgShown === imgPrev ? -1e9 : Math.floor(ms / per) * per;
-    built.b.src = built.imgs[imgPrev];
-    built.a.src = built.imgs[idx];
+function animateLogo(ms) {
+  const img = built.img;
+  if (!img) return;
+  const t = ms / 1000;
+  const behind = built.lay === 'behind';
+  let tr = behind ? `scale(${(Math.max(1, built.it.imageSize) * 1.04).toFixed(3)})` : '';
+  switch (built.it.logoAnim) {
+    case 'float': tr += ` translateY(${(Math.sin(t * 2) * (behind ? 1.5 : 6)).toFixed(2)}%)`; break;
+    case 'pulse': tr += ` scale(${(1 + .06 * Math.sin(t * 3.2)).toFixed(4)})`; break;
+    case 'spin': { const c = t % 4; const r = c < .9 ? easeInOut(c / .9) * 360 : 0; tr += ` perspective(20em) rotateY(${r.toFixed(1)}deg)`; break; }
+    case 'wobble': tr += ` rotate(${(Math.sin(t * 2.4) * (behind ? 1.5 : 7)).toFixed(2)}deg)`; break;
+    case 'bounce': { const c = t % 2.2; const h = c < .6 ? Math.sin(c / .6 * Math.PI) : 0; tr += ` translateY(${(-h * 14).toFixed(2)}%) scale(${(1 + .04 * h).toFixed(4)}, ${(1 - .03 * h).toFixed(4)})`; break; }
+    case 'shine': {
+      const sh = $('.lshine', built.media);
+      const x = (t % 2.8) / .8;
+      if (sh) sh.style.setProperty('--lshine', x < 1 ? `${(-60 + x * 200).toFixed(1)}%` : '-60%');
+      break; }
   }
-  const swap = 650;
-  const p = clamp((ms - imgSwapAt) / swap);
-  const a = built.a.style, b = built.b.style;
-  if (p >= 1) { a.transform = ''; a.opacity = '1'; a.filter = ''; a.clipPath = ''; b.opacity = '0'; return; }
-  const e = easeInOut(p);
-  a.filter = ''; b.filter = ''; a.clipPath = ''; b.transform = ''; b.opacity = '1';
-  switch (cfg.imageAnim) {
-    case 'slide': a.transform = `translateY(${(1 - e) * 100}%)`; b.transform = `translateY(${-e * 100}%)`; a.opacity = '1'; break;
-    case 'flip': {
-      const first = p < .5;
-      a.opacity = first ? '0' : '1'; b.opacity = first ? '1' : '0';
-      a.transform = `perspective(30em) rotateY(${(1 - e) * 90}deg)`; b.transform = `perspective(30em) rotateY(${-e * 90}deg)`; break; }
-    case 'zoom': a.transform = `scale(${.4 + .6 * easeBack(p)})`; a.opacity = String(e); b.transform = `scale(${1 + e * .6})`; b.opacity = String(1 - e); break;
-    case 'blur': a.opacity = String(e); a.filter = `blur(${(1 - e) * 12}px)`; b.opacity = String(1 - e); b.filter = `blur(${e * 12}px)`; break;
-    case 'wipe': a.opacity = '1'; a.clipPath = `inset(0 ${(1 - e) * 100}% 0 0)`; break;
-    case 'spin': a.transform = `rotate(${(1 - e) * -180}deg) scale(${e})`; a.opacity = '1'; b.transform = `rotate(${e * 180}deg) scale(${1 - e})`; break;
-    default: a.opacity = String(e); a.transform = ''; b.opacity = String(1 - e);
-  }
+  img.style.transform = tr.trim();
 }
 
 /* ---------------- the card coming and going ---------------- */
@@ -452,21 +527,19 @@ function cardStyle(kind, p, leaving) {
   if (p >= 1) return st;
   if (p <= 0) { st.opacity = '0'; return st; }
   const [vx, vy] = slideVec();
-  const e = leaving ? easeIn(1 - p) : 0;
-  const ei = leaving ? 1 - e : easeOut(p);
+  const ei = leaving ? easeIn(p) : easeOut(p);
   switch (kind) {
     case 'slide': { const d = 1 - (leaving ? 1 - easeIn(1 - p) : easeOut(p)); st.transform = `translate(${vx * d * 120}%, ${vy * d * 160}%)`; st.opacity = String(clamp(p * 3)); break; }
     case 'slideup': { const d = 1 - (leaving ? 1 - easeIn(1 - p) : easeBack(p)); st.transform = `translateY(${d * 140}%)`; st.opacity = String(clamp(p * 2.5)); break; }
     case 'fade': st.opacity = String(easeInOut(p)); st.transform = `translateY(${(1 - easeOut(p)) * .8}rem)`; break;
-    case 'pop': { const s = leaving ? easeIn(p) * 1 : easeBack(p); st.transform = `scale(${Math.max(0, s)})`; st.opacity = String(clamp(p * 4)); break; }
+    case 'pop': { const s = leaving ? easeIn(p) : easeBack(p); st.transform = `scale(${Math.max(0, s)})`; st.opacity = String(clamp(p * 4)); break; }
     case 'zoom': { const s = 1 + (1 - easeOut(p)) * .9; st.transform = `scale(${s})`; st.opacity = String(easeOut(p)); st.filter = `blur(${(1 - easeOut(p)) * 14}px)`; break; }
     case 'flip': { const a = (1 - (leaving ? 1 - easeIn(1 - p) : easeBack(p))) * 90; st.transform = `perspective(50rem) rotateX(${a}deg)`; st.opacity = String(clamp(p * 3)); break; }
     case 'drop': { const y = leaving ? (1 - p) * 140 : (1 - bounce(p)) * -160; st.transform = `translateY(${y}%)`; st.opacity = String(clamp(p * 4)); break; }
     case 'wipe': { const r = (1 - easeInOut(p)) * 100; st.clipPath = vx > 0 ? `inset(0 0 0 ${r}%)` : `inset(0 ${r}% 0 0)`; break; }
     case 'glitch': {
       const f = Math.floor(liveNow / 45);
-      const on = hash(f * 3.1) < .3 + .7 * p;
-      st.opacity = on ? '1' : '0';
+      st.opacity = hash(f * 3.1) < .3 + .7 * p ? '1' : '0';
       const j = (1 - p) * 30;
       st.transform = `translate(${(hash(f) - .5) * j}px, ${(hash(f + 9) - .5) * j * .3}px) skewX(${(hash(f + 4) - .5) * (1 - p) * 20}deg)`;
       const off = ((1 - p) * 8).toFixed(1);
@@ -475,13 +548,13 @@ function cardStyle(kind, p, leaving) {
       st.clipPath = p < .85 ? `inset(${sl.toFixed(1)}% 0 ${(hash(f + 5) * (100 - sl) * .6).toFixed(1)}% 0)` : '';
       break; }
     case 'spin': st.transform = `rotate(${(1 - ei) * (leaving ? 200 : -200)}deg) scale(${ei})`; st.opacity = String(clamp(p * 3)); break;
-    case 'expand': { const s = leaving ? easeIn(p) : easeOut(p); st.transform = `scaleX(${Math.max(.001, s)})`; st.opacity = String(clamp(p * 3)); break; }
+    case 'expand': st.transform = `scaleX(${Math.max(.001, ei)})`; st.opacity = String(clamp(p * 3)); break;
     default: st.opacity = String(p);
   }
   return st;
 }
 
-/* subtle motion while it's on screen */
+/* subtle motion of the whole card while it's on screen */
 function idle(ms) {
   const c = built.card.style;
   let t = '';
@@ -489,114 +562,156 @@ function idle(ms) {
     case 'float': t = `translateY(${Math.sin(ms / 1000 * 1.6) * .35}rem)`; break;
     case 'tilt': t = `perspective(60rem) rotateY(${Math.sin(ms / 1000 * 1.1) * 5}deg) rotateX(${Math.cos(ms / 1000 * .9) * 3}deg)`; break;
     case 'pulse': t = `scale(${1 + Math.sin(ms / 1000 * 3) * .025})`; break;
-    case 'flicker': {
-      const f = Math.floor(ms / 70);
-      const dim = hash(f * 1.7) < .05 ? .55 : 1;
-      built.card.style.setProperty('--flick', dim);
-      c.filter = dim < 1 ? 'brightness(.6)' : '';
-      break; }
+    case 'flicker': c.filter = hash(Math.floor(ms / 70) * 1.7) < .05 ? 'brightness(.6)' : ''; break;
   }
   if (cfg.idle === 'shine') {
-    const per = 3500, x = (ms % per) / 900;
+    const x = (ms % 3500) / 900;
     built.shine.style.setProperty('--shine', x < 1 ? `${-60 + x * 200}%` : '-60%');
   }
   if (cfg.style === 'spot') built.card.style.setProperty('--spin', `${(ms / 1000 * 70) % 360}deg`);
   return t;
 }
 
-/* ---------------- timeline ---------------- */
+/* ---------------- timeline: the sponsors one after another ---------------- */
 
-/* returns { p (0..1 how far in), leaving, shownMs (ms since it started appearing) } or null */
-function timeline(now) {
+function seq() {
   const enter = Math.max(cfg.enterMs, 1), exit = Math.max(cfg.exitMs, 1);
-  const show = Math.max(cfg.showSec, .5) * 1000, gap = Math.max(cfg.gapSec, 0) * 1000;
+  const durs = list.map((it) => enter + it.showSec * 1000 + exit);
+  const between = Math.max(cfg.betweenSec, 0) * 1000;
+  const total = durs.reduce((a, b) => a + b, 0) + between * (list.length - 1);
+  return { enter, exit, durs, between, total };
+}
 
-  if (hideAt >= 0) {
-    const p = 1 - (now - hideAt) / exit;
-    if (p <= 0) return null;
-    return { p, leaving: true, shownMs: now - (triggerAt >= 0 ? triggerAt : epoch) };
+/* state of sponsor idx, t ms after it started coming in */
+function phase(s, idx, t, hold) {
+  const show = list[idx].showSec * 1000;
+  if (t < s.enter) return { idx, p: t / s.enter, leaving: false, shownMs: t };
+  if (hold || t < s.enter + show) return { idx, p: 1, leaving: false, shownMs: t };
+  return { idx, p: 1 - (t - s.enter - show) / s.exit, leaving: true, shownMs: t };
+}
+
+/* which sponsor is up `local` ms into the run */
+function locate(s, local) {
+  for (let i = 0; i < list.length; i++) {
+    if (local < s.durs[i]) return phase(s, i, local, false);
+    local -= s.durs[i];
+    if (local < s.between) return null;
+    local -= s.between;
   }
+  return null;
+}
 
-  let local;
+function baseTimeline(now) {
+  const s = seq();
+  if (focus >= 0 && focus < list.length) {
+    const local = now - (triggerAt >= 0 ? triggerAt : epoch);
+    return local < 0 ? null : phase(s, focus, local, true);
+  }
   if (cfg.mode === 'manual' || cfg.mode === 'onshow') {
     if (triggerAt < 0) return null;
-    local = now - triggerAt;
-    if (local > enter + show + exit) return null;
-  } else {
-    local = now - epoch - cfg.delaySec * 1000;
-    if (local < 0) return null;
-    if (cfg.mode === 'always') return { p: clamp(local / enter), leaving: false, shownMs: local };
-    const period = enter + show + exit + gap;
-    const k = Math.floor(local / period);
-    if (cfg.loops > 0 && k >= cfg.loops) return null;
-    local -= k * period;
-    if (local > enter + show + exit) return null;
+    const local = now - triggerAt;
+    return local < s.total ? locate(s, local) : null;
   }
-  if (local < enter) return { p: local / enter, leaving: false, shownMs: local };
-  if (local < enter + show) return { p: 1, leaving: false, shownMs: local };
-  return { p: 1 - (local - enter - show) / exit, leaving: true, shownMs: local };
+  let local = now - epoch - cfg.delaySec * 1000;
+  if (local < 0) return null;
+  if (cfg.mode === 'always') {
+    if (list.length === 1) return phase(s, 0, local, true);
+    return locate(s, local % (s.total + s.between));
+  }
+  const period = s.total + Math.max(cfg.gapSec, 0) * 1000;
+  const k = Math.floor(local / period);
+  if (cfg.loops > 0 && k >= cfg.loops) return null;
+  local -= k * period;
+  return local < s.total ? locate(s, local) : null;
+}
+
+function timeline(now) {
+  if (hideAt >= 0) {
+    if (!hideFrom) return null;
+    const p = Math.min(hideFrom.p, 1) - (now - hideAt) / Math.max(cfg.exitMs, 1);
+    if (p <= 0) return null;
+    return { idx: hideFrom.idx, p, leaving: true, shownMs: hideFrom.shownMs + now - hideAt };
+  }
+  return baseTimeline(now);
 }
 
 function render(now) {
   liveNow = now;
-  if (!built) return;
   const tl = timeline(now);
-  const card = built.card;
-  if (!tl) { card.style.opacity = '0'; card.style.visibility = 'hidden'; msgShown = -1; imgShown = -1; return; }
+  if (!tl) { const c = $('#card'); c.style.opacity = '0'; c.style.visibility = 'hidden'; return; }
+  if (!built || built.idx !== tl.idx) build(tl.idx);
+  const it = built.it, card = built.card;
   card.style.visibility = '';
 
-  const st = cardStyle(tl.leaving ? cfg.exit : cfg.enter, clamp(tl.p), tl.leaving);
+  const st = cardStyle(tl.leaving ? it.exit : it.enter, clamp(tl.p), tl.leaving);
   const motion = idle(tl.shownMs);
   card.style.transform = [st.transform, motion].filter(Boolean).join(' ');
   card.style.opacity = st.opacity;
   if (cfg.idle !== 'flicker' || st.filter) card.style.filter = st.filter;
   card.style.clipPath = st.clipPath;
 
-  /* messages rotate while it's up; the ticker scrolls them instead */
   if (built.track) {
     const w = built.track.scrollWidth / 4 || 1;
     const speed = 160 * (window.innerHeight / 1080);
-    const x = -((tl.shownMs / 1000 * speed) % w);
-    built.track.style.transform = `translateX(${x}px)`;
+    built.track.style.transform = `translateX(${-((tl.shownMs / 1000 * speed) % w)}px)`;
   } else {
-    const msgs = messages();
-    const per = Math.max(cfg.messageSec, 1) * 1000;
-    const idx = msgs.length > 1 ? Math.floor(tl.shownMs / per) % msgs.length : 0;
-    if (idx !== msgShown) { msgShown = idx; msgAt = msgs.length > 1 ? Math.floor(tl.shownMs / per) * per : 0; showMessage(idx); }
-    /* the first message animates as the card lands */
-    const textStart = msgAt === 0 ? Math.min(cfg.enterMs * .5, 400) : msgAt;
-    animateText(tl.shownMs - textStart);
+    animateText(tl.shownMs - Math.min(cfg.enterMs * .5, 400));
   }
-  animateImages(tl.shownMs);
+  animateLogo(tl.shownMs);
 }
 
 /* ---------------- wiring ---------------- */
 
-function apply(next, restart) {
-  cfg = Object.assign({}, DEFAULTS, next || {});
-  build();
-  if (restart !== false) { epoch = TEST ? 0 : performance.now(); hideAt = -1; if (cfg.mode === 'manual' || cfg.mode === 'onshow') triggerAt = -1; }
+/* what, when changed in the studio, should replay the focused sponsor's entrance */
+function entranceKey(c, items, f) {
+  const it = items[f] || {};
+  return JSON.stringify([f, c.style, c.enterMs, it.enter, it.textAnim, it.layout, it.image, c.anchor]);
 }
 
-function play() { const now = TEST ? liveNow : performance.now(); hideAt = -1; triggerAt = now; if (cfg.mode === 'loop' || cfg.mode === 'always') epoch = now; }
-function hideNow() { const now = TEST ? liveNow : performance.now(); if (timeline(now)) hideAt = now; }
+function apply(next, restart) {
+  const prevKey = built && focus >= 0 ? entranceKey(cfg, list, focus) : null;
+  cfg = Object.assign({}, DEFAULTS, next || {});
+  list = cleanItems(next || {});
+  const f = Number.isInteger(cfg.__focus) ? cfg.__focus : -1;
+  focus = f >= 0 && f < list.length ? f : -1;
+  styleStage();
+  built = null;
+  /* typing in the studio keeps the sponsor up instead of replaying it on every key */
+  if (restart === 'auto') restart = !(focus >= 0 && prevKey === entranceKey(cfg, list, focus));
+  if (restart !== false) {
+    epoch = TEST ? 0 : performance.now(); hideAt = -1; hideFrom = null;
+    if (cfg.mode === 'manual' || cfg.mode === 'onshow' || focus >= 0) triggerAt = -1;
+  }
+  return restart;
+}
+
+function play() {
+  const now = TEST ? liveNow : performance.now();
+  hideAt = -1; hideFrom = null; triggerAt = now;
+  if (cfg.mode === 'loop' || cfg.mode === 'always') epoch = now;
+}
+function hideNow() {
+  const now = TEST ? liveNow : performance.now();
+  const tl = baseTimeline(now);
+  if (tl && hideAt < 0) { hideFrom = tl; hideAt = now; }
+}
 
 window.addEventListener('spazzSponsorConfig', (e) => {
   const preview = e.detail && e.detail.__preview;
-  apply(e.detail, true);
-  if (preview) play();
+  const restarted = apply(e.detail, preview ? 'auto' : true);
+  if (preview && restarted) play();
 });
 window.addEventListener('spazzSponsorPlay', play);
 window.addEventListener('spazzSponsorHide', hideNow);
 window.addEventListener('obsSourceActiveChanged', (e) => {
   const active = e.detail && e.detail.active;
   if (active && cfg.mode === 'onshow') play();
-  if (!active && cfg.mode === 'onshow') { triggerAt = -1; hideAt = -1; }
+  if (!active && cfg.mode === 'onshow') { triggerAt = -1; hideAt = -1; hideFrom = null; }
 });
 
 async function boot() {
   const q = new URLSearchParams(location.search);
-  if (TEST && q.get('bg')) { document.body.style.background = `url(${q.get('bg')}) center / cover`; }
+  if (TEST && q.get('bg')) document.body.style.background = `url(${q.get('bg')}) center / cover`;
   const file = q.get('cfg');
   let loaded = null;
   if (file) {
@@ -614,10 +729,11 @@ async function boot() {
 
 /* tests drive the clock themselves */
 window.__sponsor = {
-  apply: (c) => apply(c, true),
+  apply: (c, how) => { liveNow = 0; const r = apply(c, how === undefined ? true : how); if (c && c.__preview && r) play(); return r; },
   render: (ms) => render(ms),
   play: (ms) => { liveNow = ms; play(); },
   hide: (ms) => { liveNow = ms; hideNow(); },
+  state: () => ({ focus, n: list.length, idx: built && built.idx, lay: built && built.lay }),
 };
 boot();
 </script>

@@ -69,6 +69,7 @@ class SpazzDockTabs;
 class SpazzMusicPlayer;
 class SpazzMusicDock;
 class SpazzUpdater;
+class SpazzKick;
 struct QuickTransition;
 
 namespace OBS {
@@ -474,6 +475,12 @@ private:
 
 	/* SPAZZbs: updates itself from the project's GitHub releases */
 	QPointer<SpazzUpdater> spazzUpdater;
+	QPointer<SpazzKick> spazzKick;
+
+public:
+	SpazzKick *GetSpazzKick() const;
+
+private:
 
 public:
 	void AddDockWidget(QDockWidget *dock, Qt::DockWidgetArea area, bool extraBrowser = false);

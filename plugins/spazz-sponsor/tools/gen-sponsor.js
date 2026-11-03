@@ -6,7 +6,7 @@ const { LISTS, PRESETS } = require('./sponsor-spec.js');
 /* page config key -> source setting key and kind */
 const KEYS = {
   style: ['style', 'str'], enter: ['enter', 'str'], exit: ['exit', 'str'], textAnim: ['text_anim', 'str'],
-  imageAnim: ['image_anim', 'str'], idle: ['idle', 'str'], anchor: ['anchor', 'str'], font: ['font', 'str'],
+  logoAnim: ['logo_anim', 'str'], idle: ['idle', 'str'], anchor: ['anchor', 'str'], font: ['font', 'str'],
   accent: ['accent', 'color'], accent2: ['accent2', 'color'], text: ['text_color', 'color'], bg: ['bg_color', 'color'],
   bgOpacity: ['bg_opacity', 'num'], size: ['size', 'num'], marginX: ['margin_x', 'int'], marginY: ['margin_y', 'int'],
 };

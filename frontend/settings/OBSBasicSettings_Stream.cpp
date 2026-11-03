@@ -1,5 +1,7 @@
 #include "OBSBasicSettings.hpp"
 
+#include <utility/SpazzKick.hpp>
+
 #ifdef YOUTUBE_ENABLED
 #include <docks/YouTubeAppDock.hpp>
 #endif
@@ -90,10 +92,27 @@ void OBSBasicSettings::InitStreamPage()
 		&OBSBasicSettings::UpdateMultitrackVideo);
 	connect(ui->multitrackVideoConfigOverrideEnable, &QCheckBox::toggled, this,
 		&OBSBasicSettings::UpdateMultitrackVideo);
+
+	/* SPAZZbs: a second stream to Kick, started with the main one */
+	spazzKick = new SpazzKickSettings(ui->streamPage);
+	if (QBoxLayout *page = qobject_cast<QBoxLayout *>(ui->streamPage->layout())) {
+		int at = page->count();
+		if (at > 0 && page->itemAt(at - 1)->spacerItem())
+			at--;
+		page->insertWidget(at, spazzKick);
+	}
+	connect(spazzKick->enable, &QCheckBox::toggled, this, &OBSBasicSettings::Stream1Changed);
+	connect(spazzKick->server, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
+	connect(spazzKick->key, &QLineEdit::textChanged, this, &OBSBasicSettings::Stream1Changed);
+	connect(spazzKick->encoder, &QComboBox::currentIndexChanged, this, &OBSBasicSettings::Stream1Changed);
+	connect(spazzKick->bitrate, &QSpinBox::valueChanged, this, &OBSBasicSettings::Stream1Changed);
 }
 
 void OBSBasicSettings::LoadStream1Settings()
 {
+	if (spazzKick)
+		spazzKick->Load(main->Config());
+
 	bool ignoreRecommended = config_get_bool(main->Config(), "Stream1", "IgnoreRecommended");
 	int whipSimulcastTotalLayers = config_get_int(main->Config(), "Stream1", "WHIPSimulcastTotalLayers");
 
@@ -266,6 +285,13 @@ void OBSBasicSettings::SwapMultiTrack(const char *protocol)
 
 void OBSBasicSettings::SaveStream1Settings()
 {
+	/* SPAZZbs: the Kick section saves first; nothing below can skip it */
+	if (spazzKick) {
+		spazzKick->Save(main->Config());
+		if (SpazzKick *kick = main->GetSpazzKick())
+			kick->Refresh();
+	}
+
 	bool customServer = IsCustomService();
 	bool whip = IsWHIP();
 	const char *service_id = "rtmp_common";

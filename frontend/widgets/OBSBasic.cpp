@@ -36,6 +36,7 @@
 #include <utility/SpazzUpdater.hpp>
 #include <dialogs/SpazzStingerStudio.hpp>
 #include <dialogs/SpazzSponsorCenter.hpp>
+#include <utility/SpazzKick.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -118,6 +119,11 @@ std::once_flag saveOnceFlag;
 
 extern void setupDockAction(QDockWidget *dock);
 
+SpazzKick *OBSBasic::GetSpazzKick() const
+{
+	return spazzKick;
+}
+
 OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new Ui::OBSBasic)
 {
 	collections = {};
@@ -180,6 +186,11 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 
 	/* Add controls dock */
 	OBSBasicControls *controls = new OBSBasicControls(this);
+
+	/* SPAZZbs: "Multistream to Kick" right under Start Streaming */
+	spazzKick = new SpazzKick(this);
+	if (QVBoxLayout *buttons = controls->findChild<QVBoxLayout *>("buttonsVLayout"))
+		buttons->insertWidget(1, spazzKick->MakeToggle(controls));
 	controlsDock = new OBSDock(this);
 	controlsDock->setObjectName(QString::fromUtf8("controlsDock"));
 	controlsDock->setWindowTitle(QTStr("Basic.Main.Controls"));
@@ -1179,6 +1190,8 @@ void OBSBasic::OBSInit()
 		QAction *sponsors = new QAction(QTStr("Sponsorcenter.Menu"), this);
 		ui->menuTools->insertAction(studio, sponsors);
 		connect(sponsors, &QAction::triggered, this, [this]() { SpazzSponsorCenter::Open(this); });
+		/* a spot's Properties window has "Edit sponsors in SPONSORCENTER" */
+		SpazzSponsorCenter::RegisterOpenProc(this);
 	}
 
 	/* SPAZZbs: Help > Update SPAZZbs..., plus a quiet check on launch */

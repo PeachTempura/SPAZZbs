@@ -16,8 +16,13 @@ const LISTS = {
     ['rise', 'Letters rise in'], ['type', 'Typewriter'], ['pop', 'Words pop'], ['decode', 'Decode (scramble)'],
     ['wave', 'Wave'], ['shimmer', 'Shimmer'], ['glow', 'Glow pulse'], ['none', 'None'],
   ],
-  imageAnim: [
-    ['crossfade', 'Crossfade'], ['slide', 'Slide'], ['flip', 'Flip'], ['zoom', 'Zoom'], ['blur', 'Blur'], ['wipe', 'Wipe'], ['spin', 'Spin'],
+  layout: [
+    ['left', 'Logo left of the text'], ['right', 'Logo right of the text'], ['above', 'Logo above the text'],
+    ['behind', 'Logo behind the text'], ['only', 'Logo only'], ['text', 'Text only'],
+  ],
+  logoAnim: [
+    ['none', 'Still'], ['float', 'Float'], ['pulse', 'Pulse'], ['spin', 'Coin flip'], ['wobble', 'Wobble'],
+    ['bounce', 'Bounce'], ['shine', 'Shine'],
   ],
   idle: [
     ['float', 'Float'], ['tilt', 'Tilt'], ['pulse', 'Pulse'], ['shine', 'Shine sweep'], ['flicker', 'Neon flicker'], ['none', 'Still'],
@@ -39,33 +44,34 @@ const LISTS = {
   imageFit: [['contain', 'Fit (logos)'], ['cover', 'Fill (photos)']],
 };
 
-// Presets set the look and motion; your text, images and timing stay.
+// Presets set the look and motion; enter / exit / textAnim / logoAnim go onto every sponsor.
+// Your logos, text and timing stay.
 const PRESETS = [
-  { name: 'Glass Card', p: { style: 'glass', enter: 'slide', exit: 'slide', textAnim: 'rise', imageAnim: 'crossfade', idle: 'float',
+  { name: 'Glass Card', p: { style: 'glass', enter: 'slide', exit: 'slide', textAnim: 'rise', logoAnim: 'float', idle: 'float',
     accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#140f22', bgOpacity: 0.82, anchor: 'bl' } },
-  { name: 'Broadcast Lower Third', p: { style: 'lower', enter: 'wipe', exit: 'wipe', textAnim: 'type', imageAnim: 'slide', idle: 'none',
+  { name: 'Broadcast Lower Third', p: { style: 'lower', enter: 'wipe', exit: 'wipe', textAnim: 'type', logoAnim: 'none', idle: 'none',
     accent: '#e8193c', accent2: '#ffd23d', text: '#ffffff', bg: '#101014', bgOpacity: 0.92, anchor: 'bl' } },
-  { name: 'Neon Night', p: { style: 'neon', enter: 'glitch', exit: 'fade', textAnim: 'glow', imageAnim: 'blur', idle: 'flicker',
+  { name: 'Neon Night', p: { style: 'neon', enter: 'glitch', exit: 'fade', textAnim: 'glow', logoAnim: 'pulse', idle: 'flicker',
     accent: '#ff2bd6', accent2: '#00e5ff', text: '#ffffff', bg: '#07030f', bgOpacity: 0.75, anchor: 'br' } },
-  { name: 'Sunset Ribbon', p: { style: 'ribbon', enter: 'expand', exit: 'slide', textAnim: 'pop', imageAnim: 'flip', idle: 'shine',
+  { name: 'Sunset Ribbon', p: { style: 'ribbon', enter: 'expand', exit: 'slide', textAnim: 'pop', logoAnim: 'wobble', idle: 'shine',
     accent: '#b8336a', accent2: '#ffc15e', text: '#ffffff', bg: '#3a1c71', bgOpacity: 1, anchor: 'tl' } },
-  { name: 'News Ticker', p: { style: 'ticker', enter: 'slideup', exit: 'slideup', textAnim: 'none', imageAnim: 'flip', idle: 'none',
+  { name: 'News Ticker', p: { style: 'ticker', enter: 'slideup', exit: 'slideup', textAnim: 'none', logoAnim: 'none', idle: 'none',
     accent: '#1e88ff', accent2: '#ffd23d', text: '#ffffff', bg: '#0b1220', bgOpacity: 0.94, anchor: 'bc', marginY: 0 } },
-  { name: 'Sticker Pop', p: { style: 'sticker', enter: 'pop', exit: 'pop', textAnim: 'wave', imageAnim: 'zoom', idle: 'float',
+  { name: 'Sticker Pop', p: { style: 'sticker', enter: 'pop', exit: 'pop', textAnim: 'wave', logoAnim: 'bounce', idle: 'float',
     accent: '#ff3f8e', accent2: '#2bb8ff', text: '#ffffff', bg: '#ffffff', bgOpacity: 1, anchor: 'br' } },
-  { name: '2001 Window', p: { style: 'y2k', enter: 'drop', exit: 'pop', textAnim: 'type', imageAnim: 'wipe', idle: 'none',
+  { name: '2001 Window', p: { style: 'y2k', enter: 'drop', exit: 'pop', textAnim: 'type', logoAnim: 'none', idle: 'none',
     accent: '#3a1c71', accent2: '#f2545b', text: '#1e1530', bg: '#d8d4de', bgOpacity: 1, anchor: 'tr' } },
-  { name: 'Corner Bug', p: { style: 'bug', enter: 'fade', exit: 'fade', textAnim: 'none', imageAnim: 'crossfade', idle: 'pulse',
+  { name: 'Corner Bug', p: { style: 'bug', enter: 'fade', exit: 'fade', textAnim: 'none', logoAnim: 'none', idle: 'pulse',
     accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#000000', bgOpacity: 0.6, anchor: 'tr', size: 1 } },
-  { name: 'Spotlight', p: { style: 'spot', enter: 'zoom', exit: 'zoom', textAnim: 'decode', imageAnim: 'flip', idle: 'none',
+  { name: 'Spotlight', p: { style: 'spot', enter: 'zoom', exit: 'zoom', textAnim: 'decode', logoAnim: 'spin', idle: 'none',
     accent: '#ff5ad1', accent2: '#ffc15e', text: '#ffffff', bg: '#120a1e', bgOpacity: 0.95, anchor: 'mc' } },
-  { name: 'Minimal', p: { style: 'minimal', enter: 'fade', exit: 'fade', textAnim: 'rise', imageAnim: 'crossfade', idle: 'none',
+  { name: 'Minimal', p: { style: 'minimal', enter: 'fade', exit: 'fade', textAnim: 'rise', logoAnim: 'none', idle: 'none',
     accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#000000', bgOpacity: 0, anchor: 'bc' } },
-  { name: 'Glitch Promo', p: { style: 'glass', enter: 'glitch', exit: 'glitch', textAnim: 'decode', imageAnim: 'blur', idle: 'tilt',
+  { name: 'Glitch Promo', p: { style: 'glass', enter: 'glitch', exit: 'glitch', textAnim: 'decode', logoAnim: 'pulse', idle: 'tilt',
     accent: '#00e5ff', accent2: '#ff2bd6', text: '#ffffff', bg: '#05060c', bgOpacity: 0.88, anchor: 'bl' } },
-  { name: 'Gold Luxe', p: { style: 'spot', enter: 'flip', exit: 'fade', textAnim: 'shimmer', imageAnim: 'crossfade', idle: 'none',
+  { name: 'Gold Luxe', p: { style: 'spot', enter: 'flip', exit: 'fade', textAnim: 'shimmer', logoAnim: 'shine', idle: 'none',
     accent: '#c98a12', accent2: '#ffe39a', text: '#fff6dd', bg: '#14100a', bgOpacity: 0.95, anchor: 'mr', font: 'Georgia' } },
-  { name: 'Arcade', p: { style: 'neon', enter: 'spin', exit: 'spin', textAnim: 'pop', imageAnim: 'spin', idle: 'pulse',
+  { name: 'Arcade', p: { style: 'neon', enter: 'spin', exit: 'spin', textAnim: 'pop', logoAnim: 'spin', idle: 'pulse',
     accent: '#ffe14d', accent2: '#5dff7a', text: '#ffffff', bg: '#0b0820', bgOpacity: 0.85, anchor: 'tc', font: 'Impact' } },
 ];
 

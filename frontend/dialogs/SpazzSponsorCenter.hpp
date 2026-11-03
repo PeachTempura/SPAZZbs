@@ -16,18 +16,26 @@
 #include <QDialog>
 #include <QPointer>
 
+#include <vector>
+
 class OBSPropertiesView;
 class OBSQTDisplay;
 class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QScrollArea;
+class QTimer;
+class QVBoxLayout;
+class SponsorCard;
 
 class SpazzSponsorCenter : public QDialog {
 	Q_OBJECT
 
 public:
-	static void Open(QWidget *parent);
+	static void Open(QWidget *parent, const QString &uuid = QString());
+	/* lets a spot's own Properties window open it here */
+	static void RegisterOpenProc(QWidget *mainWindow);
 	~SpazzSponsorCenter();
 
 protected:
@@ -46,12 +54,33 @@ private:
 	QPushButton *liveButton = nullptr;
 	QLabel *status = nullptr;
 
+	/* one card per sponsor */
+	QScrollArea *cardScroll = nullptr;
+	QVBoxLayout *cardsLayout = nullptr;
+	QPushButton *addButton = nullptr;
+	std::vector<SponsorCard *> cards;
+	int lastTouched = -1; /* "+" copies this one */
+	int focusCard = -1;   /* the preview holds this one on screen */
+	QTimer *pushTimer = nullptr;
+
 	void RefreshEditing(const QString &selectUuid = QString());
 	void EditingChanged();
 	void Replay();
 	void Save();
 	void PlayLive();
 	QString UniqueName(const QString &base) const;
+
+	void LoadCards();
+	void SyncCardsFromSettings();
+	SponsorCard *MakeCard(obs_data_t *item);
+	void Relayout();
+	void WriteItems();
+	void Push();
+	void CardChanged(SponsorCard *card);
+	void Touched(SponsorCard *card);
+	void CardAction(SponsorCard *card, int action);
+	void AddSponsor();
+	int IndexOf(const SponsorCard *card) const;
 
 	static void Draw(void *data, uint32_t cx, uint32_t cy);
 
