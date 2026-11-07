@@ -14,6 +14,8 @@
 #include <qt-wrappers.hpp>
 #include <utility/SpazzMusicPlayer.hpp>
 
+#include <obs-frontend-api.h>
+
 #include <QItemSelection>
 #include <QItemSelectionModel>
 #include <QBoxLayout>
@@ -30,6 +32,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QRandomGenerator>
 #include <QScrollBar>
 #include <QSet>
 #include <QDir>
@@ -1128,6 +1131,12 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	folderRow->addWidget(newFolderBtn);
 	folderRow->addWidget(syncBtn);
 	folderRow->addStretch(1);
+	/* the visualizers: style, colours and settings right from here */
+	auto *visBtn = new AmpButton(AmpButton::Glyph::Text, "VIS", playerPanel);
+	visBtn->setToolTip(QTStr("SPAZZ.Music.Vis.Tip"));
+	folderRow->addWidget(visBtn);
+	connect(visBtn, &QAbstractButton::clicked, this,
+		[this, visBtn]() { VisualizerMenu(visBtn->mapToGlobal(QPoint(0, visBtn->height()))); });
 	pv->addLayout(folderRow);
 
 	/* --- playlist panel --- */
@@ -1818,4 +1827,156 @@ void SpazzMusicDock::AddFolderDialog()
 	if (!dir.isEmpty()) {
 		player->AddPaths({dir});
 	}
+}
+
+/* ------------------------------------------------------------------------ */
+/* VIS: quick control of the SPAZZ visualizers in this scene collection     */
+
+static constexpr const char *kVizId = "spazz_visualizer";
+
+/* a list property's (label, value) pairs, in the visualizer's own words */
+static QList<QPair<QString, QString>> VizChoices(const char *key)
+{
+	QList<QPair<QString, QString>> out;
+	obs_properties_t *props = obs_get_source_properties(kVizId);
+	obs_property_t *p = props ? obs_properties_get(props, key) : nullptr;
+	for (size_t i = 0; p && i < obs_property_list_item_count(p); i++) {
+		out.push_back(
+			{QT_UTF8(obs_property_list_item_name(p, i)), QT_UTF8(obs_property_list_item_string(p, i))});
+	}
+	obs_properties_destroy(props);
+	return out;
+}
+
+static void VizSet(obs_source_t *src, const char *key, const QString &value)
+{
+	OBSDataAutoRelease s = obs_data_create();
+	obs_data_set_string(s, key, QT_TO_UTF8(value));
+	obs_source_update(src, s);
+}
+
+static void AddVizChoices(QMenu *menu, obs_source_t *src, const char *key,
+			  const QList<QPair<QString, QString>> &choices)
+{
+	OBSDataAutoRelease s = obs_source_get_settings(src);
+	const QString cur = QT_UTF8(obs_data_get_string(s, key));
+	OBSWeakSourceAutoRelease weak = obs_source_get_weak_source(src);
+	OBSWeakSource w = weak.Get();
+	for (const auto &c : choices) {
+		QAction *a = menu->addAction(c.first);
+		a->setCheckable(true);
+		a->setChecked(c.second == cur);
+		const QString value = c.second;
+		QObject::connect(a, &QAction::triggered, menu, [w, key, value]() {
+			OBSSourceAutoRelease live = obs_weak_source_get_source(w);
+			if (live) {
+				VizSet(live, key, value);
+			}
+		});
+	}
+}
+
+static void StepVizStyle(obs_source_t *src, int dir)
+{
+	const auto styles = VizChoices("style");
+	if (styles.isEmpty()) {
+		return;
+	}
+	OBSDataAutoRelease s = obs_source_get_settings(src);
+	const QString cur = QT_UTF8(obs_data_get_string(s, "style"));
+	int idx = 0;
+	for (int i = 0; i < styles.size(); i++) {
+		if (styles[i].second == cur) {
+			idx = i;
+		}
+	}
+	const int n = int(styles.size());
+	int next = dir == 0 && n > 1 ? (idx + 1 + int(QRandomGenerator::global()->bounded(n - 1))) % n
+				     : ((idx + dir) % n + n) % n;
+	VizSet(src, "style", styles[next].second);
+}
+
+static void FillVizMenu(QMenu *menu, obs_source_t *src)
+{
+	OBSWeakSourceAutoRelease weak = obs_source_get_weak_source(src);
+	OBSWeakSource w = weak.Get();
+	auto withSource = [w](auto fn) {
+		return [w, fn]() {
+			OBSSourceAutoRelease live = obs_weak_source_get_source(w);
+			if (live) {
+				fn(live.Get());
+			}
+		};
+	};
+
+	menu->addAction(QTStr("SPAZZ.Music.Vis.Next"), menu, withSource([](obs_source_t *s) { StepVizStyle(s, 1); }));
+	menu->addAction(QTStr("SPAZZ.Music.Vis.Prev"), menu, withSource([](obs_source_t *s) { StepVizStyle(s, -1); }));
+	menu->addAction(QTStr("SPAZZ.Music.Vis.Random"), menu, withSource([](obs_source_t *s) { StepVizStyle(s, 0); }));
+	menu->addSeparator();
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Style")), src, "style", VizChoices("style"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Colors")), src, "palette", VizChoices("palette"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Mirror")), src, "mirror", VizChoices("mirror"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Background")), src, "background", VizChoices("background"));
+	menu->addSeparator();
+	menu->addAction(QTStr("SPAZZ.Music.Vis.Settings"), menu,
+			withSource([](obs_source_t *s) { obs_frontend_open_source_properties(s); }));
+}
+
+void SpazzMusicDock::VisualizerMenu(const QPoint &at)
+{
+	if (!obs_source_get_display_name(kVizId)) {
+		return;
+	}
+
+	std::vector<OBSSource> vizs;
+	obs_enum_sources(
+		[](void *param, obs_source_t *src) {
+			if (strcmp(obs_source_get_unversioned_id(src), kVizId) == 0) {
+				static_cast<std::vector<OBSSource> *>(param)->push_back(src);
+			}
+			return true;
+		},
+		&vizs);
+
+	QMenu menu(this);
+	if (vizs.size() == 1) {
+		FillVizMenu(&menu, vizs[0]);
+	} else {
+		for (obs_source_t *src : vizs) {
+			FillVizMenu(menu.addMenu(QT_UTF8(obs_source_get_name(src))), src);
+		}
+	}
+	if (!vizs.empty()) {
+		menu.addSeparator();
+	}
+
+	/* a new one, full canvas, in the scene on screen */
+	menu.addAction(QTStr("SPAZZ.Music.Vis.Add"), this, []() {
+		OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
+		obs_scene_t *scene = obs_scene_from_source(sceneSource);
+		if (!scene) {
+			return;
+		}
+		OBSDataAutoRelease settings = obs_data_create();
+		struct obs_video_info ovi;
+		if (obs_get_video_info(&ovi)) {
+			obs_data_set_int(settings, "width", ovi.base_width);
+			obs_data_set_int(settings, "height", ovi.base_height);
+		}
+		const QString base = QT_UTF8(obs_source_get_display_name(kVizId));
+		QString name = base;
+		for (int i = 2;; i++) {
+			OBSSourceAutoRelease taken = obs_get_source_by_name(QT_TO_UTF8(name));
+			if (!taken) {
+				break;
+			}
+			name = QString("%1 %2").arg(base).arg(i);
+		}
+		OBSSourceAutoRelease created = obs_source_create(kVizId, QT_TO_UTF8(name), settings, nullptr);
+		if (created) {
+			obs_scene_add(scene, created);
+			obs_frontend_open_source_properties(created);
+		}
+	});
+	menu.exec(at);
 }

@@ -199,6 +199,7 @@ private:
 	void RebuildList();
 	void RebuildFolders();
 	void FolderMenu(const QPoint &pos);
+	void VisualizerMenu(const QPoint &at);
 	void NewFolder();
 	void UpdateTrack(int index);
 	void UpdateTotals();
