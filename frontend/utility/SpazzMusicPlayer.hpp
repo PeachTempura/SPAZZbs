@@ -132,6 +132,8 @@ private slots:
 	void HandleMediaStarted();
 	void SavePlaylist();
 	void RestoreFileAfterSave();
+	/* refresh the snapshot spazz_music_now hands out */
+	void UpdateNowPlaying();
 
 private:
 	OBSSource source;
@@ -156,6 +158,7 @@ private:
 	int kbps = 0;
 
 	QTimer saveTimer;
+	QTimer nowTimer;
 	bool callbackRegistered = false;
 
 	std::mutex analyzerMutex;

@@ -35,10 +35,65 @@ extern "C" {
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 #include "moc_SpazzMusicPlayer.cpp"
 
 namespace {
+/* "what's playing", for the visualizer's SPAZZamp player and SPAZZ Text:
+ * a snapshot the UI thread keeps fresh, read by the global proc
+ *   void spazz_music_now(out string title, out string artist, out int pos_ms,
+ *                        out int dur_ms, out int state, out bool shuffle,
+ *                        out bool repeat, out int repeat_mode, out int kbps,
+ *                        out int track, out float volume)
+ * from any thread (graphics thread included) without touching Qt objects.
+ * title is the whole title as shown in SPAZZamp; artist is the part before
+ * " - " when the file name has one. state is an obs_media_state. */
+struct NowPlaying {
+	std::mutex mutex;
+	std::string title;
+	std::string artist;
+	int64_t posMs = 0;
+	int64_t durMs = 0;
+	uint64_t atNs = 0; /* when posMs was read; playing time runs on from it */
+	int state = OBS_MEDIA_STATE_NONE;
+	bool shuffle = false;
+	int repeatMode = 0; /* 0 off, 1 all, 2 one */
+	int kbps = 0;
+	int track = 0; /* 1-based in the folder, 0 if not in it */
+	double volume = 1.0;
+};
+
+NowPlaying &Now()
+{
+	static NowPlaying now;
+	return now;
+}
+
+void NowProc(void *, calldata_t *cd)
+{
+	NowPlaying &n = Now();
+	std::lock_guard<std::mutex> lock(n.mutex);
+	int64_t pos = n.posMs;
+	if (n.state == OBS_MEDIA_STATE_PLAYING && n.atNs) {
+		pos += (int64_t)((os_gettime_ns() - n.atNs) / 1000000ULL);
+		if (n.durMs > 0 && pos > n.durMs) {
+			pos = n.durMs;
+		}
+	}
+	calldata_set_string(cd, "title", n.title.c_str());
+	calldata_set_string(cd, "artist", n.artist.c_str());
+	calldata_set_int(cd, "pos_ms", pos);
+	calldata_set_int(cd, "dur_ms", n.durMs);
+	calldata_set_int(cd, "state", n.state);
+	calldata_set_bool(cd, "shuffle", n.shuffle);
+	calldata_set_bool(cd, "repeat", n.repeatMode != 0);
+	calldata_set_int(cd, "repeat_mode", n.repeatMode);
+	calldata_set_int(cd, "kbps", n.kbps);
+	calldata_set_int(cd, "track", n.track);
+	calldata_set_float(cd, "volume", n.volume);
+}
+
 constexpr const char *kConfigSection = "SPAZZbs";
 constexpr const char *kConfigPlaylist = "MusicPlaylist";
 constexpr uint64_t kSilenceNs = 250000000ULL;
@@ -114,6 +169,53 @@ SpazzMusicPlayer::SpazzMusicPlayer(QObject *parent)
 
 	/* the scene collection is already loaded by the time we're created */
 	Bind();
+
+	/* what's playing, for the visualizer's player and SPAZZ Text */
+	static bool procAdded = false;
+	if (!procAdded) {
+		proc_handler_add(obs_get_proc_handler(),
+				 "void spazz_music_now(out string title, out string artist, out int pos_ms, "
+				 "out int dur_ms, out int state, out bool shuffle, out bool repeat, "
+				 "out int repeat_mode, out int kbps, out int track, out float volume)",
+				 NowProc, nullptr);
+		procAdded = true;
+	}
+	connect(this, &SpazzMusicPlayer::CurrentChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	connect(this, &SpazzMusicPlayer::StateChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	connect(this, &SpazzMusicPlayer::VolumeChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	connect(this, &SpazzMusicPlayer::TrackUpdated, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	nowTimer.setInterval(500);
+	connect(&nowTimer, &QTimer::timeout, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	nowTimer.start();
+	UpdateNowPlaying();
+}
+
+void SpazzMusicPlayer::UpdateNowPlaying()
+{
+	const QString full = NowPlayingTitle();
+	const int split = full.indexOf(" - ");
+	const obs_media_state state = State();
+	const int64_t pos = PositionMs();
+	int64_t dur = DurationMs();
+	const int idx = CurrentIndex();
+	if (dur <= 0 && idx >= 0 && tracks[idx].durationMs > 0) {
+		dur = tracks[idx].durationMs;
+	}
+	const float vol = Volume();
+
+	NowPlaying &n = Now();
+	std::lock_guard<std::mutex> lock(n.mutex);
+	n.title = full.toStdString();
+	n.artist = split > 0 ? full.left(split).trimmed().toStdString() : std::string();
+	n.posMs = pos;
+	n.durMs = dur;
+	n.atNs = os_gettime_ns();
+	n.state = (int)state;
+	n.shuffle = shuffle;
+	n.repeatMode = repeat == Repeat::Off ? 0 : (repeat == Repeat::One ? 2 : 1);
+	n.kbps = kbps;
+	n.track = idx >= 0 ? idx + 1 : 0;
+	n.volume = vol;
 }
 
 SpazzMusicPlayer::~SpazzMusicPlayer()
@@ -125,6 +227,18 @@ SpazzMusicPlayer::~SpazzMusicPlayer()
 
 	if (saveTimer.isActive()) {
 		SavePlaylist();
+	}
+
+	nowTimer.stop();
+	{
+		NowPlaying &n = Now();
+		std::lock_guard<std::mutex> lock(n.mutex);
+		n.title.clear();
+		n.artist.clear();
+		n.posMs = n.durMs = 0;
+		n.state = OBS_MEDIA_STATE_NONE;
+		n.track = 0;
+		n.kbps = 0;
 	}
 
 	Unbind();

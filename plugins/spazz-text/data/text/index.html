@@ -1,0 +1,699 @@
+<!doctype html>
+<!--
+  SPAZZ Text: the page a SPAZZ Text source shows.
+
+  The source loads this page in a hidden browser with ?cfg=<settings file>,
+  then pushes changes as events:
+    spazzTextConfig  (detail = settings)        restyle without reloading
+    spazzTextValue   (detail = {text, replay})  text from SPAZZamp / a file
+    spazzTextNow     (detail = {title, pos, dur, state})  SPAZZamp's song
+    spazzTextPlay                               play the entrance again
+    spazzTextHide                               play the exit
+  obs-browser sends obsSourceVisibleChanged when the source shows / hides.
+
+  ?test=1 stops the clock: tests call __text.render(ms).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="fonts.css">
+<style>
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+* { box-sizing: border-box; }
+#stage { position: absolute; inset: 0; perspective: 1400px; }
+#pos { position: absolute; display: flex; }
+#anim { position: relative; transform-origin: 50% 50%; will-change: transform, opacity; }
+#hue { position: relative; }
+#box { position: relative; isolation: isolate; }
+#box > .bg { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+#box > .bar2 { display: none; position: absolute; left: 0; right: 0; top: 0; z-index: -1; }
+#clip { position: relative; }
+#fx { position: relative; }
+#txt { position: relative; }
+#txt .line { display: block; }
+#txt .w { display: inline-block; white-space: pre; }
+#txt .l { display: inline-block; white-space: pre; transform-origin: 50% 60%;
+  -webkit-background-clip: text; background-clip: text; color: transparent; will-change: transform, opacity; }
+#cursor { position: absolute; display: none; }
+.spark { position: absolute; width: 1em; height: 1em; margin: -.5em 0 0 -.5em; pointer-events: none;
+  background: radial-gradient(circle, #fff 0 8%, transparent 9%),
+    conic-gradient(from 0deg, transparent 0 40deg, #fff 45deg, transparent 50deg 130deg, #fff 135deg, transparent 140deg 220deg, #fff 225deg, transparent 230deg 310deg, #fff 315deg, transparent 320deg);
+  -webkit-mask: radial-gradient(circle, #000 0 30%, transparent 62%); mask: radial-gradient(circle, #000 0 30%, transparent 62%); }
+.marquee #clip { overflow: hidden; }
+.marquee #txt, .marquee #txt .line { white-space: nowrap; }
+.marquee #fx, .marquee #txt { width: max-content; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="pos"><div id="anim"><div id="hue"><div id="box">
+    <div class="bg"></div><div class="bar2"></div>
+    <div id="clip"><div id="fx"><div id="txt"></div><div id="cursor"></div></div></div>
+  </div></div></div></div>
+</div>
+<svg width="0" height="0" style="position:absolute">
+  <filter id="chroma" x="-20%" y="-30%" width="140%" height="160%" color-interpolation-filters="sRGB">
+    <feTurbulence id="turb" type="fractalNoise" baseFrequency="0 0.06" numOctaves="1" seed="1" result="noise"/>
+    <feComponentTransfer in="noise" result="steps">
+      <feFuncR type="discrete" tableValues="0 .2 .5 .5 .5 .5 .8 1"/>
+      <feFuncG type="linear" slope="0" intercept=".5"/>
+    </feComponentTransfer>
+    <feDisplacementMap id="disp" in="SourceGraphic" in2="steps" scale="0" xChannelSelector="R" yChannelSelector="G" result="moved"/>
+    <feColorMatrix in="moved" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
+    <feOffset id="offR" in="r" dx="0" dy="0" result="r2"/>
+    <feColorMatrix in="moved" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0" result="gb"/>
+    <feOffset id="offB" in="gb" dx="0" dy="0" result="gb2"/>
+    <feBlend in="r2" in2="gb2" mode="screen"/>
+  </filter>
+</svg>
+<script>
+'use strict';
+const TEST = new URLSearchParams(location.search).get('test') === '1';
+const DEFAULTS = {
+  source: 'typed', text: 'SPAZZ TEXT', npFormat: '♪ {title}', npHide: true, clock: 'hm12', cdKind: 'minutes',
+  cdMin: 5, cdTime: '20:00', cdDone: "LET'S GO!",
+  font: 'orbitron', size: 120, weight: '700', italic: false, upper: false, spacing: 0.02, lineHeight: 1.1,
+  alignH: 'center', alignV: 'middle', margin: 60, wrap: true, fill: 'solid', color1: '#ffffff', color2: '#ff4fd8',
+  color3: '#45e6ff', angle: 90, outline: '#000000', outlineW: 0, opacity: 1,
+  glowColor: '#ff2bd6', glow: 0, shadowColor: '#000000', shadowOpacity: 0, shadowX: 6, shadowY: 6, shadowBlur: 0,
+  extrude: 0, extrudeColor: '#2a0a4a', bgShape: 'none', bgColor: '#10061e', bgOpacity: 0.8, bgPad: 28, bgRadius: 14,
+  bgBorder: '#ff2bd6', bgBorderW: 0, rgb: false, rgbSpeed: 1, scan: 0, chroma: 0,
+  enter: 'fade', idle: 'none', exit: 'fade', idleSpeed: 1, idleAmount: 1, glitchEvery: 4,
+  enterMs: 800, exitMs: 600, stagger: 45, replayOnShow: true, cycle: false, showSec: 10, hideSec: 5,
+};
+/* enters (and exits) that move each letter on its own: these take the stagger */
+const LETTER_FX = new Set(['typewriter', 'flicker', 'scramble', 'drop', 'wave', 'pop', 'spin', 'unfold', 'split', 'glitch', 'pixel']);
+const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@*+=<>/\\|?!';
+
+let cfg = Object.assign({}, DEFAULTS);
+let shown = '';               /* the text on screen */
+let pushed = '';              /* text SPAZZamp / a file sent */
+let song = { title: '', pos: 0, dur: 0, state: 0 };
+let built = null;             /* letters and layout */
+let playAt = 0, exitAt = -1;  /* timeline (ms) */
+let liveNow = 0;
+let running = true;           /* page visible */
+let lastSeed = 0;
+
+const $ = (s) => document.querySelector(s);
+const stage = $('#stage'), posEl = $('#pos'), animEl = $('#anim'), hueEl = $('#hue'), boxEl = $('#box'),
+  bgEl = $('#box > .bg'), bar2 = $('#box > .bar2'), clipEl = $('#clip'), fxEl = $('#fx'), txtEl = $('#txt'),
+  cursorEl = $('#cursor');
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const easeIn = (x) => x * x * x;
+const easeBack = (x) => { const c = 1.70158, c3 = c + 1; return 1 + c3 * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const bounce = (x) => { const n = 7.5625, d = 2.75;
+  if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + .75;
+  if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + .9375; return n * (x -= 2.625 / d) * x + .984375; };
+const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const noise = (t) => { const i = Math.floor(t), f = t - i, u = f * f * (3 - 2 * f); return lerp(hash(i), hash(i + 1), u) * 2 - 1; };
+const setS = (el, k, v) => { const c = el.__s || (el.__s = {}); if (c[k] !== v) { c[k] = v; el.style[k] = v; } };
+const rgba = (hex, a) => { const v = parseInt(String(hex || '#000').replace('#', ''), 16) || 0;
+  return `rgba(${(v >> 16) & 255},${(v >> 8) & 255},${v & 255},${(+a).toFixed(3)})`; };
+const mix = (h1, h2, t) => { const a = parseInt(h1.slice(1), 16), b = parseInt(h2.slice(1), 16);
+  const c = (s) => Math.round(lerp((a >> s) & 255, (b >> s) & 255, t));
+  return `#${((1 << 24) | (c(16) << 16) | (c(8) << 8) | c(0)).toString(16).slice(1)}`; };
+const nowMs = () => (TEST ? liveNow : performance.now());
+
+/* ---------------- what the text says ---------------- */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+function mmss(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000)), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${pad2(m)}:${pad2(s % 60)}` : `${m}:${pad2(s % 60)}`;
+}
+function clockText(d) {
+  const h = d.getHours(), m = pad2(d.getMinutes()), s = pad2(d.getSeconds());
+  const h12 = ((h + 11) % 12) + 1, ap = h < 12 ? 'AM' : 'PM';
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  switch (cfg.clock) {
+    case 'hm24': return `${pad2(h)}:${m}`;
+    case 'hms12': return `${h12}:${m}:${s} ${ap}`;
+    case 'hms24': return `${pad2(h)}:${m}:${s}`;
+    case 'date': return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}`;
+    case 'daytime': return `${days[d.getDay()].slice(0, 3)} ${h12}:${m} ${ap}`;
+    case 'iso': return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    default: return `${h12}:${m} ${ap}`;
+  }
+}
+let countdownFrom = 0; /* wall clock (ms) the minutes count from */
+function countdownText() {
+  const now = Date.now();
+  let end;
+  if (cfg.cdKind === 'time') {
+    const [hh, mm] = String(cfg.cdTime || '0:0').split(':').map((x) => parseInt(x, 10) || 0);
+    const d = new Date(now); d.setHours(hh, mm, 0, 0);
+    if (d.getTime() < now - 60 * 60 * 1000) d.setDate(d.getDate() + 1); /* a time already well past: tomorrow */
+    end = d.getTime();
+  } else {
+    end = countdownFrom + Math.max(0, +cfg.cdMin || 0) * 60000;
+  }
+  const left = end - now;
+  return left > 0 ? mmss(left + 999) : (cfg.cdDone || '');
+}
+function songText() {
+  if (!song.title || (cfg.npHide && song.state !== 1)) return '';
+  return String(cfg.npFormat || '{title}').replace(/\{title\}/g, song.title)
+    .replace(/\{time\}/g, mmss(song.pos)).replace(/\{length\}/g, song.dur > 0 ? mmss(song.dur) : '');
+}
+function wantedText() {
+  switch (cfg.source) {
+    case 'nowplaying': return songText();
+    case 'clock': return clockText(new Date());
+    case 'countdown': return countdownText();
+    case 'file': return pushed;
+    default: return String(cfg.text == null ? '' : cfg.text);
+  }
+}
+
+/* ---------------- building the letters ---------------- */
+
+function build(text) {
+  shown = text;
+  const s = cfg.upper ? text.toUpperCase() : text;
+  txtEl.textContent = '';
+  fxEl.querySelectorAll('.spark').forEach((e) => e.remove());
+  const letters = [];
+  for (const lineText of s.replace(/\r/g, '').split('\n')) {
+    const line = document.createElement('div');
+    line.className = 'line';
+    const words = lineText.split(/( +)/);
+    for (const w of words) {
+      if (!w) continue;
+      if (/^ +$/.test(w)) { line.appendChild(document.createTextNode(w)); continue; }
+      const ws = document.createElement('span');
+      ws.className = 'w';
+      for (const ch of Array.from(w)) {
+        const l = document.createElement('span');
+        l.className = 'l';
+        l.textContent = ch;
+        l.__ch = ch;
+        ws.appendChild(l);
+        letters.push(l);
+      }
+      line.appendChild(ws);
+    }
+    if (!line.childNodes.length) line.appendChild(document.createTextNode(' '));
+    txtEl.appendChild(line);
+  }
+  built = { letters, n: letters.length, bw: 1, bh: 1, pos: [] };
+  layout();
+}
+
+function fillImage() {
+  const c1 = cfg.color1, c2 = cfg.color2, c3 = cfg.color3, a = (+cfg.angle || 0) + 'deg';
+  switch (cfg.fill) {
+    case 'grad2': return `linear-gradient(${a}, ${c1}, ${c2})`;
+    case 'grad3': return `linear-gradient(${a}, ${c1}, ${c2}, ${c3})`;
+    case 'chrome': return `linear-gradient(180deg, ${c1} 0%, ${mix(c1, c2, .55)} 30%, ${c2} 50%, ${mix(c2, '#000000', .55)} 51%, ${mix(c3, '#000000', .3)} 62%, ${c3} 82%, ${mix(c3, '#ffffff', .6)} 100%)`;
+    case 'split': return `linear-gradient(180deg, ${c1} 0%, ${c2} 50%, ${c3} 51%, ${mix(c3, '#000000', .35)} 100%)`;
+    case 'rainbow': return 'linear-gradient(90deg, #ff3b3b, #ff9f1c, #ffe14d, #3dff8b, #29d9ff, #6b5bff, #ff4fd8)';
+    default: return `linear-gradient(${c1}, ${c1})`;
+  }
+}
+
+/* letters keep one gradient across the whole block, so each one shows its
+ * own slice of it: background size = the block, position = minus its spot */
+function layout() {
+  if (!built) return;
+  const W = innerWidth, H = innerHeight;
+  const marquee = cfg.idle === 'marquee';
+  stage.classList.toggle('marquee', marquee);
+  const pad = cfg.bgShape === 'none' ? 0 : Math.max(0, +cfg.bgPad || 0);
+  const m = Math.max(0, +cfg.margin || 0);
+  txtEl.style.maxWidth = (cfg.wrap && !marquee) ? Math.max(40, W - 2 * m - 2 * pad) + 'px' : 'none';
+  txtEl.style.whiteSpace = (cfg.wrap && !marquee) ? 'normal' : 'nowrap';
+  place();
+  built.bw = Math.max(1, txtEl.offsetWidth);
+  built.bh = Math.max(1, txtEl.offsetHeight);
+  /* x, y, w, h, and the top / height of the line it's on (chrome and sunset
+   * fills run per line, like a real chrome title) */
+  built.pos = built.letters.map((l) => { const line = l.parentNode.parentNode;
+    return [l.offsetLeft, l.offsetTop, l.offsetWidth, l.offsetHeight, line.offsetTop, line.offsetHeight]; });
+  built.fill = fillImage();
+  built.perLine = cfg.fill === 'chrome' || cfg.fill === 'split';
+  paintLetters(-1, 0);
+}
+
+/* the background layers each letter shows: scanlines, a shine band, the fill */
+function paintLetters(shine, scanOff) {
+  if (!built) return;
+  const { bw, bh } = built;
+  const layers = [], sizes = [], reps = [], poss = [];
+  const scanA = clamp(+cfg.scan || 0);
+  const per = Math.max(3, Math.round((+cfg.size || 100) / 28));
+  if (scanA > 0) {
+    layers.push(`repeating-linear-gradient(180deg, rgba(0,0,0,${(scanA * .75).toFixed(2)}) 0 ${per / 2}px, transparent ${per / 2}px ${per}px)`);
+    sizes.push(`100% ${per}px`); reps.push('repeat'); poss.push(null);
+  }
+  if (shine >= -0.5) {
+    layers.push('linear-gradient(105deg, transparent 38%, rgba(255,255,255,.9) 50%, transparent 62%)');
+    sizes.push(`${bw}px ${bh}px`); reps.push('no-repeat'); poss.push('shine');
+  }
+  layers.push(built.fill); sizes.push(null); reps.push('no-repeat'); poss.push('fill');
+  const img = layers.join(', '), rep = reps.join(', ');
+  const stroke = (+cfg.outlineW || 0) > 0 ? `${(+cfg.outlineW).toFixed(1)}px ${cfg.outline}` : '0px transparent';
+  built.letters.forEach((l, i) => {
+    const [x, y, , lh] = built.pos[i] || [0, 0, 0, 0];
+    /* per-line fills: the gradient spans each letter's own height */
+    const fh = built.perLine ? lh : bh;
+    const fpy = built.perLine ? 0 : -y;
+    setS(l, 'backgroundImage', img); setS(l, 'backgroundRepeat', rep);
+    setS(l, 'backgroundSize', sizes.map((z) => z || `${bw}px ${fh}px`).join(', '));
+    setS(l, 'webkitTextStroke', stroke);
+    setS(l, 'backgroundPosition', poss.map((p) => p === 'fill' ? `${-x}px ${fpy}px`
+      : p === 'shine' ? `${(-x + (shine * 2 - 1) * bw).toFixed(1)}px ${-y}px`
+      : `0px ${(-y + scanOff).toFixed(1)}px`).join(', '));
+  });
+}
+
+/* where the block sits, its box and its typography */
+function place() {
+  const W = innerWidth, H = innerHeight;
+  const m = Math.max(0, +cfg.margin || 0);
+  const shape = cfg.bgShape;
+  const full = shape === 'bar' || cfg.idle === 'marquee';
+  const ps = posEl.style;
+  ps.left = ps.right = ps.top = ps.bottom = ''; ps.width = ''; ps.transform = '';
+  if (full) { ps.left = (shape === 'bar' ? 0 : m) + 'px'; ps.right = (shape === 'bar' ? 0 : m) + 'px'; }
+  else if (cfg.alignH === 'left') ps.left = m + 'px';
+  else if (cfg.alignH === 'right') ps.right = m + 'px';
+  else { ps.left = '50%'; ps.transform = 'translateX(-50%)'; }
+  if (cfg.alignV === 'top') ps.top = m + 'px';
+  else if (cfg.alignV === 'bottom') ps.bottom = m + 'px';
+  else { ps.top = '50%'; ps.transform = (ps.transform ? ps.transform + ' ' : '') + 'translateY(-50%)'; }
+  posEl.style.justifyContent = cfg.alignH === 'left' ? 'flex-start' : cfg.alignH === 'right' ? 'flex-end' : 'center';
+  animEl.style.width = full ? '100%' : '';
+  boxEl.style.width = full ? '100%' : '';
+
+  const t = txtEl.style;
+  t.fontFamily = `'${cfg.font}', 'Segoe UI', sans-serif`;
+  t.fontSize = (+cfg.size || 100) + 'px';
+  t.fontWeight = cfg.weight || '700';
+  t.fontStyle = cfg.italic ? 'italic' : 'normal';
+  t.letterSpacing = (+cfg.spacing || 0) + 'em';
+  t.lineHeight = String(+cfg.lineHeight || 1.1);
+  t.textAlign = cfg.alignH || 'center';
+  cursorEl.style.fontFamily = t.fontFamily; cursorEl.style.fontSize = t.fontSize; cursorEl.style.fontWeight = t.fontWeight;
+  cursorEl.style.lineHeight = t.lineHeight;
+
+  /* the box behind */
+  const pad = shape === 'none' ? 0 : Math.max(0, +cfg.bgPad || 0);
+  const bar = shape === 'window' || shape === 'terminal' ? Math.max(18, Math.round((+cfg.size || 100) * .32)) : 0;
+  boxEl.style.padding = shape === 'bar' ? `${pad}px ${m + pad}px` : `${pad + bar}px ${Math.round(pad * 1.3)}px ${pad}px`;
+  if (shape === 'burst') boxEl.style.padding = `${pad * 1.6}px ${pad * 2.4}px`;
+  const b = bgEl.style;
+  b.cssText = '';
+  bar2.style.cssText = '';
+  const fill = rgba(cfg.bgColor, cfg.bgOpacity);
+  const bw = Math.max(0, +cfg.bgBorderW || 0);
+  const r = Math.max(0, +cfg.bgRadius || 0);
+  switch (shape) {
+    case 'none': b.display = 'none'; break;
+    case 'box': b.background = fill; b.borderRadius = r + 'px'; if (bw) b.border = `${bw}px solid ${cfg.bgBorder}`;
+      if (bw && cfg.glow > 0) b.boxShadow = `0 0 ${12 * cfg.glow}px ${cfg.bgBorder}, inset 0 0 ${10 * cfg.glow}px ${cfg.bgBorder}`; break;
+    case 'pill': b.background = fill; b.borderRadius = '999px'; if (bw) b.border = `${bw}px solid ${cfg.bgBorder}`; break;
+    case 'bar': b.background = fill; if (bw) { b.borderTop = b.borderBottom = `${bw}px solid ${cfg.bgBorder}`; } break;
+    case 'slant': b.background = fill; b.transform = 'skewX(-14deg)'; b.borderRadius = Math.min(r, 8) + 'px';
+      if (bw) b.borderLeft = `${Math.max(bw, 8)}px solid ${cfg.bgBorder}`; else b.borderLeft = `10px solid ${mix(cfg.bgColor, '#ffffff', .45)}`; break;
+    case 'window': b.background = fill; b.boxShadow = 'inset -2px -2px #0a0a0a, inset 2px 2px #ffffff, inset -4px -4px #808080, inset 4px 4px #dfdfdf';
+      bar2.style.display = 'block'; bar2.style.height = (bar + 4) + 'px'; bar2.style.margin = '4px';
+      bar2.style.background = 'linear-gradient(90deg, #000080, #1084d0)';
+      bar2.style.backgroundImage = 'radial-gradient(circle at calc(100% - 14px) 50%, #c0c0c0 0 6px, transparent 7px), linear-gradient(90deg, #000080, #1084d0)'; break;
+    case 'terminal': b.background = fill; b.borderRadius = r + 'px'; b.border = `${Math.max(1, bw)}px solid ${bw ? cfg.bgBorder : 'rgba(255,255,255,.15)'}`;
+      bar2.style.display = 'block'; bar2.style.height = (bar + 2) + 'px'; bar2.style.borderRadius = `${r}px ${r}px 0 0`;
+      bar2.style.background = `radial-gradient(circle at 18px 50%, #ff5f57 0 6px, transparent 7px), radial-gradient(circle at 38px 50%, #febc2e 0 6px, transparent 7px), radial-gradient(circle at 58px 50%, #28c840 0 6px, transparent 7px), rgba(255,255,255,.08)`; break;
+    case 'tape': b.background = `linear-gradient(180deg, transparent 0 14%, ${fill} 14% 86%, transparent 86%), repeating-linear-gradient(180deg, #ff6b3d 0 5%, #ffb13d 5% 10%, #3dbdff 10% 14%)`;
+      b.borderRadius = r + 'px'; b.boxShadow = '0 6px 18px rgba(0,0,0,.35)'; break;
+    case 'bubble': b.background = fill; b.borderRadius = Math.max(r, 24) + 'px';
+      if (bw) b.border = `${bw}px solid ${cfg.bgBorder}`;
+      bar2.style.display = 'block'; bar2.style.top = 'auto'; bar2.style.bottom = `-${pad * 0.9}px`; bar2.style.left = '18%';
+      bar2.style.right = 'auto'; bar2.style.width = `${pad * 1.2}px`; bar2.style.height = `${pad}px`;
+      bar2.style.background = bw ? cfg.bgBorder : fill; bar2.style.clipPath = 'polygon(0 0, 100% 0, 10% 100%)'; break;
+    case 'burst': b.background = fill;
+      b.clipPath = 'polygon(50% 0%, 59% 18%, 79% 6%, 76% 28%, 98% 26%, 84% 44%, 100% 58%, 80% 64%, 88% 86%, 66% 78%, 58% 100%, 47% 82%, 30% 98%, 28% 76%, 6% 84%, 16% 62%, 0% 48%, 18% 38%, 6% 16%, 28% 20%, 34% 0%, 44% 16%)';
+      bar2.style.display = 'block'; bar2.style.inset = '9%'; bar2.style.background = mix(cfg.bgColor, '#ffe14d', .7);
+      bar2.style.clipPath = b.clipPath; break;
+  }
+}
+
+/* ---------------- one frame ---------------- */
+
+function frame0() {
+  return { x: 0, y: 0, s: 1, sx: 1, sy: 1, rot: 0, rotX: 0, rotY: 0, skew: 0, op: 1, blur: 0, bright: 1,
+    chroma: Math.max(0, +cfg.chroma || 0), glitch: 0, glow: 1, hue: 0, cursor: false, shine: -1, scan: 0,
+    L: built ? built.letters.map(() => ({ x: 0, y: 0, s: 1, rot: 0, rotX: 0, op: 1, ch: null, hue: 0 })) : [] };
+}
+
+/* an entrance at progress p (0 = not there yet, 1 = in place); the exit runs
+ * it backwards. t = ms since it started, lp(i) = letter i's progress */
+function entrance(kind, F, p, t, lp, dur) {
+  const n = F.L.length, size = +cfg.size || 100, W = innerWidth, H = innerHeight;
+  switch (kind) {
+    case 'none': if (p <= 0) F.op = 0; break;
+    case 'fade': F.op *= easeOut(p); break;
+    case 'typewriter': F.L.forEach((L, i) => { L.op = lp(i) > 0 ? 1 : 0; }); F.cursor = p < 1; break;
+    case 'flicker': F.L.forEach((L, i) => {
+      const q = lp(i);
+      L.op = q <= 0 ? 0.07 : q >= 1 ? 1 : (hash(Math.floor(t / 45) * 13 + i * 7) > 0.45 ? 1 : 0.12);
+    }); F.glow *= 0.3 + 0.7 * p; break;
+    case 'glitch': {
+      const k = 1 - p;
+      F.chroma += 14 * k; F.glitch = 60 * k * (hash(Math.floor(t / 60)) > 0.3 ? 1 : 0.2);
+      F.x += (hash(Math.floor(t / 50) + 3) - 0.5) * 40 * k;
+      F.L.forEach((L, i) => { const q = lp(i); L.op = q > 0 ? 1 : 0; L.x = (hash(Math.floor(t / 70) + i) - 0.5) * 30 * (1 - q); });
+      break; }
+    case 'scramble': F.L.forEach((L, i) => {
+      const q = lp(i);
+      L.op = q > 0 ? 1 : 0;
+      if (q > 0 && q < 1 && L.ch === null && !/\s/.test(built.letters[i].__ch)) L.ch = GLYPHS[Math.floor(hash(Math.floor(t / 55) * 31 + i) * GLYPHS.length)];
+    }); break;
+    case 'crt':
+      if (p < 0.3) { F.sx *= easeOut(p / 0.3); F.sy *= 0.012; F.bright = 4; }
+      else if (p < 0.75) { const q = (p - 0.3) / 0.45; F.sy *= Math.max(0.012, easeBack(q)); F.bright = lerp(4, 1.4, q); }
+      else F.bright = lerp(1.4, 1, (p - 0.75) / 0.25);
+      if (p <= 0) F.op = 0; break;
+    case 'vhs': {
+      const k = 1 - easeOut(p);
+      F.y += -k * (H * 0.5) * (Math.sin(t / 40) * 0.1 + 1); F.skew += Math.sin(t / 30) * 10 * k;
+      F.chroma += 10 * k; F.glitch = 25 * k; F.op *= clamp(p * 3); break; }
+    case 'slide_left': F.x -= (1 - easeOut(p)) * W * 0.7; F.op *= clamp(p * 2.5); break;
+    case 'slide_right': F.x += (1 - easeOut(p)) * W * 0.7; F.op *= clamp(p * 2.5); break;
+    case 'slide_up': F.y += (1 - easeOut(p)) * H * 0.6; F.op *= clamp(p * 2.5); break;
+    case 'slide_down': F.y -= (1 - easeOut(p)) * H * 0.6; F.op *= clamp(p * 2.5); break;
+    case 'rise': F.y += (1 - easeOut(p)) * size * 0.6; F.op *= easeOut(p); break;
+    case 'zoom': F.s *= Math.max(0.01, 0.3 + 0.7 * easeBack(p)); F.op *= clamp(p * 2); break;
+    case 'zoom_out': F.s *= 1 + 2.2 * (1 - easeOut(p)); F.op *= clamp(p * 1.6); F.blur += (1 - p) * 10; break;
+    case 'bounce': F.y -= (1 - bounce(p)) * H * 0.55; F.op *= clamp(p * 5); break;
+    case 'stamp': {
+      if (p < 0.6) { F.s *= lerp(3.2, 1, easeIn(p / 0.6)); F.op *= clamp(p * 4); }
+      else { const q = (p - 0.6) / 0.4; F.s *= 1 + 0.08 * Math.sin(q * Math.PI * 3) * (1 - q);
+        F.x += (hash(Math.floor(t / 30)) - 0.5) * 16 * (1 - q); F.y += (hash(Math.floor(t / 30) + 9) - 0.5) * 16 * (1 - q); }
+      break; }
+    case 'drop': F.L.forEach((L, i) => { const q = lp(i); L.y -= (1 - bounce(q)) * size * 1.6; L.op = clamp(q * 4); }); break;
+    case 'wave': F.L.forEach((L, i) => { const q = lp(i); L.y += (1 - easeBack(q)) * size * 0.9; L.op = easeOut(q); }); break;
+    case 'pop': F.L.forEach((L, i) => { const q = lp(i); L.s *= Math.max(0, easeBack(q)); L.op = clamp(q * 3); }); break;
+    case 'spin': F.L.forEach((L, i) => { const q = lp(i); L.rot -= (1 - easeOut(q)) * 360; L.s *= 0.3 + 0.7 * easeOut(q); L.op = clamp(q * 2); }); break;
+    case 'unfold': F.L.forEach((L, i) => { const q = lp(i); L.rotX = (1 - easeOut(q)) * 90; L.op = clamp(q * 2.5); }); break;
+    case 'split': F.L.forEach((L, i) => { const q = lp(i); L.x += (i % 2 ? 1 : -1) * (1 - easeOut(q)) * W * 0.35; L.op = clamp(q * 2); }); break;
+    case 'blur': F.blur += (1 - p) * 24; F.op *= p; F.s *= 1.08 - 0.08 * p; break;
+    case 'pixel': F.L.forEach((L, i) => { const q = lp(i); L.op = q >= hash(i * 3.7) * 0.6 + 0.05 ? 1 : 0; L.s *= q < 1 ? Math.ceil(q * 4) / 4 : 1; });
+      F.blur += p < 1 ? Math.round((1 - p) * 4) * 2 : 0; break;
+  }
+}
+
+/* the loop while it stays on screen; ti = seconds since it settled, ramp
+ * eases it in so nothing jumps */
+function idleFx(F, ti, ramp) {
+  const k = Math.max(0.05, +cfg.idleSpeed || 1), a = Math.max(0, +cfg.idleAmount || 0) * ramp;
+  const size = +cfg.size || 100, n = F.L.length, tt = ti * k;
+  switch (cfg.idle) {
+    case 'flicker': {
+      const win = Math.floor(tt * 9);
+      if (hash(win * 1.7) > 1 - 0.06 * a) F.op *= 0.35 + 0.4 * hash(win);
+      F.L.forEach((L, i) => { if (hash(win * 7.3 + i * 1.9) > 1 - 0.025 * a) L.op *= 0.12; });
+      F.glow *= 1 + 0.08 * noise(tt * 20) * a; break; }
+    case 'buzz': F.glow *= 1 + 0.18 * noise(tt * 45) * a; F.op *= 1 - 0.08 * a * Math.abs(noise(tt * 30));
+      F.x += noise(tt * 50) * 0.8 * a; break;
+    case 'breathe': F.glow *= 0.55 + 0.75 * (0.5 + 0.5 * Math.sin(tt * Math.PI)) * Math.min(1, a) + (a > 1 ? (a - 1) * 0.3 : 0); break;
+    case 'pulse': F.s *= 1 + 0.045 * a * Math.sin(tt * Math.PI * 1.6); break;
+    case 'heartbeat': { const ph = (tt % 1.2) / 1.2; const beat = Math.exp(-Math.pow((ph - 0.08) / 0.04, 2)) + 0.6 * Math.exp(-Math.pow((ph - 0.28) / 0.05, 2));
+      F.s *= 1 + 0.08 * a * beat; F.glow *= 1 + 0.6 * beat * a; break; }
+    case 'float': F.y += Math.sin(tt * Math.PI * 0.7) * 12 * a; F.rot += Math.sin(tt * Math.PI * 0.45) * 0.8 * a; break;
+    case 'wave': F.L.forEach((L, i) => { L.y += Math.sin(tt * Math.PI * 1.6 - i * 0.5) * size * 0.1 * a; }); break;
+    case 'bounce': F.L.forEach((L, i) => { L.y -= Math.abs(Math.sin(tt * Math.PI * 1.2 - i * 0.35)) * size * 0.14 * a; }); break;
+    case 'rainbow': F.L.forEach((L, i) => { L.hue = (tt * 140 + i * 24) % 360; }); break;
+    case 'shimmer': F.shine = ((tt / 2.6) % 1) * 1.6 - 0.3; break;
+    case 'glitch': {
+      const every = Math.max(0.4, +cfg.glitchEvery || 4) / k;
+      const cyc = Math.floor(ti / every), at = (ti % every);
+      const len = 0.18 + hash(cyc) * 0.25;
+      if (at < len && ti > 0.3) {
+        const r = hash(Math.floor(ti * 30));
+        F.chroma += (5 + 8 * r) * a; F.glitch = (20 + 50 * r) * a;
+        F.x += (hash(Math.floor(ti * 25) + 1) - 0.5) * 24 * a; F.skew += (r - 0.5) * 8 * a;
+        F.L.forEach((L, i) => { if (hash(Math.floor(ti * 20) * 3 + i) > 0.7) { L.x += (hash(i + cyc) - 0.5) * size * 0.25 * a; L.op *= 0.7; } });
+      }
+      break; }
+    case 'vhs': F.skew += noise(tt * 3) * 1.6 * a; F.x += noise(tt * 7 + 4) * 3 * a;
+      F.chroma += (1.5 + Math.abs(noise(tt * 5)) * 3) * a;
+      if ((tt % 3.7) < 0.12) { F.y += 6 * a; F.glitch = 14 * a; } break;
+    case 'scan': F.scan = tt * 40; if (!(+cfg.scan > 0)) F.forceScan = true; break;
+    case 'hologram': F.op *= 0.78 + 0.22 * Math.abs(noise(tt * 12)); F.scan = tt * 60; F.forceScan = !(+cfg.scan > 0);
+      F.chroma += Math.abs(noise(tt * 4)) * 3 * a; if (hash(Math.floor(tt * 8)) > 0.93) F.x += (hash(tt) - 0.5) * 18 * a; break;
+    case 'jitter': { const w = Math.floor(tt * 14);
+      F.L.forEach((L, i) => { L.x += (hash(w * 5 + i) - 0.5) * 5 * a; L.y += (hash(w * 9 + i + 50) - 0.5) * 5 * a; }); break; }
+    case 'shake': { const w = Math.floor(tt * 30); F.x += (hash(w) - 0.5) * 14 * a; F.y += (hash(w + 77) - 0.5) * 14 * a; break; }
+    case 'swing': F.rot += Math.sin(tt * Math.PI) * 5 * a; break;
+    case 'wobble': F.skew += Math.sin(tt * Math.PI * 1.4) * 7 * a; F.sx *= 1 + 0.035 * Math.sin(tt * Math.PI * 2.8) * a; break;
+    case 'tilt': F.rotY += Math.sin(tt * Math.PI * 0.6) * 20 * a; F.rotX += Math.cos(tt * Math.PI * 0.45) * 8 * a; break;
+    case 'cursor': F.cursor = (tt % 1.06) < 0.53; break;
+    case 'marquee': F.marquee = tt; break;
+    case 'sparkle': F.sparkle = tt; break;
+  }
+}
+
+/* timeline at `now`: which phase, and how far into it */
+function timeline(now) {
+  const n = built ? built.n : 0;
+  const st = Math.max(0, +cfg.stagger || 0);
+  const span = (kind, ms) => (kind === 'typewriter' ? Math.max(1, n) * Math.max(st, 15)
+    : LETTER_FX.has(kind) ? ms + st * Math.max(0, n - 1) : ms);
+  const enterLen = cfg.enter === 'none' ? 0 : span(cfg.enter, Math.max(1, +cfg.enterMs || 1));
+  const exitLen = cfg.exit === 'none' ? 0 : span(cfg.exit, Math.max(1, +cfg.exitMs || 1));
+  let t = now - playAt;
+  if (t < 0) return { phase: 'hidden' };
+  if (cfg.cycle) {
+    const period = enterLen + Math.max(0.5, +cfg.showSec || 0) * 1000 + exitLen + Math.max(0, +cfg.hideSec || 0) * 1000;
+    t = t % Math.max(period, 1);
+    if (t >= enterLen + Math.max(0.5, +cfg.showSec || 0) * 1000) {
+      const e = t - enterLen - Math.max(0.5, +cfg.showSec || 0) * 1000;
+      return e < exitLen ? { phase: 'exit', t: e, len: exitLen } : { phase: 'hidden' };
+    }
+  }
+  if (exitAt >= 0 && now >= exitAt) {
+    const e = now - exitAt;
+    return e < exitLen ? { phase: 'exit', t: e, len: exitLen, from: Math.min(1, (exitAt - playAt) / Math.max(enterLen, 1)) } : { phase: 'hidden' };
+  }
+  if (t < enterLen) return { phase: 'enter', t, len: enterLen };
+  return { phase: 'idle', t: t - enterLen };
+}
+
+function render(now) {
+  liveNow = now;
+  /* dynamic text: clock, countdown, SPAZZamp */
+  const want = wantedText();
+  if (want !== shown) {
+    const wasEmpty = !shown;
+    build(want);
+    if (cfg.source === 'nowplaying') {
+      if (!want) { if (exitAt < 0) exitAt = now; }
+      else if (wasEmpty || songChanged) { playAt = now; exitAt = -1; }
+      songChanged = false;
+    }
+  }
+  if (!built) return;
+  const tl = timeline(now);
+  if (tl.phase === 'hidden' || !built.n) { setS(animEl, 'visibility', 'hidden'); return; }
+  setS(animEl, 'visibility', 'visible');
+
+  const F = frame0();
+  const st = Math.max(0, +cfg.stagger || 0);
+  if (tl.phase === 'enter') {
+    const kind = cfg.enter, ms = Math.max(1, +cfg.enterMs || 1);
+    const lp = kind === 'typewriter' ? (i) => (tl.t >= i * Math.max(st, 15) ? 1 : 0)
+      : LETTER_FX.has(kind) ? (i) => clamp((tl.t - i * st) / ms) : () => clamp(tl.t / ms);
+    entrance(kind, F, clamp(tl.t / tl.len), tl.t, lp, ms);
+  } else if (tl.phase === 'exit') {
+    const kind = cfg.exit, ms = Math.max(1, +cfg.exitMs || 1);
+    const lp = kind === 'typewriter' ? (i) => (tl.t >= (F.L.length - 1 - i) * Math.max(st, 15) ? 0 : 1)
+      : LETTER_FX.has(kind) ? (i) => 1 - clamp((tl.t - i * st) / ms) : () => 1 - clamp(tl.t / ms);
+    const top = tl.from === undefined ? 1 : tl.from;
+    entrance(kind, F, Math.min(top, 1 - clamp(tl.t / tl.len)), tl.t, (i) => Math.min(top, lp(i)), ms);
+    if (kind === 'typewriter') F.cursor = true;
+  } else {
+    idleFx(F, tl.t / 1000, clamp(tl.t / 400));
+  }
+  if (tl.phase !== 'idle' && cfg.idle === 'marquee') F.marquee = 0;
+  if (cfg.rgb) F.hue = ((now / 1000) * 90 * Math.max(0.05, +cfg.rgbSpeed || 1)) % 360;
+  draw(F);
+}
+let songChanged = false;
+
+/* the frame onto the page */
+function draw(F) {
+  const tr = [];
+  if (F.x || F.y) tr.push(`translate(${F.x.toFixed(1)}px, ${F.y.toFixed(1)}px)`);
+  if (F.rotX || F.rotY) tr.push(`rotateX(${F.rotX.toFixed(2)}deg) rotateY(${F.rotY.toFixed(2)}deg)`);
+  if (F.rot) tr.push(`rotate(${F.rot.toFixed(2)}deg)`);
+  if (F.skew) tr.push(`skewX(${F.skew.toFixed(2)}deg)`);
+  const sx = F.s * F.sx, sy = F.s * F.sy;
+  if (sx !== 1 || sy !== 1) tr.push(`scale(${sx.toFixed(4)}, ${sy.toFixed(4)})`);
+  setS(animEl, 'transform', tr.join(' ') || 'none');
+  setS(animEl, 'opacity', String(clamp(F.op * (+cfg.opacity || 0)).toFixed(3)));
+  const af = [];
+  if (F.blur > 0.05) af.push(`blur(${F.blur.toFixed(1)}px)`);
+  if (F.bright !== 1) af.push(`brightness(${F.bright.toFixed(2)})`);
+  setS(animEl, 'filter', af.join(' ') || 'none');
+  setS(hueEl, 'filter', F.hue ? `hue-rotate(${F.hue.toFixed(1)}deg)` : 'none');
+
+  /* glow, shadow, 3D extrusion, colour split */
+  const size = +cfg.size || 100, fl = [];
+  if (F.chroma > 0.05 || F.glitch > 0.5) {
+    const c = F.chroma * (size / 100);
+    $('#offR').setAttribute('dx', c.toFixed(2)); $('#offB').setAttribute('dx', (-c).toFixed(2));
+    $('#disp').setAttribute('scale', F.glitch.toFixed(1));
+    const seed = F.glitch > 0.5 ? Math.floor(liveNow / 60) % 997 : 1;
+    if (seed !== lastSeed) { $('#turb').setAttribute('seed', String(seed)); lastSeed = seed; }
+    fl.push('url(#chroma)');
+  }
+  const ex = Math.max(0, +cfg.extrude || 0);
+  if (ex > 0) { const steps = Math.min(8, Math.max(2, Math.ceil(ex / 2))), d = (ex / steps).toFixed(2);
+    for (let i = 0; i < steps; i++) fl.push(`drop-shadow(${d}px ${d}px 0 ${cfg.extrudeColor})`); }
+  if ((+cfg.shadowOpacity || 0) > 0) fl.push(`drop-shadow(${+cfg.shadowX || 0}px ${+cfg.shadowY || 0}px ${Math.max(0, +cfg.shadowBlur || 0)}px ${rgba(cfg.shadowColor, cfg.shadowOpacity)})`);
+  const g = (+cfg.glow || 0) * F.glow;
+  if (g > 0.01) { const r = size * 0.05 * g;
+    fl.push(`drop-shadow(0 0 ${(r * 0.25).toFixed(1)}px ${cfg.glowColor})`, `drop-shadow(0 0 ${(r * 0.7).toFixed(1)}px ${cfg.glowColor})`,
+      `drop-shadow(0 0 ${(r * 1.6).toFixed(1)}px ${rgba(cfg.glowColor, 0.85)})`); }
+  setS(fxEl, 'filter', fl.join(' ') || 'none');
+
+  /* letters */
+  const L = F.L, letters = built.letters;
+  for (let i = 0; i < letters.length; i++) {
+    const s = L[i], el = letters[i];
+    const t = [];
+    if (s.x || s.y) t.push(`translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`);
+    if (s.rotX) t.push(`perspective(600px) rotateX(${s.rotX.toFixed(1)}deg)`);
+    if (s.rot) t.push(`rotate(${s.rot.toFixed(1)}deg)`);
+    if (s.s !== 1) t.push(`scale(${Math.max(0, s.s).toFixed(3)})`);
+    setS(el, 'transform', t.join(' ') || 'none');
+    setS(el, 'opacity', String(clamp(s.op).toFixed(3)));
+    setS(el, 'filter', s.hue ? `hue-rotate(${s.hue.toFixed(0)}deg)` : 'none');
+    const ch = s.ch === null ? el.__ch : s.ch;
+    if (el.textContent !== ch) el.textContent = ch;
+  }
+  /* shine band and scanlines move: repaint the letters' backgrounds */
+  if (F.shine >= -0.5 || F.scan || F.forceScan || built.lastShine !== F.shine) {
+    const keep = cfg.scan;
+    if (F.forceScan) cfg.scan = 0.3;
+    paintLetters(F.shine, F.scan % 1000);
+    cfg.scan = keep;
+    built.lastShine = F.shine;
+  }
+
+  /* the typing cursor sits after the last letter showing */
+  if (F.cursor) {
+    let last = -1;
+    for (let i = 0; i < L.length; i++) if (L[i].op > 0.5) last = i;
+    const p = last >= 0 ? built.pos[last] : [0, 0, 0, built.pos[0] ? built.pos[0][3] : size];
+    cursorEl.textContent = '\u258c';
+    cursorEl.style.display = 'block';
+    cursorEl.style.left = (p[0] + p[2] + size * 0.04) + 'px';
+    cursorEl.style.top = p[1] + 'px';
+    cursorEl.style.color = cfg.fill === 'solid' ? cfg.color1 : cfg.color2;
+    cursorEl.style.opacity = '0.9';
+  } else if (cursorEl.style.display !== 'none') cursorEl.style.display = 'none';
+
+  /* ticker: scroll right to left through the box */
+  if (F.marquee !== undefined) {
+    const boxW = clipEl.clientWidth || innerWidth, w = built.bw;
+    const speed = 160 * Math.max(0.05, +cfg.idleSpeed || 1) * (size / 100);
+    const x = boxW - ((F.marquee * speed) % (boxW + w));
+    setS(fxEl, 'transform', `translateX(${x.toFixed(1)}px)`);
+  } else setS(fxEl, 'transform', 'none');
+
+  /* sparkles */
+  if (F.sparkle !== undefined) sparkles(F.sparkle);
+  else if (built.sparks) { built.sparks.forEach((s) => s.remove()); built.sparks = null; }
+}
+
+function sparkles(t) {
+  if (!built.sparks) {
+    built.sparks = [];
+    for (let i = 0; i < 9; i++) { const s = document.createElement('div'); s.className = 'spark'; fxEl.appendChild(s); built.sparks.push(s); }
+  }
+  const size = +cfg.size || 100;
+  built.sparks.forEach((s, i) => {
+    const per = 1.4 + hash(i) * 1.2, cyc = Math.floor((t + hash(i + 9) * per) / per), ph = ((t + hash(i + 9) * per) % per) / per;
+    const x = hash(cyc * 3 + i * 17) * built.bw, y = hash(cyc * 5 + i * 31) * built.bh;
+    const k = Math.sin(ph * Math.PI);
+    s.style.left = x + 'px'; s.style.top = y + 'px'; s.style.fontSize = (size * 0.45) + 'px';
+    s.style.transform = `scale(${(k * (0.4 + hash(i) * 0.8)).toFixed(3)}) rotate(${(ph * 90).toFixed(0)}deg)`;
+    s.style.opacity = k.toFixed(3);
+  });
+}
+
+/* ---------------- settings, events ---------------- */
+
+function apply(c, replay) {
+  const prev = cfg;
+  cfg = Object.assign({}, DEFAULTS, c || {});
+  if (cfg.source === 'countdown' && (prev.source !== 'countdown' || prev.cdMin !== cfg.cdMin || !countdownFrom)) countdownFrom = Date.now();
+  build(wantedText());
+  if (replay) play();
+}
+
+function play() { playAt = nowMs(); exitAt = -1; if (cfg.source === 'countdown' && cfg.cdKind === 'minutes') countdownFrom = Date.now(); }
+function hideNow() { const n = nowMs(); const tl = timeline(n); if (tl.phase !== 'hidden' && exitAt < 0) exitAt = n; }
+
+window.addEventListener('spazzTextConfig', (e) => {
+  const d = e.detail || {};
+  /* only a different animation or text replays it; restyling doesn't */
+  const replay = d.enter !== cfg.enter || d.text !== cfg.text || d.source !== cfg.source || d.cycle !== cfg.cycle;
+  apply(d, replay && !d.__noReplay);
+});
+window.addEventListener('spazzTextValue', (e) => {
+  const d = e.detail || {};
+  pushed = String(d.text == null ? '' : d.text);
+  if (d.replay && cfg.source === 'file') { build(wantedText()); play(); }
+});
+window.addEventListener('spazzTextNow', (e) => {
+  const d = e.detail || {};
+  const title = String(d.title || '');
+  if (title !== song.title) songChanged = true;
+  song = { title, pos: +d.pos || 0, dur: +d.dur || 0, state: +d.state || 0 };
+});
+window.addEventListener('spazzTextPlay', play);
+window.addEventListener('spazzTextHide', hideNow);
+window.addEventListener('obsSourceVisibleChanged', (e) => {
+  const vis = !!(e.detail && e.detail.visible);
+  if (vis && !running) { running = true; if (cfg.replayOnShow) play(); if (!TEST) requestAnimationFrame(tick); }
+  else if (!vis) running = false;
+});
+window.addEventListener('resize', () => layout());
+if (document.fonts) document.fonts.addEventListener('loadingdone', () => layout());
+
+function tick() { if (!running) return; render(performance.now()); requestAnimationFrame(tick); }
+
+async function boot() {
+  const q = new URLSearchParams(location.search);
+  if (TEST && q.get('bg')) document.body.style.background = q.get('bg');
+  const file = q.get('cfg');
+  let loaded = null;
+  if (file) {
+    try {
+      const r = await fetch(file + (file.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) loaded = await r.json();
+    } catch (_) { /* the source sends its settings right after anyway */ }
+  }
+  apply(loaded, true);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => layout());
+  if (!TEST) requestAnimationFrame(tick);
+}
+
+window.__text = {
+  apply: (c) => { liveNow = 0; apply(c, true); },
+  render: (ms) => render(ms),
+  play: (ms) => { liveNow = ms; play(); },
+  hide: (ms) => { liveNow = ms; hideNow(); },
+  song: (d) => window.dispatchEvent(new CustomEvent('spazzTextNow', { detail: d })),
+  value: (d) => window.dispatchEvent(new CustomEvent('spazzTextValue', { detail: d })),
+  fontsLoad: () => Promise.all(Array.from(document.fonts).map((f) => f.load().catch(() => null))).then(() => layout()),
+};
+boot();
+</script>
+</body>
+</html>

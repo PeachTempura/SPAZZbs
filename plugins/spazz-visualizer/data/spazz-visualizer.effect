@@ -41,8 +41,24 @@ uniform float bg_flat;   /* ... instead of the midnight gradient */
 uniform float4 view;     /* x zoom, y mirror left-right, z mirror top-bottom, w flip upside down */
 uniform float flip_x;
 
+/* the SPAZZamp player styles */
+uniform texture2d font_tex;  /* pixel font: 95 glyphs, 6 pixels apart, 8 tall (570x8) */
+uniform texture2d text_tex;  /* 256x4 character codes: 0 marquee, 1 kbps, 2 kHz, 3 labels */
+uniform float4 pl_state;     /* x progress 0..1, y 0 idle 1 playing 2 paused 3 stopped, z marquee scroll (chars), w marquee loop length (0 = still) */
+uniform float4 pl_digits;    /* the clock, m m s s */
+uniform float4 pl_info;      /* x volume, y shuffle, z repeat (0 off 1 all 2 one), w 1 = showing time left */
+uniform float4 pl_look;      /* x LCD viz kind, y strip viz kind (-1 off), z colour cycle, w accent mode (0 fixed, 1 cycle, 2 palette) */
+uniform float3 pl_accent;
+uniform float4 pl_show;      /* x title bar, y seek bar, z buttons, w stereo */
+
 sampler_state band_sampler {
 	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+sampler_state font_sampler {
+	Filter   = Point;
 	AddressU = Clamp;
 	AddressV = Clamp;
 };
@@ -1853,6 +1869,847 @@ float4 PSOceanSunset(VertData v_in) : TARGET
 
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* the SPAZZamp player: a little retro music player on stream, with   */
+/* its LCD clock, scrolling title and mini visualizer, in a few skins */
+/* (0 SPAZZamp, 1 Classic, 2 Neon, 3 Synthwave, 4 CRT, 5 Glitch).      */
+/* Laid out in "units" on a 275 x 116 window, like the old players.   */
+
+float pl_cover(float d, float px)
+{
+	return saturate(0.5 - d / px);
+}
+
+float pl_box(float2 p, float2 lo, float2 hi, float r)
+{
+	float2 c = (lo + hi) * 0.5;
+	float2 hs = (hi - lo) * 0.5;
+	float2 d = abs(p - c) - hs + r;
+	return length(max(d, float2(0.0, 0.0))) + min(max(d.x, d.y), 0.0) - r;
+}
+
+float pl_seg(float2 p, float2 a, float2 b)
+{
+	float2 pa = p - a;
+	float2 ba = b - a;
+	float h = saturate(dot(pa, ba) / dot(ba, ba));
+	return length(pa - ba * h);
+}
+
+float3 pl_hsv(float h, float s, float v)
+{
+	float3 k = saturate(abs(frac(h + float3(0.0, 0.6667, 0.3333)) * 6.0 - 3.0) - 1.0);
+	return v * lerp(float3(1.0, 1.0, 1.0), k, s);
+}
+
+/* the accent: fixed, cycling (like the SPAZZamp dock) or the palette */
+float3 pl_col(float shift)
+{
+	float3 cyc = pl_hsv(pl_look.z + shift, 0.66, 1.0);
+	float3 pal = prism(hue + shift);
+	return pl_look.w < 0.5 ? pl_accent : (pl_look.w < 1.5 ? cyc : pal);
+}
+
+/* ---- pixel font ---- */
+
+float pl_char(float row, float idx)
+{
+	float v = text_tex.SampleLevel(font_sampler, float2((idx + 0.5) / 256.0, (row + 0.5) / 4.0), 0.0).r;
+	return floor(v * 255.0 + 0.5);
+}
+
+float pl_glyph(float code, float2 g)
+{
+	float2 t = float2((code * 6.0 + floor(g.x) + 0.5) / 570.0, (floor(g.y) + 0.5) / 8.0);
+	return font_tex.SampleLevel(font_sampler, t, 0.0).r;
+}
+
+/* the font pixel at q (in font pixels from the text's top-left) */
+float pl_font_px(float2 q, float row, float start, float count, float scroll, float loop_len)
+{
+	float inside = step(0.0, q.x) * step(0.0, q.y) * step(q.y, 7.99) * step(q.x, count * 6.0 - 0.01);
+	float x = q.x + frac(scroll) * 6.0;
+	float cell = floor(x / 6.0);
+	float idx = cell + floor(scroll);
+	idx = loop_len > 0.5 ? glmod(idx, loop_len) : idx;
+	float2 g = float2(x - cell * 6.0, q.y);
+	return pl_glyph(pl_char(row, start + idx), g) * inside;
+}
+
+/* LCD-dot text: "count" characters of text row "row" from "start", its
+ * top-left at o, one font pixel "fp" units; scrolls when loop_len > 0 */
+float pl_text(float2 p, float2 o, float fp, float px, float row, float start, float count, float scroll,
+	      float loop_len)
+{
+	float2 q = (p - o) / fp;
+	BRANCH
+	if (q.x < -1.0 || q.y < -1.0 || q.y > 9.0 || q.x > count * 6.0 + 1.0) {
+		return 0.0;
+	}
+	float on = pl_font_px(q, row, start, count, scroll, loop_len);
+	float2 f = abs(frac(q + float2(frac(scroll) * 6.0, 0.0)) - 0.5);
+	float aa = px / fp;
+	float dot_r = lerp(0.42, 0.52, saturate(aa * 2.5));
+	return on * (1.0 - smoothstep(dot_r - aa * 0.5, dot_r + aa * 0.5, max(f.x, f.y)));
+}
+
+/* a soft glow around the same text, for the neon-ish skins */
+float pl_text_glow(float2 p, float2 o, float fp, float row, float start, float count, float scroll,
+		   float loop_len)
+{
+	float2 q = (p - o) / fp;
+	float g = 0.0;
+	BRANCH
+	if (q.x > -2.0 && q.y > -2.0 && q.y < 10.0 && q.x < count * 6.0 + 2.0) {
+		float sx = frac(scroll) * 6.0;
+		float2 base = float2(floor(q.x + sx) - sx, floor(q.y));
+		for (int j = -1; j <= 1; j++) {
+			for (int i = -1; i <= 1; i++) {
+				float2 cq = base + float2(float(i), float(j)) + 0.5;
+				float on = pl_font_px(cq, row, start, count, scroll, loop_len);
+				float2 d = q - cq;
+				g += on * exp(-dot(d, d) * 0.8);
+			}
+		}
+	}
+	return saturate(g * 0.5);
+}
+
+/* ---- 7-segment clock digits ---- */
+
+float pl_digit_mask(float d)
+{
+	return d < -0.5 ? 0.0
+	       : (d < 0.5 ? 63.0
+	       : (d < 1.5 ? 6.0
+	       : (d < 2.5 ? 91.0
+	       : (d < 3.5 ? 79.0
+	       : (d < 4.5 ? 102.0
+	       : (d < 5.5 ? 109.0 : (d < 6.5 ? 125.0 : (d < 7.5 ? 7.0 : (d < 8.5 ? 127.0 : (d < 9.5 ? 111.0 : 64.0))))))))));
+}
+
+float pl_bit(float m, float b)
+{
+	return glmod(floor(m / exp2(b) + 0.001), 2.0);
+}
+
+/* x: lit, y: unlit ghost, z: glow around the lit segments */
+float3 pl_seven(float2 p, float2 o, float w, float h, float m, float px)
+{
+	float2 q = p - o;
+	q.x -= (h - q.y) * 0.1; /* a little italic, like an LCD */
+	float3 r = float3(0.0, 0.0, 0.0);
+	BRANCH
+	if (q.x > -4.0 && q.y > -4.0 && q.x < w + 4.0 && q.y < h + 4.0) {
+		float t = w * 0.12;
+		float hm = h * 0.5;
+		float ins = t * 1.7;
+		float sa = pl_seg(q, float2(ins, t), float2(w - ins, t)) - t;
+		float sb = pl_seg(q, float2(w - t, ins), float2(w - t, hm - ins * 0.55)) - t;
+		float sc = pl_seg(q, float2(w - t, hm + ins * 0.55), float2(w - t, h - ins)) - t;
+		float sd = pl_seg(q, float2(ins, h - t), float2(w - ins, h - t)) - t;
+		float se = pl_seg(q, float2(t, hm + ins * 0.55), float2(t, h - ins)) - t;
+		float sf = pl_seg(q, float2(t, ins), float2(t, hm - ins * 0.55)) - t;
+		float sg = pl_seg(q, float2(ins, hm), float2(w - ins, hm)) - t;
+		float ba = pl_bit(m, 0.0);
+		float bb = pl_bit(m, 1.0);
+		float bc = pl_bit(m, 2.0);
+		float bd = pl_bit(m, 3.0);
+		float be = pl_bit(m, 4.0);
+		float bf = pl_bit(m, 5.0);
+		float bg_ = pl_bit(m, 6.0);
+		float big = 1000.0;
+		float dl = min(min(min(lerp(big, sa, ba), lerp(big, sb, bb)), min(lerp(big, sc, bc), lerp(big, sd, bd))),
+			       min(min(lerp(big, se, be), lerp(big, sf, bf)), lerp(big, sg, bg_)));
+		float du = min(min(min(lerp(big, sa, 1.0 - ba), lerp(big, sb, 1.0 - bb)),
+				   min(lerp(big, sc, 1.0 - bc), lerp(big, sd, 1.0 - bd))),
+			       min(min(lerp(big, se, 1.0 - be), lerp(big, sf, 1.0 - bf)), lerp(big, sg, 1.0 - bg_)));
+		r = float3(pl_cover(dl, px), pl_cover(du, px), exp(-max(dl, 0.0) / max(t * 2.2, px)));
+	}
+	return r;
+}
+
+/* ---- the little visualizers ---- */
+
+float3 pl_bar_col(float y, float x, float skin)
+{
+	float3 c = lerp(pl_col(x * 0.25) * 0.55, pl_col(0.08 + x * 0.25), saturate(y * 1.6));
+	c = lerp(c, float3(1.0, 1.0, 1.0), saturate(y - 0.85) * 1.5);
+	/* the classic: green, then yellow, then red at the top */
+	float3 classic = y < 0.55 ? float3(0.1, 0.9, 0.25) : (y < 0.8 ? float3(1.0, 0.85, 0.15) : float3(1.0, 0.25, 0.15));
+	c = skin > 0.5 && skin < 1.5 && pl_look.w < 0.5 ? classic : c;
+	/* CRT: one phosphor colour */
+	c = skin > 3.5 && skin < 4.5 ? pl_col(0.0) * (0.45 + 0.55 * y) : c;
+	return c;
+}
+
+/* kind: 0 bars, 1 oscilloscope, 2 aurora, 3 LED peaks */
+float4 pl_viz(float2 p, float2 lo, float2 hi, float kind, float skin, float px)
+{
+	float2 sz = hi - lo;
+	float2 q = (p - lo) / sz;
+	float4 c = float4(0.0, 0.0, 0.0, 0.0);
+	BRANCH
+	if (q.x >= 0.0 && q.x <= 1.0 && q.y >= 0.0 && q.y <= 1.0) {
+		float yup = 1.0 - q.y;
+		float pxy = px / sz.y;
+		if (kind < 0.5) {
+			float n = floor(clamp(sz.x / 4.6 * density, 8.0, 64.0));
+			float i = floor(q.x * n);
+			float fx = frac(q.x * n);
+			float4 bd = band_full((i + 0.5) / n);
+			float gx = step(0.14, fx) * step(fx, 0.86);
+			float bar = gx * (1.0 - smoothstep(bd.r - pxy, bd.r + pxy, yup));
+			c = over(c, pl_bar_col(yup, i / n, skin) * (1.0 + 0.4 * bd.b), bar);
+			float cap = gx * (1.0 - smoothstep(pxy * 0.8, pxy * 2.0, abs(yup - max(bd.g, 0.02))));
+			c = over(c, lerp(pl_bar_col(1.0, i / n, skin), float3(1.0, 1.0, 1.0), 0.5), cap * 0.9);
+		} else if (kind < 1.5) {
+			float a = 0.0;
+			for (int k = 1; k <= 7; k++) {
+				float kf = float(k);
+				float e = band_level(kf / 8.0);
+				a += e * sin(q.x * 6.2831853 * (kf * 1.35 + 0.6) + time * (2.0 + kf * 1.7) + kf * 1.9) /
+				     sqrt(kf);
+			}
+			float y = 0.5 - a * 0.36 * (0.7 + 0.6 * level);
+			float d = abs(q.y - y) * sz.y;
+			float3 lc = pl_col(q.x * 0.3);
+			c = over(c, lc, exp(-d / 1.6) * 0.45);
+			c = over(c, lerp(lc, float3(1.0, 1.0, 1.0), 0.35), pl_cover(d - 0.45, px));
+			/* faint centre line */
+			c = over(c, lc, pl_cover(abs(q.y - 0.5) * sz.y - 0.15, px) * 0.15);
+		} else if (kind < 2.5) {
+			float e = band_level(abs(q.x - 0.5) * 2.0);
+			float wv = 0.07 * sin(q.x * 17.0 + time * 2.3) + 0.04 * sin(q.x * 31.0 - time * 3.1);
+			float top = 1.0 - (0.15 + 0.85 * e) + wv;
+			float curtain = smoothstep(top - 0.08, top + 0.06, q.y) * (1.0 - smoothstep(top + 0.05, 1.05, q.y) * 0.75);
+			float rays = 0.65 + 0.35 * sin(q.x * 70.0 + time * 4.0 + sin(q.x * 9.0) * 3.0);
+			float3 ac = lerp(pl_col(q.x * 0.5 + 0.1), pl_col(q.x * 0.5 + 0.45), saturate((q.y - top) * 2.0));
+			c = over(c, ac, curtain * rays * (0.45 + 0.55 * e));
+			c = over(c, lerp(ac, float3(1.0, 1.0, 1.0), 0.4), exp(-abs(q.y - top) * sz.y / 0.8) * (0.3 + 0.7 * e));
+		} else {
+			float n = floor(clamp(sz.x / 6.0 * density, 6.0, 48.0));
+			float rows = max(floor(sz.y / 2.6), 4.0);
+			float i = floor(q.x * n);
+			float j = floor(yup * rows);
+			float2 f = float2(frac(q.x * n), frac(yup * rows));
+			float4 bd = band_full((i + 0.5) / n);
+			float cell = step(0.12, f.x) * step(f.x, 0.88) * step(0.16, f.y) * step(f.y, 0.84);
+			float on = step(j + 0.5, bd.r * rows);
+			float pk = step(abs(j - floor(bd.g * rows)), 0.5) * step(0.03, bd.g);
+			float3 lc = pl_bar_col(j / rows, i / n, skin);
+			c = over(c, lc, cell * 0.08);
+			c = over(c, lc, cell * on);
+			c = over(c, lerp(lc, float3(1.0, 1.0, 1.0), 0.6), cell * pk * (1.0 - on));
+		}
+	}
+	return c;
+}
+
+/* ---- panels ---- */
+
+/* an LCD well: dark inset with a faint dot grid */
+float4 pl_well(float4 c, float2 p, float2 lo, float2 hi, float px, float3 lcd, float3 acc, float neon)
+{
+	float d = pl_box(p, lo, hi, 2.5);
+	float cov = pl_cover(d, px);
+	c = over(c, lcd, cov * lerp(1.0, 0.85, neon));
+	float2 g = abs(frac((p - lo) / 2.0) - 0.5);
+	c = over(c, float3(1.0, 1.0, 1.0), cov * (1.0 - smoothstep(0.12, 0.2, max(g.x, g.y))) * 0.035);
+	/* inset: dark rim, a light line along the bottom */
+	c = over(c, float3(0.0, 0.0, 0.0), pl_cover(abs(d + 0.35) - 0.35, px) * 0.8 * (1.0 - neon));
+	c = over(c, float3(1.0, 1.0, 1.0),
+		 pl_cover(abs(p.y - (hi.y - 0.6)) - 0.25, px) * step(lo.x + 2.0, p.x) * step(p.x, hi.x - 2.0) * 0.07 *
+			 (1.0 - neon));
+	/* neon: a glowing outline instead */
+	c = over(c, acc, neon * (pl_cover(abs(d) - 0.3, px) * 0.95 + exp(-abs(d) / 1.4) * 0.35));
+	return c;
+}
+
+/* a raised button */
+float4 pl_button(float4 c, float2 p, float2 lo, float2 hi, float px, float3 face, float3 acc, float neon)
+{
+	float d = pl_box(p, lo, hi, 2.0);
+	float cov = pl_cover(d, px);
+	float t = saturate((p.y - lo.y) / max(hi.y - lo.y, 1.0));
+	float3 f = lerp(face * 1.45, face * 0.75, t);
+	c = over(c, f, cov * (1.0 - neon * 0.8));
+	c = over(c, float3(1.0, 1.0, 1.0), pl_cover(abs(p.y - lo.y - 0.9) - 0.3, px) * cov * 0.12 * (1.0 - neon));
+	c = over(c, float3(0.0, 0.0, 0.0), pl_cover(abs(d + 0.3) - 0.3, px) * 0.85 * (1.0 - neon));
+	c = over(c, acc, neon * (pl_cover(abs(d) - 0.3, px) * 0.9 + exp(-abs(d) / 1.2) * 0.25));
+	return c;
+}
+
+/* transport glyphs, centred at m: 0 prev, 1 play, 2 pause, 3 stop, 4 next, 5 eject */
+float pl_icon(float2 p, float2 m, float kind, float px)
+{
+	float2 q = p - m;
+	float d = 100.0;
+	if (kind < 0.5) {
+		float2 r = q - float2(0.8, 0.0);
+		d = min(max(r.x - 2.0, abs(r.y) - (2.6 + r.x) * 0.72), pl_box(q, float2(-4.0, -2.8), float2(-2.8, 2.8), 0.2));
+	} else if (kind < 1.5) {
+		float2 r = q - float2(0.4, 0.0);
+		d = max(-r.x - 2.6, abs(r.y) - (3.0 - r.x) * 0.62);
+	} else if (kind < 2.5) {
+		d = min(pl_box(q, float2(-2.6, -2.8), float2(-0.7, 2.8), 0.2), pl_box(q, float2(0.7, -2.8), float2(2.6, 2.8), 0.2));
+	} else if (kind < 3.5) {
+		d = pl_box(q, float2(-2.6, -2.6), float2(2.6, 2.6), 0.3);
+	} else if (kind < 4.5) {
+		float2 r = q + float2(0.8, 0.0);
+		d = min(max(-r.x - 2.0, abs(r.y) - (2.6 - r.x) * 0.72), pl_box(q, float2(2.8, -2.8), float2(4.0, 2.8), 0.2));
+	} else {
+		d = min(max(q.y - 0.4, abs(q.x) - (q.y + 3.4) * 0.85), pl_box(q, float2(-2.9, 1.6), float2(2.9, 2.8), 0.2));
+	}
+	return pl_cover(d, px);
+}
+
+float4 pl_draw(float2 p, float px, float skin)
+{
+	float W = 275.0;
+	float strip_on = step(-0.5, pl_look.y);
+	float H = lerp(98.0, 116.0, strip_on);
+	float4 c = float4(0.0, 0.0, 0.0, 0.0);
+
+	float st = pl_state.y;
+	float playing = step(0.5, st) * step(st, 1.5);
+	float paused = step(1.5, st) * step(st, 2.5);
+	float going = max(playing, paused);
+
+	/* the skin */
+	float3 acc = pl_col(0.0);
+	float3 acc2 = pl_col(0.33);
+	float3 body_a = float3(0.118, 0.110, 0.169);
+	float3 body_b = float3(0.071, 0.067, 0.102);
+	float3 lcd = float3(0.016, 0.020, 0.039);
+	float3 ink = float3(0.42, 0.40, 0.52); /* small labels */
+	float neon = 0.0;
+	if (skin > 0.5 && skin < 1.5) {
+		body_a = float3(0.30, 0.30, 0.38);
+		body_b = float3(0.15, 0.15, 0.21);
+		lcd = float3(0.0, 0.0, 0.0);
+		ink = float3(0.75, 0.75, 0.82);
+		acc2 = pl_look.w < 0.5 ? float3(1.0, 0.85, 0.2) : acc2;
+	} else if (skin > 1.5 && skin < 2.5) {
+		body_a = float3(0.035, 0.02, 0.06);
+		body_b = float3(0.01, 0.0, 0.025);
+		lcd = float3(0.005, 0.0, 0.02);
+		ink = acc * 0.7;
+		neon = 1.0;
+		acc2 = pl_look.w < 0.5 ? float3(0.0, 0.9, 1.0) : acc2;
+	} else if (skin > 2.5 && skin < 3.5) {
+		body_a = float3(0.17, 0.05, 0.28);
+		body_b = float3(0.05, 0.01, 0.10);
+		lcd = float3(0.025, 0.0, 0.06);
+		ink = float3(0.75, 0.55, 0.95);
+		acc2 = pl_look.w < 0.5 ? float3(0.13, 0.9, 1.0) : acc2;
+	} else if (skin > 3.5 && skin < 4.5) {
+		body_a = float3(0.05, 0.085, 0.06);
+		body_b = float3(0.02, 0.035, 0.025);
+		lcd = float3(0.0, 0.025, 0.01);
+		ink = acc * 0.55;
+		acc2 = acc * 0.75;
+	} else if (skin > 4.5) {
+		body_a = float3(0.075, 0.075, 0.095);
+		body_b = float3(0.03, 0.03, 0.04);
+		lcd = float3(0.0, 0.0, 0.02);
+		ink = float3(0.55, 0.55, 0.62);
+		acc2 = pl_look.w < 0.5 ? float3(1.0, 0.17, 0.55) : acc2;
+	}
+
+	/* the window */
+	float dw = pl_box(p, float2(0.0, 0.0), float2(W, H), 5.0);
+	c = over(c, acc, neon * exp(-max(dw, 0.0) / 3.5) * step(0.0, dw) * 0.55);
+	BRANCH
+	if (dw > 14.0) {
+		return c;
+	}
+	float win = pl_cover(dw, px);
+	float3 body = lerp(body_a, body_b, saturate(p.y / H));
+	body *= 0.965 + 0.035 * sin(p.y * 2.7 + sin(p.x * 0.05) * 2.0);
+	/* synthwave: a sunset grid fading up the body */
+	float gy = saturate((p.y - H * 0.55) / (H * 0.45));
+	float grid = (pl_cover(abs(frac((p.x - W * 0.5) / (6.0 + 30.0 * (1.0 - gy)) + 0.5) - 0.5) * 6.0 - 0.15, px) +
+		      pl_cover(abs(frac(gy * gy * 6.0 - time * 0.4) - 0.5) * 8.0 - 0.15, px)) * gy;
+	body = skin > 2.5 && skin < 3.5 ? body + acc * grid * 0.12 : body;
+	c = over(c, body, win * lerp(1.0, 0.9, neon));
+	float rim = pl_cover(abs(dw + 0.9) - 0.45, px);
+	float3 rim_c = lerp(float3(1.0, 1.0, 1.0), float3(0.0, 0.0, 0.0), saturate(p.y / H + 0.2));
+	c = over(c, rim_c, rim * 0.22 * (1.0 - neon));
+	c = over(c, float3(0.0, 0.0, 0.0), pl_cover(abs(dw) - 0.45, px) * (1.0 - neon));
+	c = over(c, acc, neon * pl_cover(abs(dw + 0.5) - 0.5, px));
+
+	/* title bar */
+	BRANCH
+	if (pl_show.x > 0.5 && p.y < 15.0) {
+		float tb = pl_box(p, float2(3.0, 2.5), float2(W - 3.0, 13.0), 2.0);
+		float tbc = pl_cover(tb, px);
+		float3 tbcol = lerp(body_a * 1.7, body_a * 1.15, saturate((p.y - 2.5) / 10.5));
+		tbcol = skin > 0.5 && skin < 1.5 ? lerp(float3(0.16, 0.17, 0.42), float3(0.33, 0.35, 0.7), p.x / W) : tbcol;
+		tbcol = skin > 2.5 && skin < 3.5 ? lerp(float3(1.0, 0.2, 0.55), float3(1.0, 0.62, 0.18), p.x / W) * 0.55 : tbcol;
+		c = over(c, tbcol, tbc * (1.0 - neon));
+		float grooves = (pl_cover(abs(p.y - 5.6) - 0.4, px) + pl_cover(abs(p.y - 8.0) - 0.4, px) +
+				 pl_cover(abs(p.y - 10.4) - 0.4, px)) *
+				(step(9.0, p.x) * step(p.x, 108.0) + step(167.0, p.x) * step(p.x, 238.0));
+		c = over(c, lerp(ink, acc, 0.4 + 0.6 * neon), grooves * tbc * 0.45);
+		float tt = pl_text(p, float2(114.0, 4.0), 1.0, px, 3.0, 0.0, 8.0, 0.0, 0.0);
+		float3 tcol = skin > 0.5 && skin < 1.5 ? float3(0.92, 0.92, 1.0) : acc;
+		c = over(c, tcol, pl_text_glow(p, float2(114.0, 4.0), 1.0, 3.0, 0.0, 8.0, 0.0, 0.0) * 0.5 * (1.0 - step(0.5, skin) * step(skin, 1.5)));
+		c = over(c, tcol, tt);
+		/* minimise / shade / close */
+		for (int k = 0; k < 3; k++) {
+			float kf = float(k);
+			float2 bm = float2(247.0 + kf * 9.5, 7.75);
+			c = pl_button(c, p, bm - 3.4, bm + 3.4, px, body_a * 1.2, acc, neon);
+			float2 q = p - bm;
+			float gd = kf < 0.5 ? pl_box(q, float2(-2.0, 1.0), float2(2.0, 1.9), 0.1)
+				   : (kf < 1.5 ? abs(pl_box(q, float2(-1.9, -1.9), float2(1.9, 1.9), 0.2)) - 0.35
+					       : min(pl_seg(q, float2(-1.8, -1.8), float2(1.8, 1.8)), pl_seg(q, float2(-1.8, 1.8), float2(1.8, -1.8))) - 0.45);
+			c = over(c, lerp(ink, acc, neon), pl_cover(gd, px));
+		}
+	}
+
+	/* ---- the LCD: state, clock and the mini visualizer ---- */
+	c = pl_well(c, p, float2(8.0, 16.0), float2(104.0, 60.0), px, lcd, acc, neon);
+	BRANCH
+	if (p.x > 6.0 && p.x < 106.0 && p.y > 14.0 && p.y < 62.0) {
+		/* play state */
+		float2 gm = float2(15.5, 24.0);
+		float blink = paused * step(0.45, frac(time * 1.1));
+		float sg = playing > 0.5 ? pl_icon(p, gm, 1.0, px) : (paused > 0.5 ? pl_icon(p, gm, 2.0, px) : pl_icon(p, gm, 3.0, px));
+		float2 gd = p - gm;
+		c = over(c, acc, playing * exp(-dot(gd, gd) / 18.0) * 0.35);
+		c = over(c, acc, sg * lerp(0.4, 1.0, going) * (1.0 - blink * 0.7));
+
+		/* the clock: [-]mm:ss */
+		float dimc = lerp(0.35, 1.0, going) * (1.0 - paused * step(0.55, frac(time * 1.1)) * 0.75);
+		float3 d1 = pl_seven(p, float2(37.0, 20.0), 10.0, 17.0, pl_digit_mask(pl_digits.x), px);
+		float3 d2 = pl_seven(p, float2(51.0, 20.0), 10.0, 17.0, pl_digit_mask(pl_digits.y), px);
+		float3 d3 = pl_seven(p, float2(69.0, 20.0), 10.0, 17.0, pl_digit_mask(pl_digits.z), px);
+		float3 d4 = pl_seven(p, float2(83.0, 20.0), 10.0, 17.0, pl_digit_mask(pl_digits.w), px);
+		float3 dm = pl_seven(p, float2(24.0, 20.0), 9.0, 17.0, pl_info.w > 0.5 ? 64.0 : 0.0, px);
+		float3 dd = max(max(max(d1, d2), max(d3, d4)), dm);
+		float colon = max(pl_cover(length(p - float2(64.0, 25.0)) - 1.15, px), pl_cover(length(p - float2(63.0, 32.0)) - 1.15, px));
+		c = over(c, acc, dd.y * 0.09);
+		c = over(c, acc, dd.z * 0.3 * dimc);
+		c = over(c, lerp(acc, float3(1.0, 1.0, 1.0), 0.2), max(dd.x, colon) * dimc);
+
+		/* mini visualizer */
+		float4 vz = pl_viz(p, float2(12.0, 41.0), float2(100.0, 57.0), pl_look.x, skin, px);
+		c = over(c, vz.rgb, vz.a);
+	}
+
+	/* ---- the marquee ---- */
+	c = pl_well(c, p, float2(108.0, 16.0), float2(268.0, 29.0), px, lcd, acc, neon);
+	BRANCH
+	if (p.x > 106.0 && p.y > 14.0 && p.y < 31.0) {
+		float mq = pl_text(p, float2(113.0, 19.0), 1.0, px, 0.0, 0.0, 25.0, pl_state.z, pl_state.w);
+		float3 mcol = skin > 2.5 && skin < 3.5 ? lerp(acc, acc2, saturate((p.y - 19.0) / 8.0)) : acc;
+		float glow = neon + step(2.5, skin) * step(skin, 3.5) * 0.7 + step(3.5, skin) * 0.5;
+		BRANCH
+		if (glow > 0.0) {
+			c = over(c, mcol, pl_text_glow(p, float2(113.0, 19.0), 1.0, 0.0, 0.0, 25.0, pl_state.z, pl_state.w) *
+						  0.45 * glow);
+		}
+		c = over(c, mcol, mq * lerp(0.55, 1.0, step(0.5, st)));
+	}
+
+	/* ---- kbps / kHz / mono stereo ---- */
+	BRANCH
+	if (p.x > 106.0 && p.y > 30.0 && p.y < 44.0) {
+		c = pl_well(c, p, float2(108.0, 32.0), float2(128.0, 42.0), px, lcd, acc, neon);
+		c = pl_well(c, p, float2(153.0, 32.0), float2(168.0, 42.0), px, lcd, acc, neon);
+		c = over(c, acc, pl_text(p, float2(109.5, 33.2), 1.0, px, 1.0, 0.0, 3.0, 0.0, 0.0));
+		c = over(c, acc, pl_text(p, float2(155.0, 33.2), 1.0, px, 2.0, 0.0, 2.0, 0.0, 0.0));
+		c = over(c, ink, pl_text(p, float2(131.0, 34.4), 0.85, px, 3.0, 9.0, 4.0, 0.0, 0.0));
+		c = over(c, ink, pl_text(p, float2(171.0, 34.4), 0.85, px, 3.0, 14.0, 3.0, 0.0, 0.0));
+		float stereo = pl_show.w;
+		c = over(c, lerp(ink * 0.35, acc, 1.0 - stereo), pl_text(p, float2(197.0, 34.4), 0.85, px, 3.0, 18.0, 4.0, 0.0, 0.0));
+		c = over(c, lerp(ink * 0.35, acc, stereo), pl_text(p, float2(222.0, 34.4), 0.85, px, 3.0, 23.0, 6.0, 0.0, 0.0));
+	}
+
+	/* ---- volume, balance, EQ / PL ---- */
+	BRANCH
+	if (p.x > 106.0 && p.y > 44.0 && p.y < 55.0) {
+		float vol = saturate(pl_info.x);
+		float vg = pl_box(p, float2(108.0, 46.5), float2(176.0, 50.5), 2.0);
+		c = over(c, lcd, pl_cover(vg, px));
+		float vx = 108.0 + 68.0 * vol;
+		c = over(c, lerp(acc * 0.35, acc, saturate((p.x - 108.0) / 68.0)), pl_cover(vg + 0.6, px) * step(p.x, vx));
+		c = pl_button(c, p, float2(vx - 3.5, 45.0), float2(vx + 3.5, 52.0), px, body_a * 1.5, acc, neon);
+		float bgr = pl_box(p, float2(182.0, 46.5), float2(220.0, 50.5), 2.0);
+		c = over(c, lcd, pl_cover(bgr, px));
+		c = pl_button(c, p, float2(197.5, 45.0), float2(204.5, 52.0), px, body_a * 1.5, acc, neon);
+		c = pl_button(c, p, float2(226.0, 44.5), float2(245.0, 53.0), px, body_a * 1.2, acc, neon);
+		c = pl_button(c, p, float2(248.0, 44.5), float2(267.0, 53.0), px, body_a * 1.2, acc, neon);
+		c = over(c, lerp(ink, acc, 0.5), pl_text(p, float2(231.2, 45.4), 0.85, px, 3.0, 39.0, 2.0, 0.0, 0.0));
+		c = over(c, lerp(ink, acc, 0.5), pl_text(p, float2(253.2, 45.4), 0.85, px, 3.0, 42.0, 2.0, 0.0, 0.0));
+	}
+
+	/* ---- seek bar ---- */
+	BRANCH
+	if (pl_show.y > 0.5 && p.y > 61.0 && p.y < 72.0) {
+		float sk = pl_box(p, float2(8.0, 63.5), float2(267.0, 69.5), 2.5);
+		c = over(c, lcd, pl_cover(sk, px));
+		float tx = 8.0 + 11.0 + saturate(pl_state.x) * (259.0 - 22.0);
+		c = over(c, lerp(acc * 0.25, acc * 0.8, saturate((p.x - 8.0) / 259.0)), pl_cover(sk + 1.2, px) * step(p.x, tx) * going);
+		c = pl_button(c, p, float2(tx - 11.0, 62.5), float2(tx + 11.0, 70.5), px, body_a * 1.6, acc, neon);
+		c = over(c, ink, pl_cover(abs(p.x - tx) - 0.4, px) * step(64.5, p.y) * step(p.y, 68.5) * 0.6);
+	}
+
+	/* ---- transport, shuffle / repeat, logo ---- */
+	BRANCH
+	if (pl_show.z > 0.5 && p.y > 73.0 && p.y < 94.0) {
+		for (int k = 0; k < 5; k++) {
+			float kf = float(k);
+			float2 lo = float2(8.0 + kf * 23.0, 75.0);
+			float2 hi = lo + float2(21.0, 17.0);
+			bool hit = abs(p.x - (lo.x + 10.5)) < 12.0;
+			BRANCH
+			if (hit) {
+				c = pl_button(c, p, lo, hi, px, body_a * 1.25, acc, neon);
+				float on = kf > 0.5 && kf < 1.5 ? playing : (kf > 1.5 && kf < 2.5 ? paused : (kf > 2.5 && kf < 3.5 ? (1.0 - going) * step(0.5, st) : 0.0));
+				float3 gc = lerp(ink, acc, max(on, neon * 0.6));
+				float ic = pl_icon(p, (lo + hi) * 0.5, kf < 0.5 ? 0.0 : (kf < 1.5 ? 1.0 : (kf < 2.5 ? 2.0 : (kf < 3.5 ? 3.0 : 4.0))), px);
+				float2 gd = p - (lo + hi) * 0.5;
+				c = over(c, acc, on * exp(-dot(gd, gd) / 20.0) * 0.35);
+				c = over(c, gc, ic);
+			}
+		}
+		c = pl_button(c, p, float2(124.0, 76.0), float2(143.0, 90.0), px, body_a * 1.25, acc, neon);
+		c = over(c, lerp(ink, acc, neon * 0.6), pl_icon(p, float2(133.5, 83.0), 5.0, px));
+
+		/* shuffle and repeat, with their lights */
+		c = pl_button(c, p, float2(160.0, 77.0), float2(197.0, 89.0), px, body_a * 1.2, acc, neon);
+		c = pl_button(c, p, float2(200.0, 77.0), float2(236.0, 89.0), px, body_a * 1.2, acc, neon);
+		c = over(c, ink, pl_text(p, float2(164.0, 79.6), 0.85, px, 3.0, 30.0, 4.0, 0.0, 0.0));
+		c = over(c, ink, pl_text(p, float2(204.0, 79.6), 0.85, px, 3.0, 35.0, 3.0, 0.0, 0.0));
+		float shuf = pl_info.y;
+		float rep = step(0.5, pl_info.z);
+		float2 l1 = p - float2(191.0, 83.0);
+		float2 l2 = p - float2(230.0, 83.0);
+		c = over(c, acc, shuf * exp(-dot(l1, l1) / 6.0) * 0.5 + 0.0);
+		c = over(c, lerp(lcd, acc, shuf), pl_cover(length(l1) - 1.7, px));
+		c = over(c, acc, rep * exp(-dot(l2, l2) / 6.0) * 0.5);
+		c = over(c, lerp(lcd, acc, rep), pl_cover(length(l2) - 1.7, px));
+		c = over(c, acc, step(1.5, pl_info.z) * pl_text(p, float2(222.0, 79.6), 0.85, px, 3.0, 45.0, 1.0, 0.0, 0.0));
+
+		/* the logo: a ring that kicks on the beat */
+		float2 lg = p - float2(256.5, 83.0);
+		float lr = length(lg);
+		float ring = pl_cover(abs(lr - 6.2 - beat * 0.8) - 0.9, px);
+		c = over(c, acc, exp(-abs(lr - 6.2) / 2.0) * (0.15 + 0.5 * beat));
+		c = over(c, lerp(acc, acc2, 0.5 + 0.5 * sin(time * 2.0)), ring);
+		c = over(c, acc2, pl_icon(p, float2(257.0, 83.0), 1.0, px) * 0.9);
+	}
+
+	/* ---- the wide visualizer strip ---- */
+	BRANCH
+	if (strip_on > 0.5 && p.y > 94.0) {
+		c = pl_well(c, p, float2(8.0, 96.0), float2(267.0, 112.0), px, lcd, acc, neon);
+		float4 vs = pl_viz(p, float2(10.0, 97.5), float2(265.0, 110.5), pl_look.y, skin, px);
+		c = over(c, vs.rgb, vs.a);
+	}
+
+	c.a *= win + neon * (1.0 - win) * step(0.0, dw);
+	return c;
+}
+
+float pl_height()
+{
+	return lerp(98.0, 116.0, step(-0.5, pl_look.y));
+}
+
+/* screen pixels per unit: the window fits the canvas with a margin */
+float pl_scale()
+{
+	return min(res.x * 0.94 / 275.0, res.y * 0.94 / pl_height());
+}
+
+float2 pl_pos(float2 uv, float sc)
+{
+	float2 o = (res - float2(275.0, pl_height()) * sc) * 0.5;
+	return (uv * res - o) / sc;
+}
+
+float4 player_plain(VertData v_in, float skin)
+{
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	return finish_paint(pl_draw(pl_pos(uv, sc), 1.0 / sc, skin), uv);
+}
+
+float4 PSPlayerSpazz(VertData v_in) : TARGET
+{
+	return player_plain(v_in, 0.0);
+}
+
+float4 PSPlayerClassic(VertData v_in) : TARGET
+{
+	return player_plain(v_in, 1.0);
+}
+
+float4 PSPlayerNeon(VertData v_in) : TARGET
+{
+	return player_plain(v_in, 2.0);
+}
+
+float4 PSPlayerSynthwave(VertData v_in) : TARGET
+{
+	return player_plain(v_in, 3.0);
+}
+
+/* CRT: the whole player on a curved phosphor screen */
+float4 PSPlayerCRT(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float2 dims = float2(275.0, pl_height());
+	float2 ctr = dims * 0.5;
+	float2 cc = (p - ctr) / dims;
+	float r2 = dot(cc, cc);
+	p = ctr + cc * (1.0 + 0.16 * r2) * dims;
+	float4 c = pl_draw(p, px * 1.1, 4.0);
+	float l = dot(c.rgb, float3(0.3, 0.55, 0.15));
+	c.rgb = lerp(c.rgb, pl_col(0.0) * l * 1.6, 0.8);
+	float scan = 0.72 + 0.28 * sin(v_in.uv.y * res.y * 3.14159265 / 1.5);
+	float rl = glmod(v_in.uv.y - time * 0.25, 1.0) * 12.0 - 6.0;
+	float roll = 1.0 + 0.08 * exp(-rl * rl);
+	c.rgb *= scan * roll * (0.96 + 0.04 * sin(time * 47.0));
+	c.rgb += pl_col(0.0) * l * 0.25;
+	return finish_paint(c, uv);
+}
+
+/* Glitch: colour channels split apart and slices jump sideways on the beat */
+float4 PSPlayerGlitch(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float2 dims = float2(275.0, pl_height());
+	float tick = floor(time * 14.0);
+	float row = floor(p.y / 4.5);
+	float g = hash21(float2(row, tick));
+	float burst = step(0.82 - 0.35 * beat, hash11(tick * 0.37 + 1.3));
+	p.x += (g - 0.5) * 16.0 * burst * step(0.55, hash21(float2(row * 1.7, tick + 3.0)));
+	float split = 0.8 + 2.6 * beat + 1.5 * burst;
+	float4 cr = pl_draw(p + float2(split, 0.0), px, 5.0);
+	float4 cg = pl_draw(p, px, 5.0);
+	float4 cb = pl_draw(p - float2(split, 0.0), px, 5.0);
+	float a = max(cg.a, max(cr.a, cb.a));
+	float3 rgb = float3(cr.r * cr.a, cg.g * cg.a, cb.b * cb.a) / max(a, 0.0001);
+	/* blocks of digital junk */
+	float2 blk = floor(p / float2(9.0, 3.0));
+	float junk = step(0.985 - 0.04 * beat, hash21(blk + tick * 1.31)) * step(0.0, p.y) * step(p.y, dims.y);
+	rgb = lerp(rgb, pl_col(hash21(blk) * 0.6), junk * 0.8);
+	a = max(a, junk * 0.8 * step(0.0, p.x) * step(p.x, dims.x));
+	rgb *= 0.9 + 0.1 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* Neon scope: a vector oscilloscope, beam glow and afterglow, with a  */
+/* Lissajous figure kicking with the bass                              */
+
+float ns_wave(float x, float t)
+{
+	float a = 0.0;
+	for (int k = 1; k <= 8; k++) {
+		float kf = float(k);
+		float e = band_level(kf / 9.0);
+		a += e * sin(x * 6.2831853 * (kf * 1.2 + 0.5) + t * (1.5 + kf * 1.3) + kf * 2.1) / sqrt(kf);
+	}
+	return a;
+}
+
+float4 PSNeonScope(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* graticule */
+	float2 gq = abs(frac(float2((p.x - aspect * 0.5) * 8.0, (p.y - 0.5) * 8.0) + 0.5) - 0.5) / 8.0;
+	float grid = (1.0 - smoothstep(0.0, px * 1.2, gq.x)) + (1.0 - smoothstep(0.0, px * 1.2, gq.y));
+	light += prism(hue + 0.5) * grid * 0.035;
+
+	/* the trace, with two fading echoes behind it */
+	float amp = 0.17 * (0.6 + 0.8 * level) * density;
+	for (int e = 0; e < 3; e++) {
+		float ef = float(e);
+		float t = time - ef * 0.06;
+		float y = 0.5 - ns_wave(p.x / aspect, t) * amp;
+		float d = abs(p.y - y);
+		float k = exp(-ef * 1.1);
+		float3 tc = prism(hue + p.x / aspect * 0.35 + ef * 0.05);
+		light += tc * (exp(-d / (px * 2.0)) * 1.6 + exp(-d / 0.02) * 0.35) * k;
+	}
+
+	/* Lissajous: x and y from different bands */
+	float2 ctr = float2(aspect * 0.5, 0.5);
+	float rad = 0.16 + 0.08 * bass + 0.05 * beat;
+	float best = 1.0;
+	BRANCH
+	if (length(p - ctr) < rad * 1.5 + 0.1) {
+		float fa = 2.0 + floor(mid * 3.0);
+		float2 a0 = ctr + rad * float2(sin(time * 0.7), sin(time * 0.5));
+		for (int i = 1; i <= 48; i++) {
+			float s = float(i) / 48.0 * 6.2831853;
+			float2 a1 = ctr + rad * float2(sin(s * fa + time * 0.7), sin(s * 3.0 + time * 0.5));
+			best = min(best, pl_seg(p, a0, a1));
+			a0 = a1;
+		}
+	}
+	float3 lc = prism(hue + 0.3);
+	light += lc * (exp(-best / (px * 2.2)) * 1.3 + exp(-best / 0.025) * (0.25 + 0.5 * beat));
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* CRT spectrum: bars on a curved old TV, scanlines, an aperture grille */
+/* and the picture rolling                                              */
+
+float4 PSCRTSpectrum(VertData v_in) : TARGET
+{
+	float2 uv0 = view_uv(v_in.uv);
+	float2 cc = uv0 - 0.5;
+	float r2 = dot(cc, cc);
+	float2 uv = 0.5 + cc * (1.0 + 0.22 * r2);
+	float edge = smoothstep(0.0, 0.012, uv.x) * smoothstep(0.0, 0.012, uv.y) * smoothstep(0.0, 0.012, 1.0 - uv.x) *
+		     smoothstep(0.0, 0.012, 1.0 - uv.y);
+	float aspect = res.x / res.y;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	float n = floor(clamp(28.0 * density, 8.0, 64.0));
+	float i = floor(uv.x * n);
+	float fx = frac(uv.x * n);
+	float4 bd = band_full((i + 0.5) / n);
+	float yup = 1.0 - uv.y;
+	float top = 0.06 + 0.86 * bd.r;
+	float bar = smoothstep(0.08, 0.16, fx) * smoothstep(0.92, 0.84, fx);
+	float inside = bar * step(yup, top) * step(0.04, yup);
+	float3 bc = prism(hue + i / n * 0.6 + yup * 0.15);
+	light += bc * inside * (0.8 + 0.6 * yup) * (1.0 + 0.6 * bd.b);
+	/* bloom above each bar and a peak line */
+	light += bc * bar * exp(-max(yup - top, 0.0) / 0.03) * step(top, yup) * 0.5;
+	float pk = 0.06 + 0.86 * bd.g;
+	light += lerp(bc, float3(1.0, 1.0, 1.0), 0.5) * bar * exp(-abs(yup - pk) * res.y / 1.8) * 1.2;
+	/* glow behind everything */
+	light += bc * 0.12 * exp(-abs(yup - top * 0.5) * 3.0) * level;
+
+	/* scanlines, an aperture grille, the picture rolling, vignette */
+	float scan = 0.65 + 0.35 * sin(uv.y * res.y * 3.14159265 / 1.5);
+	float grille = 0.78 + 0.22 * sin(v_in.uv.x * res.x * 3.14159265 * 0.66);
+	float rl = glmod(uv.y - time * 0.18, 1.0) * 10.0 - 5.0;
+	float roll = 1.0 + 0.12 * exp(-rl * rl);
+	float vig = 1.0 - r2 * 1.6;
+	light *= scan * grille * roll * vig * (0.97 + 0.03 * sin(time * 53.0)) * edge;
+	light += prism(hue) * 0.03 * edge * vig;
+	return finish(light, uv0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Glitch bars: a spectrum that tears, splits into RGB and drops junk  */
+/* blocks on the beat                                                  */
+
+float gb_bars(float2 uv, float n)
+{
+	float i = floor(uv.x * n);
+	float fx = frac(uv.x * n);
+	float e = band_level((i + 0.5) / n);
+	float yup = 1.0 - uv.y;
+	return step(0.12, fx) * step(fx, 0.88) * step(yup, 0.05 + 0.85 * e) * step(0.05, yup);
+}
+
+float4 PSGlitchBars(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float tick = floor(time * 12.0);
+	float row = floor(uv.y * 40.0);
+	float burst = step(0.78 - 0.4 * beat, hash11(tick * 0.71 + 0.3));
+	float shift = (hash21(float2(row, tick)) - 0.5) * 0.08 * burst * step(0.5, hash21(float2(row + 5.0, tick)));
+	float2 q = float2(uv.x + shift, uv.y);
+	float n = floor(clamp(24.0 * density, 8.0, 64.0));
+	float sp = (0.003 + 0.012 * beat + 0.01 * burst);
+	float r = gb_bars(q + float2(sp, 0.0), n);
+	float g = gb_bars(q, n);
+	float b = gb_bars(q - float2(sp, 0.0), n);
+	float3 tint = prism(hue + floor(q.x * n) / n * 0.5);
+	float3 light = float3(r, g, b) * lerp(float3(1.0, 1.0, 1.0), tint * 1.4, 0.45) * 1.4;
+	/* junk blocks and a stuck colour band */
+	float2 blk = floor(uv * float2(28.0, 18.0));
+	float junk = step(0.975 - 0.05 * beat, hash21(blk + tick * 1.7));
+	light += prism(hash21(blk) + hue) * junk * 0.9;
+	float band = step(abs(uv.y - hash11(tick * 0.13)), 0.012) * burst;
+	light += prism(hue + 0.5) * band * 0.8;
+	light *= 0.85 + 0.15 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* VHS tape: a wobbly, colour-bleeding playback with a tracking band,  */
+/* "PLAY" and the song's time on the screen                            */
+
+float4 PSVHSTape(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float t = time;
+	/* tape wobble and the tracking band rolling down */
+	float wob = sin(uv.y * 40.0 + t * 3.0) * 0.0015 + sin(uv.y * 7.0 - t * 1.3) * 0.002;
+	float trk_y = glmod(t * 0.11, 1.4) - 0.2;
+	float tdy = (uv.y - trk_y) * 28.0;
+	float trk = exp(-tdy * tdy);
+	wob += trk * (hash21(float2(floor(uv.y * 160.0), floor(t * 30.0))) - 0.5) * 0.04;
+	float2 q = float2(uv.x + wob, uv.y);
+	float2 p = float2(q.x * aspect, q.y);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* the picture: soft spectrum hills, colour bleeding to the right */
+	for (int k = 0; k < 3; k++) {
+		float kf = float(k);
+		float x = q.x - kf * 0.006;
+		float e = band_level(abs(x - 0.5) * 2.0);
+		float hill = 0.82 - e * 0.55 - 0.05 * sin(x * 20.0 + t);
+		float m = smoothstep(hill, hill + 0.02, q.y) * smoothstep(0.98, 0.9, q.y);
+		float3 cc = prism(hue + x * 0.4 + q.y * 0.2);
+		light += (kf < 0.5 ? cc : (kf < 1.5 ? float3(cc.r, 0.0, 0.0) * 0.6 : float3(0.0, 0.0, cc.b) * 0.6)) * m * 0.8;
+		light += cc * exp(-abs(q.y - hill) * res.y / 3.0) * 0.6 * (kf < 0.5 ? 1.0 : 0.0);
+	}
+	/* sun-ish glow behind */
+	float2 sd = p - float2(aspect * 0.5, 0.45);
+	light += prism(hue + 0.1) * exp(-length(sd) / 0.12) * (0.25 + 0.6 * bass);
+
+	/* snow and the tracking band */
+	float snow = hash21(floor(v_in.uv * res / 2.0) + floor(t * 24.0) * 7.0);
+	light += float3(1.0, 1.0, 1.0) * step(0.985, snow) * 0.35;
+	light += float3(0.9, 0.9, 1.0) * trk * step(0.6, snow) * 0.5;
+
+	/* on-screen display: "PLAY >" and the time, in the pixel font */
+	float fp = max(floor(res.y / 110.0), 1.0) / res.y;
+	float2 tp = float2(uv.x * aspect, uv.y);
+	float osd = pl_text(tp, float2(0.05, 0.06), fp, 1.0 / res.y, 3.0, 47.0, 4.0, 0.0, 0.0);
+	float2 ic = (tp - float2(0.05 + fp * 27.0, 0.06 + fp * 3.5)) / (fp);
+	float tri = step(-2.5, ic.x) * step(abs(ic.y), (2.5 - ic.x) * 0.6) * step(ic.x, 2.5);
+	float blink = step(0.35, frac(t * 0.8));
+	light += float3(1.0, 1.0, 1.0) * (osd + tri * blink) * 1.2;
+	/* SP m:ss from the music player's clock: digit glyphs are codes 16..25 */
+	float2 tq = (tp - float2(0.05, 0.86)) / (fp);
+	float cell = floor(tq.x / 6.0);
+	float code = cell < 0.5 ? 51.0 : (cell < 1.5 ? 48.0 : (cell < 2.5 ? 0.0 : (cell < 3.5 ? 16.0 + pl_digits.x :
+		     (cell < 4.5 ? 16.0 + pl_digits.y : (cell < 5.5 ? 26.0 : (cell < 6.5 ? 16.0 + pl_digits.z : 16.0 + pl_digits.w))))));
+	float inside = step(0.0, tq.x) * step(tq.x, 8.0 * 6.0) * step(0.0, tq.y) * step(tq.y, 7.99);
+	light += float3(1.0, 1.0, 1.0) * pl_glyph(code, float2(tq.x - cell * 6.0, tq.y)) * inside * 1.1;
+
+	light *= 0.88 + 0.12 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish(light, uv);
+}
+
 technique PrismRain
 {
 	pass
@@ -2102,5 +2959,95 @@ technique OceanSunset
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSOceanSunset(v_in);
+	}
+}
+
+technique PlayerSpazz
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerSpazz(v_in);
+	}
+}
+
+technique PlayerClassic
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerClassic(v_in);
+	}
+}
+
+technique PlayerNeon
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerNeon(v_in);
+	}
+}
+
+technique PlayerSynthwave
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerSynthwave(v_in);
+	}
+}
+
+technique PlayerCRT
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerCRT(v_in);
+	}
+}
+
+technique PlayerGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerGlitch(v_in);
+	}
+}
+
+technique NeonScope
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSNeonScope(v_in);
+	}
+}
+
+technique CRTSpectrum
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSCRTSpectrum(v_in);
+	}
+}
+
+technique GlitchBars
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGlitchBars(v_in);
+	}
+}
+
+technique VHSTape
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSVHSTape(v_in);
 	}
 }
