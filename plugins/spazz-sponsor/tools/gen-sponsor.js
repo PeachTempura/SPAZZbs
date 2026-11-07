@@ -1,7 +1,7 @@
 // node tools/gen-sponsor.js  ->  spazz-sponsor-spec.h
 const fs = require('fs');
 const path = require('path');
-const { LISTS, PRESETS } = require('./sponsor-spec.js');
+const { LISTS, PRESETS, MASKS } = require('./sponsor-spec.js');
 
 /* page config key -> source setting key and kind */
 const KEYS = {
@@ -49,6 +49,9 @@ struct spn_preset {
 for (const [name, list] of Object.entries(LISTS)) {
   h += `static const struct spn_option spn_${name}[] = {\n${list.map(([v, l]) => `\t{${cs(v)}, ${cs(l)}},`).join('\n')}\n\t{NULL, NULL}};\n`;
 }
+h += `\nstruct spn_shape {\n\tconst char *id;\n\tconst char *path; /* SVG path data in a 100 x 100 box */\n};\n`;
+h += `static const struct spn_shape spn_masks[] = {\n${Object.entries(MASKS).map(([k, v]) => `\t{${cs(k)}, ${cs(v)}},`).join('\n')}\n\t{NULL, NULL}};\n`;
+for (const [id] of LISTS.mask) if (id !== 'frame' && id !== 'none' && !MASKS[id]) throw new Error(`mask ${id} has no path`);
 h += '\n';
 PRESETS.forEach((pr, i) => {
   const vals = Object.entries(pr.p).map(([k, v]) => {

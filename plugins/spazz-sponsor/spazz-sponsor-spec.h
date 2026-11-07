@@ -73,6 +73,36 @@ static const struct spn_option spn_logoAnim[] = {
 	{"bounce", "Bounce"},
 	{"shine", "Shine"},
 	{NULL, NULL}};
+static const struct spn_option spn_mask[] = {
+	{"frame", "Style's frame"},
+	{"none", "No frame (just the picture)"},
+	{"square", "Square"},
+	{"rounded", "Rounded"},
+	{"circle", "Circle"},
+	{"squircle", "Squircle"},
+	{"hexagon", "Hexagon"},
+	{"diamond", "Diamond"},
+	{"star", "Star"},
+	{"heart", "Heart"},
+	{"shield", "Shield"},
+	{"blob", "Blob"},
+	{NULL, NULL}};
+static const struct spn_option spn_aspect[] = {
+	{"square", "Style's box"},
+	{"original", "Picture's own shape"},
+	{"wide", "Wide 16:9"},
+	{"landscape", "4:3"},
+	{"portrait", "Tall 3:4"},
+	{NULL, NULL}};
+static const struct spn_option spn_fit[] = {
+	{"contain", "Show the whole picture"},
+	{"cover", "Fill the shape (crop)"},
+	{NULL, NULL}};
+static const struct spn_option spn_runWhen[] = {
+	{"always", "Whenever the Sponsors switch is on"},
+	{"streaming", "Only while streaming"},
+	{"live", "While streaming or recording"},
+	{NULL, NULL}};
 static const struct spn_option spn_idle[] = {
 	{"float", "Float"},
 	{"tilt", "Tilt"},
@@ -93,7 +123,7 @@ static const struct spn_option spn_anchor[] = {
 	{"br", "Bottom right"},
 	{NULL, NULL}};
 static const struct spn_option spn_mode[] = {
-	{"loop", "Loop: show, wait, show again"},
+	{"loop", "Every few minutes"},
 	{"always", "Always on screen"},
 	{"onshow", "Once each time the scene goes live"},
 	{"manual", "Only when I press Play / the hotkey"},
@@ -121,6 +151,23 @@ static const struct spn_option spn_imageShape[] = {
 static const struct spn_option spn_imageFit[] = {
 	{"contain", "Fit (logos)"},
 	{"cover", "Fill (photos)"},
+	{NULL, NULL}};
+
+struct spn_shape {
+	const char *id;
+	const char *path; /* SVG path data in a 100 x 100 box */
+};
+static const struct spn_shape spn_masks[] = {
+	{"square", "M0 0H100V100H0Z"},
+	{"rounded", "M18 0H82Q100 0 100 18V82Q100 100 82 100H18Q0 100 0 82V18Q0 0 18 0Z"},
+	{"circle", "M50 0A50 50 0 1 1 50 100A50 50 0 1 1 50 0Z"},
+	{"squircle", "M50 0C90 0 100 10 100 50S90 100 50 100S0 90 0 50S10 0 50 0Z"},
+	{"hexagon", "M25 3L75 3L100 50L75 97L25 97L0 50Z"},
+	{"diamond", "M50 0L100 50L50 100L0 50Z"},
+	{"star", "M50 4L62.3 37L97.6 38.5L70 60.5L79.4 94.5L50 75L20.6 94.5L30 60.5L2.4 38.5L37.7 37Z"},
+	{"heart", "M50 92C20 72 0 54 0 30C0 13 13 2 28 2C38 2 46 8 50 16C54 8 62 2 72 2C87 2 100 13 100 30C100 54 80 72 50 92Z"},
+	{"shield", "M50 0L95 14V48C95 74 75 92 50 100C25 92 5 74 5 48V14Z"},
+	{"blob", "M52 2C74 1 93 14 97 37C100 60 92 84 69 95C46 100 18 95 7 72C0 50 5 23 24 11C32 5 42 3 52 2Z"},
 	{NULL, NULL}};
 
 static const struct spn_preset_val spn_preset_0[] = {

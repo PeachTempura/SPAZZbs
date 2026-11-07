@@ -24,6 +24,20 @@ const LISTS = {
     ['none', 'Still'], ['float', 'Float'], ['pulse', 'Pulse'], ['spin', 'Coin flip'], ['wobble', 'Wobble'],
     ['bounce', 'Bounce'], ['shine', 'Shine'],
   ],
+  mask: [
+    ['frame', "Style's frame"], ['none', 'No frame (just the picture)'], ['square', 'Square'], ['rounded', 'Rounded'],
+    ['circle', 'Circle'], ['squircle', 'Squircle'], ['hexagon', 'Hexagon'], ['diamond', 'Diamond'], ['star', 'Star'],
+    ['heart', 'Heart'], ['shield', 'Shield'], ['blob', 'Blob'],
+  ],
+  aspect: [
+    ['square', "Style's box"], ['original', "Picture's own shape"], ['wide', 'Wide 16:9'], ['landscape', '4:3'],
+    ['portrait', 'Tall 3:4'],
+  ],
+  fit: [['contain', 'Show the whole picture'], ['cover', 'Fill the shape (crop)']],
+  runWhen: [
+    ['always', 'Whenever the Sponsors switch is on'], ['streaming', 'Only while streaming'],
+    ['live', 'While streaming or recording'],
+  ],
   idle: [
     ['float', 'Float'], ['tilt', 'Tilt'], ['pulse', 'Pulse'], ['shine', 'Shine sweep'], ['flicker', 'Neon flicker'], ['none', 'Still'],
   ],
@@ -32,7 +46,7 @@ const LISTS = {
     ['mr', 'Middle right'], ['bl', 'Bottom left'], ['bc', 'Bottom centre'], ['br', 'Bottom right'],
   ],
   mode: [
-    ['loop', 'Loop: show, wait, show again'], ['always', 'Always on screen'],
+    ['loop', 'Every few minutes'], ['always', 'Always on screen'],
     ['onshow', 'Once each time the scene goes live'], ['manual', 'Only when I press Play / the hotkey'],
   ],
   font: [
@@ -46,6 +60,21 @@ const LISTS = {
 
 // Presets set the look and motion; enter / exit / textAnim / logoAnim go onto every sponsor.
 // Your logos, text and timing stay.
+// Mask shapes in a 100 x 100 box (SVG path data). The page masks the logo
+// with these and SPONSORCENTER draws the same shapes on the card thumbnails.
+const MASKS = {
+  square: 'M0 0H100V100H0Z',
+  rounded: 'M18 0H82Q100 0 100 18V82Q100 100 82 100H18Q0 100 0 82V18Q0 0 18 0Z',
+  circle: 'M50 0A50 50 0 1 1 50 100A50 50 0 1 1 50 0Z',
+  squircle: 'M50 0C90 0 100 10 100 50S90 100 50 100S0 90 0 50S10 0 50 0Z',
+  hexagon: 'M25 3L75 3L100 50L75 97L25 97L0 50Z',
+  diamond: 'M50 0L100 50L50 100L0 50Z',
+  star: 'M50 4L62.3 37L97.6 38.5L70 60.5L79.4 94.5L50 75L20.6 94.5L30 60.5L2.4 38.5L37.7 37Z',
+  heart: 'M50 92C20 72 0 54 0 30C0 13 13 2 28 2C38 2 46 8 50 16C54 8 62 2 72 2C87 2 100 13 100 30C100 54 80 72 50 92Z',
+  shield: 'M50 0L95 14V48C95 74 75 92 50 100C25 92 5 74 5 48V14Z',
+  blob: 'M52 2C74 1 93 14 97 37C100 60 92 84 69 95C46 100 18 95 7 72C0 50 5 23 24 11C32 5 42 3 52 2Z',
+};
+
 const PRESETS = [
   { name: 'Glass Card', p: { style: 'glass', enter: 'slide', exit: 'slide', textAnim: 'rise', logoAnim: 'float', idle: 'float',
     accent: '#8a5cff', accent2: '#ff5ad1', text: '#ffffff', bg: '#140f22', bgOpacity: 0.82, anchor: 'bl' } },
@@ -75,4 +104,4 @@ const PRESETS = [
     accent: '#ffe14d', accent2: '#5dff7a', text: '#ffffff', bg: '#0b0820', bgOpacity: 0.85, anchor: 'tc', font: 'Impact' } },
 ];
 
-if (typeof module !== 'undefined') module.exports = { LISTS, PRESETS };
+if (typeof module !== 'undefined') module.exports = { LISTS, PRESETS, MASKS };

@@ -16,6 +16,11 @@
 ******************************************************************************/
 
 #include "OBSBasic.hpp"
+#include <dialogs/SpazzStingerStudio.hpp>
+#include <QMap>
+
+/* Stinger Studio's presets, for the "+" menu */
+#include "../../plugins/spazz-stinger/spazz-stinger-spec.h"
 
 #include <algorithm>
 
@@ -486,6 +491,22 @@ OBSSource OBSBasic::SpazzAddTransition(const char *id, const std::string &name, 
 	return result;
 }
 
+/* a SPAZZ Stinger from one of Stinger Studio's presets, made the current one */
+void OBSBasic::SpazzAddStingerPreset(const QString &preset)
+{
+	QString name = preset;
+	for (int n = 2; FindTransition(QT_TO_UTF8(name)); n++) {
+		name = QString("%1 (%2)").arg(preset).arg(n);
+	}
+	OBSDataAutoRelease settings = obs_data_create();
+	obs_data_set_string(settings, "preset", QT_TO_UTF8(preset));
+	OBSSource tr = SpazzAddTransition("spazz_stinger", QT_TO_UTF8(name), settings);
+	if (tr) {
+		UpdateCurrentTransition(obs_source_get_uuid(tr), true);
+		SaveProject();
+	}
+}
+
 void OBSBasic::AddTransition(const char *id)
 {
 	std::string name;
@@ -557,6 +578,28 @@ void OBSBasic::on_transitionAdd_clicked()
 			menu.addAction(action);
 			foundConfigurableTransitions = true;
 		}
+	}
+
+	/* SPAZZbs: every Stinger Studio preset, ready to use, plus the studio */
+	if (obs_source_get_display_name("spazz_stinger")) {
+		menu.addSeparator();
+		QMenu *stingers = menu.addMenu(QTStr("SpazzStudio.AddMenu"));
+		QMap<QString, QMenu *> groups;
+		for (int i = 0; i < STG_PRESET_COUNT; i++) {
+			const QString full = QString::fromUtf8(stg_presets[i].name);
+			const int dot = full.indexOf(QString::fromUtf8(" \xC2\xB7 "));
+			const QString group = dot > 0 ? full.left(dot) : full;
+			QMenu *sub = groups.value(group);
+			if (!sub) {
+				sub = stingers->addMenu(group);
+				groups.insert(group, sub);
+			}
+			const QString label = dot > 0 ? full.mid(dot + 3) : full;
+			connect(sub->addAction(label), &QAction::triggered, this,
+				[this, full]() { SpazzAddStingerPreset(full); });
+		}
+		menu.addAction(QTStr("SpazzStudio.OpenFromMenu"), this, [this]() { SpazzStingerStudio::Open(this); });
+		foundConfigurableTransitions = true;
 	}
 
 	if (foundConfigurableTransitions) {
@@ -679,6 +722,14 @@ void OBSBasic::on_transitionProps_clicked()
 	action = new QAction(QTStr("Properties"), &menu);
 	connect(action, &QAction::triggered, this, properties);
 	menu.addAction(action);
+
+	/* SPAZZbs: stingers made in Stinger Studio open back in the studio */
+	if (strcmp(obs_source_get_unversioned_id(source), "spazz_stinger") == 0) {
+		const QString uuid = QT_UTF8(obs_source_get_uuid(source));
+		action = new QAction(QTStr("SpazzStudio.EditInStudio"), &menu);
+		connect(action, &QAction::triggered, this, [this, uuid]() { SpazzStingerStudio::Open(this, uuid); });
+		menu.addAction(action);
+	}
 
 	menu.exec(QCursor::pos());
 }

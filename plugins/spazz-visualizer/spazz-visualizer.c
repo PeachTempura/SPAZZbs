@@ -85,14 +85,14 @@ struct spazz_viz {
 static void audio_capture(void *param, obs_source_t *src, const struct audio_data *audio, bool muted)
 {
 	struct spazz_viz *v = param;
-	UNUSED_PARAMETER(src);
-
-	if (!audio->frames)
+	if (!audio->frames) {
 		return;
+	}
 
 	size_t channels = audio_output_get_channels(obs_get_audio());
-	if (channels > MAX_AV_PLANES)
+	if (channels > MAX_AV_PLANES) {
 		channels = MAX_AV_PLANES;
+	}
 
 	pthread_mutex_lock(&v->mutex);
 
@@ -101,7 +101,10 @@ static void audio_capture(void *param, obs_source_t *src, const struct audio_dat
 		v->mono_capacity = audio->frames;
 	}
 
-	if (muted) {
+	/* a media source (the music player) only counts while it's playing, so
+	 * the visuals move to the music and nothing else */
+	const bool media = (obs_source_get_output_flags(src) & OBS_SOURCE_CONTROLLABLE_MEDIA) != 0;
+	if (muted || (media && obs_source_media_get_state(src) != OBS_MEDIA_STATE_PLAYING)) {
 		spazz_analyzer_push_silence(v->analyzer, audio->frames);
 	} else {
 		for (uint32_t i = 0; i < audio->frames; i++) {
@@ -124,8 +127,9 @@ static void audio_capture(void *param, obs_source_t *src, const struct audio_dat
 
 static void detach_target(struct spazz_viz *v)
 {
-	if (!v->target)
+	if (!v->target) {
 		return;
+	}
 
 	obs_source_t *src = obs_weak_source_get_source(v->target);
 	if (src) {
@@ -139,12 +143,14 @@ static void detach_target(struct spazz_viz *v)
 
 static bool target_alive(struct spazz_viz *v)
 {
-	if (!v->target)
+	if (!v->target) {
 		return false;
+	}
 
 	obs_source_t *src = obs_weak_source_get_source(v->target);
-	if (!src)
+	if (!src) {
 		return false;
+	}
 
 	bool alive = !obs_source_removed(src);
 	obs_source_release(src);
@@ -172,8 +178,9 @@ static obs_source_t *find_target(const char *name)
 	if (strcmp(name, DEFAULT_TARGET) == 0) {
 		obs_source_t *player = NULL;
 		obs_enum_sources(find_music_player, &player);
-		if (player)
+		if (player) {
 			return player;
+		}
 	}
 
 	return obs_get_source_by_name(name);
@@ -183,12 +190,14 @@ static void attach_target(struct spazz_viz *v)
 {
 	detach_target(v);
 
-	if (!v->target_name || !*v->target_name)
+	if (!v->target_name || !*v->target_name) {
 		return;
+	}
 
 	obs_source_t *src = find_target(v->target_name);
-	if (!src)
+	if (!src) {
 		return;
+	}
 
 	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) != 0 && src != v->source) {
 		v->target = obs_source_get_weak_source(src);
@@ -219,8 +228,9 @@ static void viz_update(void *data, obs_data_t *settings)
 	const char *style = obs_data_get_string(settings, "style");
 	v->style = 0;
 	for (size_t i = 0; i < NUM_STYLES; i++) {
-		if (strcmp(style, style_techniques[i]) == 0)
+		if (strcmp(style, style_techniques[i]) == 0) {
 			v->style = (int)i;
+		}
 	}
 
 	v->sensitivity = (float)obs_data_get_double(settings, "sensitivity");
@@ -255,12 +265,14 @@ static bool add_audio_source(void *param, obs_source_t *src)
 	obs_property_t *list = param;
 	uint32_t flags = obs_source_get_output_flags(src);
 
-	if ((flags & OBS_SOURCE_AUDIO) == 0)
+	if ((flags & OBS_SOURCE_AUDIO) == 0) {
 		return true;
+	}
 
 	const char *name = obs_source_get_name(src);
-	if (name && *name && strcmp(name, DEFAULT_TARGET) != 0)
+	if (name && *name && strcmp(name, DEFAULT_TARGET) != 0) {
 		obs_property_list_add_string(list, name, name);
+	}
 	return true;
 }
 
@@ -269,8 +281,8 @@ static obs_properties_t *viz_properties(void *data)
 	struct spazz_viz *v = data;
 	obs_properties_t *props = obs_properties_create();
 
-	obs_property_t *p = obs_properties_add_list(props, "style", T_("Style"), OBS_COMBO_TYPE_LIST,
-						    OBS_COMBO_FORMAT_STRING);
+	obs_property_t *p =
+		obs_properties_add_list(props, "style", T_("Style"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, T_("Style.PrismRain"), "PrismRain");
 	obs_property_list_add_string(p, T_("Style.PrismHalo"), "PrismHalo");
 	obs_property_list_add_string(p, T_("Style.SpectrumGlass"), "SpectrumGlass");
@@ -287,11 +299,13 @@ static obs_properties_t *viz_properties(void *data)
 			bool found = false;
 			size_t count = obs_property_list_item_count(p);
 			for (size_t i = 0; i < count; i++) {
-				if (strcmp(obs_property_list_item_string(p, i), v->target_name) == 0)
+				if (strcmp(obs_property_list_item_string(p, i), v->target_name) == 0) {
 					found = true;
+				}
 			}
-			if (!found)
+			if (!found) {
 				obs_property_list_add_string(p, v->target_name, v->target_name);
+			}
 		}
 		pthread_mutex_unlock(&v->target_mutex);
 	}
@@ -356,8 +370,10 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 	if (path) {
 		char *errors = NULL;
 		v->effect = gs_effect_create_from_file(path, &errors);
-		if (!v->effect)
-			blog(LOG_ERROR, "[spazz-visualizer] could not load effect: %s", errors ? errors : "(no details)");
+		if (!v->effect) {
+			blog(LOG_ERROR, "[spazz-visualizer] could not load effect: %s",
+			     errors ? errors : "(no details)");
+		}
 		bfree(errors);
 	}
 	v->band_tex = gs_texture_create(SPAZZ_NUM_BANDS, 1, GS_RGBA, 1, NULL, GS_DYNAMIC);
@@ -397,14 +413,16 @@ static void viz_tick(void *data, float seconds)
 		attach_target(v);
 	} else if (v->retry_timer <= 0.0f) {
 		v->retry_timer = RETRY_SECONDS;
-		if (!target_alive(v))
+		if (!target_alive(v)) {
 			attach_target(v);
+		}
 	}
 	pthread_mutex_unlock(&v->target_mutex);
 
 	/* not in any scene being shown: skip the analysis and animation */
-	if (!obs_source_showing(v->source))
+	if (!obs_source_showing(v->source)) {
 		return;
+	}
 
 	pthread_mutex_lock(&v->mutex);
 	uint64_t now = os_gettime_ns();
@@ -431,12 +449,14 @@ static void viz_tick(void *data, float seconds)
 	v->hue += seconds * v->color_speed * 0.08f;
 
 	/* keep floats small so the shader stays precise on long streams */
-	if (v->time > 3600.0f)
+	if (v->time > 3600.0f) {
 		v->time -= 3600.0f;
+	}
 	/* drop speeds are multiples of 1/16 in the shader, so wrapping at 64
 	 * lands every drop exactly where it was: no jump, and full precision */
-	if (v->flow >= 64.0f)
+	if (v->flow >= 64.0f) {
 		v->flow -= 64.0f;
+	}
 	v->hue -= floorf(v->hue);
 }
 
@@ -445,8 +465,9 @@ static void viz_render(void *data, gs_effect_t *unused)
 	struct spazz_viz *v = data;
 	UNUSED_PARAMETER(unused);
 
-	if (!v->effect || !v->band_tex)
+	if (!v->effect || !v->band_tex) {
 		return;
+	}
 
 	if (v->tex_dirty) {
 		gs_texture_set_image(v->band_tex, v->tex_data, SPAZZ_NUM_BANDS * 4, false);
@@ -475,8 +496,9 @@ static void viz_render(void *data, gs_effect_t *unused)
 	gs_effect_set_float(v->p_bg, v->midnight ? 1.0f : 0.0f);
 
 	const char *tech = style_techniques[v->style];
-	while (gs_effect_loop(v->effect, tech))
+	while (gs_effect_loop(v->effect, tech)) {
 		gs_draw_sprite(NULL, 0, v->width, v->height);
+	}
 }
 
 static uint32_t viz_width(void *data)

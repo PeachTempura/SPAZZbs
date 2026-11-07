@@ -753,3 +753,19 @@ void SpazzDockTabs::PlaceInTab(QDockWidget *dock, const QString &tabName)
 		tabs->setCurrentWidget(current);
 	}
 }
+
+void SpazzDockTabs::ShowDock(QDockWidget *dock)
+{
+	if (!dock) {
+		return;
+	}
+	if (SpazzDockTabPage *page = PageForDock(dock)) {
+		show();
+		tabs->setCurrentWidget(page);
+		dock->show();
+		return;
+	}
+	dock->show();
+	dock->raise();
+	dock->activateWindow();
+}

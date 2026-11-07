@@ -22,8 +22,8 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 #pos { position: absolute; }
 #card { position: relative; display: flex; align-items: center; transform-origin: 50% 50%; will-change: transform, opacity; }
 .media { position: relative; flex: none; overflow: hidden; }
-.media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; will-change: transform, opacity; }
-.media.cover img { object-fit: cover; }
+.media img, .media video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; will-change: transform, opacity; }
+.media.cover img, .media.cover video { object-fit: cover; }
 .body { position: relative; display: flex; flex-direction: column; justify-content: center; min-width: 0; }
 .head { white-space: nowrap; line-height: 1.1; }
 .sub { white-space: nowrap; line-height: 1.2; opacity: .88; }
@@ -154,6 +154,12 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 .media .lshine::before { content: ""; position: absolute; top: -50%; bottom: -50%; width: 40%; left: var(--lshine, -60%);
   background: linear-gradient(100deg, transparent, rgba(255,255,255,.75), transparent); transform: skewX(-20deg); }
 
+/* the logo's own box: proportions, no frame, or a mask shape */
+.media.ar { width: auto !important; aspect-ratio: var(--ar); }
+.media.bare { background: none !important; border: 0 !important; padding: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+.media.masked { border-radius: 0 !important; border: 0 !important;
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+
 /* logo on the right */
 #stage.lay-right .cardrow { flex-direction: row-reverse; }
 #stage.lay-right .cardrow > .media { order: 0; }
@@ -177,7 +183,7 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 #stage.lay-behind .cardrow { min-width: 24rem; min-height: 7.5rem; padding: 1.2rem 2rem; }
 #stage.lay-behind .media { position: absolute; inset: 0; zoom: 1; width: auto !important; height: auto !important; padding: 0 !important;
   margin: 0 !important; border: 0 !important; background: none !important; filter: none !important; z-index: 0; border-radius: inherit !important; }
-#stage.lay-behind .media img { object-fit: cover; }
+#stage.lay-behind .media img, #stage.lay-behind .media video { object-fit: cover; }
 #stage.lay-behind .media::after { content: ""; position: absolute; inset: 0; z-index: 1;
   background: linear-gradient(90deg, rgba(var(--bg),.8), rgba(var(--bg),.35) 65%, rgba(var(--bg),.05)); }
 #stage.lay-behind .body, #stage.lay-behind .badge { position: relative; z-index: 1; }
@@ -208,7 +214,12 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 const ITEM = {
   image: '', layout: 'left', imageSize: 1, head: '', sub: '', badge: '',
   textAnim: 'rise', logoAnim: 'none', enter: 'slide', exit: 'slide', showSec: 8,
+  /* how the picture is cut: mask shape, box proportions, fit, crop zoom and position */
+  mask: 'frame', maskPath: '', aspect: 'square', fit: '', zoom: 1, panX: 0, panY: 0,
+  volume: 1, /* videos only */
 };
+const VIDEO_RE = /\.(mp4|webm|mov|m4v|ogv)([?#]|$)/i;
+const ASPECTS = { wide: 16 / 9, landscape: 4 / 3, portrait: 3 / 4 };
 
 /* the shared look and timing */
 const DEFAULTS = {
@@ -217,6 +228,9 @@ const DEFAULTS = {
   font: '', upper: false, imageShape: 'style', imageFit: 'contain', windowTitle: 'Sponsor.exe',
   items: [Object.assign({}, ITEM, { head: 'Your sponsor here', sub: 'Thanks for supporting the stream!' })],
   mode: 'loop', gapSec: 45, enterMs: 700, exitMs: 600, betweenSec: 0.4, loops: 0, delaySec: 0,
+  everyMin: 0,  /* loop: minutes from one appearance to the next (0: old "wait" setting) */
+  cycles: 1,    /* times through all the sponsors at each appearance */
+  run: true,    /* the Sponsors switch, and streaming / recording if asked to wait for them */
 };
 
 const STYLE_FONTS = {
@@ -236,6 +250,7 @@ let triggerAt = -1;     /* manual / on-show / studio replay: when "play" happene
 let hideAt = -1, hideFrom = null;  /* "hide now": when it started leaving, and from where */
 let liveNow = 0;
 let built = null;       /* DOM handles for the sponsor on screen */
+let running = true;     /* the wheel may turn (manual Play works regardless) */
 
 const $ = (s, r = document) => r.querySelector(s);
 const hexRgb = (h) => { const v = parseInt(String(h || '#000').replace('#', ''), 16) || 0; return `${(v >> 16) & 255},${(v >> 8) & 255},${v & 255}`; };
@@ -276,6 +291,10 @@ function cleanItems(c) {
     for (const k of Object.keys(ITEM)) if (r[k] !== undefined && r[k] !== null && r[k] !== '') it[k] = r[k];
     it.imageSize = clamp(+it.imageSize || 1, .3, 3);
     it.showSec = Math.max(+it.showSec || ITEM.showSec, .5);
+    it.zoom = clamp(+it.zoom || 1, 1, 5);
+    it.panX = clamp(+it.panX || 0, -1, 1);
+    it.panY = clamp(+it.panY || 0, -1, 1);
+    it.volume = r.volume === undefined || r.volume === null ? 1 : clamp(+r.volume || 0, 0, 1);
     if (it.image || it.head || it.sub || it.badge) out.push(it);
   }
   return out.length ? out : DEFAULTS.items.map((x) => Object.assign({}, x));
@@ -307,18 +326,34 @@ function build(idx) {
   stage.className = `st-${cfg.style} shape-${cfg.imageShape} lay-${lay}` + (cfg.upper ? ' upper' : '');
   stage.style.setProperty('--img', String(it.imageSize));
   const card = $('#card');
+  /* stop the last sponsor's video before its element goes */
+  card.querySelectorAll('video').forEach((v) => { v.pause(); v.removeAttribute('src'); v.load(); });
   card.innerHTML = '';
   card.removeAttribute('style');
   card.__s = {};
   card.className = '';
 
-  let media = null;
+  let media = null, pic = null, video = null;
   if (it.image && lay !== 'text') {
     media = document.createElement('div');
-    media.className = 'media' + (cfg.imageFit === 'cover' ? ' cover' : '');
-    const img = document.createElement('img');
-    img.src = it.image;
-    media.appendChild(img);
+    media.className = 'media' + ((it.fit || cfg.imageFit) === 'cover' ? ' cover' : '');
+    if (VIDEO_RE.test(it.image)) {
+      video = pic = document.createElement('video');
+      video.loop = true; video.playsInline = true; video.preload = 'auto';
+      video.muted = !(it.volume > 0); video.volume = 0;
+      video.src = it.image;
+      video.play().catch(() => {});
+    } else {
+      /* PNG keeps its transparency, GIF / animated WebP animate */
+      pic = document.createElement('img');
+      pic.src = it.image;
+    }
+    /* crop: which part of the picture shows, and how far in */
+    const pos = `${(50 + it.panX * 50).toFixed(2)}% ${(50 + it.panY * 50).toFixed(2)}%`;
+    pic.style.objectPosition = pos;
+    pic.style.transformOrigin = pos;
+    media.appendChild(pic);
+    if (lay !== 'behind') shapeMedia(media, pic, it, !!video);
     if (it.logoAnim === 'shine') { const sh = document.createElement('div'); sh.className = 'lshine'; media.appendChild(sh); }
   }
   const body = document.createElement('div');
@@ -351,12 +386,33 @@ function build(idx) {
   shine.className = 'shine';
   if (cfg.idle === 'shine') card.appendChild(shine);
 
-  built = { idx, it, lay, card, media, body, badge, shine, img: media && $('img', media),
+  built = { idx, it, lay, card, media, body, badge, shine, img: pic, video, lastShown: 0,
     head: $('.head', card), sub: $('.sub', card), track: $('.track', card), textKey: '',
     lshine: media && $('.lshine', media), trackW: 0 };
   if (built.track) fillTicker(it);
   else showText(it);
   place();
+}
+
+/* the logo's box proportions and mask */
+function shapeMedia(media, pic, it, isVideo) {
+  const setAr = (w, h) => { if (w > 0 && h > 0) { media.classList.add('ar'); media.style.setProperty('--ar', String(w / h)); } };
+  if (ASPECTS[it.aspect]) {
+    setAr(ASPECTS[it.aspect], 1);
+  } else if (it.aspect === 'original') {
+    if (isVideo) pic.addEventListener('loadedmetadata', () => setAr(pic.videoWidth, pic.videoHeight));
+    else if (pic.complete && pic.naturalWidth) setAr(pic.naturalWidth, pic.naturalHeight);
+    else pic.addEventListener('load', () => setAr(pic.naturalWidth, pic.naturalHeight));
+  }
+  if (it.mask === 'none') {
+    media.classList.add('bare');
+  } else if (it.mask && it.mask !== 'frame' && it.maskPath) {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><path d='${it.maskPath}'/></svg>`;
+    const url = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+    media.classList.add('masked');
+    media.style.webkitMaskImage = url;
+    media.style.maskImage = url;
+  }
 }
 
 function fillTicker(it) {
@@ -507,7 +563,8 @@ function animateLogo(ms) {
   if (!img) return;
   const t = ms / 1000;
   const behind = built.lay === 'behind';
-  let tr = behind ? `scale(${(Math.max(1, built.it.imageSize) * 1.04).toFixed(3)})` : '';
+  const z = built.it.zoom || 1;
+  let tr = behind ? `scale(${(Math.max(1, built.it.imageSize) * 1.04 * z).toFixed(3)})` : (z !== 1 ? `scale(${z.toFixed(3)})` : '');
   switch (built.it.logoAnim) {
     case 'float': tr += ` translateY(${(Math.sin(t * 2) * (behind ? 1.5 : 6)).toFixed(2)}%)`; break;
     case 'pulse': tr += ` scale(${(1 + .06 * Math.sin(t * 3.2)).toFixed(4)})`; break;
@@ -594,6 +651,17 @@ function phase(s, idx, t, hold) {
   return { idx, p: 1 - (t - s.enter - show) / s.exit, leaving: true, shownMs: t };
 }
 
+/* one appearance: every sponsor, `cycles` times over */
+function appearance(s) {
+  const cycles = Math.max(1, Math.round(+cfg.cycles || 1));
+  return { cycles, len: cycles * s.total + (cycles - 1) * s.between };
+}
+function locateCycles(s, local, cycles) {
+  const round = s.total + s.between;
+  const k = Math.floor(local / round);
+  return k >= cycles ? null : locate(s, local - k * round);
+}
+
 /* which sponsor is up `local` ms into the run */
 function locate(s, local) {
   for (let i = 0; i < list.length; i++) {
@@ -611,22 +679,26 @@ function baseTimeline(now) {
     const local = now - (triggerAt >= 0 ? triggerAt : epoch);
     return local < 0 ? null : phase(s, focus, local, true);
   }
+  const app = appearance(s);
   if (cfg.mode === 'manual' || cfg.mode === 'onshow') {
-    if (triggerAt < 0) return null;
+    if (triggerAt < 0 || (cfg.mode === 'onshow' && !running)) return null;
     const local = now - triggerAt;
-    return local < s.total ? locate(s, local) : null;
+    return local < app.len ? locateCycles(s, local, app.cycles) : null;
   }
+  if (!running) return null;
   let local = now - epoch - cfg.delaySec * 1000;
   if (local < 0) return null;
   if (cfg.mode === 'always') {
     if (list.length === 1) return phase(s, 0, local, true);
     return locate(s, local % (s.total + s.between));
   }
-  const period = s.total + Math.max(cfg.gapSec, 0) * 1000;
+  /* every few minutes (start to start), never overlapping itself */
+  const every = cfg.everyMin > 0 ? cfg.everyMin * 60000 : app.len + Math.max(cfg.gapSec, 0) * 1000;
+  const period = Math.max(every, app.len + 500);
   const k = Math.floor(local / period);
   if (cfg.loops > 0 && k >= cfg.loops) return null;
   local -= k * period;
-  return local < s.total ? locate(s, local) : null;
+  return local < app.len ? locateCycles(s, local, app.cycles) : null;
 }
 
 function timeline(now) {
@@ -642,8 +714,22 @@ function timeline(now) {
 function render(now) {
   liveNow = now;
   const tl = timeline(now);
-  if (!tl) { const c = $('#card'); setS(c, 'opacity', '0'); setS(c, 'visibility', 'hidden'); return; }
+  if (!tl) {
+    const c = $('#card'); setS(c, 'opacity', '0'); setS(c, 'visibility', 'hidden');
+    if (built && built.video && !built.video.paused) built.video.pause();
+    return;
+  }
   if (!built || built.idx !== tl.idx) build(tl.idx);
+  if (built.video) {
+    const v = built.video;
+    /* a new appearance of the same sponsor starts its video over */
+    if (tl.shownMs + 100 < built.lastShown) v.currentTime = 0;
+    if (v.paused) v.play().catch(() => {});
+    /* the sound fades with the card */
+    const vol = Math.round(clamp(built.it.volume) * clamp(tl.p) * 100) / 100;
+    if (v.__vol !== vol) { v.__vol = vol; v.volume = vol; v.muted = vol <= 0; }
+  }
+  built.lastShown = tl.shownMs;
   const it = built.it, card = built.card;
   setS(card, 'visibility', '');
 
@@ -677,6 +763,7 @@ function apply(next, restart) {
   const prevKey = built && focus >= 0 ? entranceKey(cfg, list, focus) : null;
   cfg = Object.assign({}, DEFAULTS, next || {});
   list = cleanItems(next || {});
+  running = cfg.run !== false || !!cfg.__preview;
   const f = Number.isInteger(cfg.__focus) ? cfg.__focus : -1;
   focus = f >= 0 && f < list.length ? f : -1;
   styleStage();
@@ -707,6 +794,14 @@ window.addEventListener('spazzSponsorConfig', (e) => {
   if (preview && restarted) play();
 });
 window.addEventListener('spazzSponsorPlay', play);
+/* the Sponsors switch (or streaming starting / stopping, if it waits for that) */
+function setRunning(on) {
+  if (cfg.__preview) return;
+  const now = TEST ? liveNow : performance.now();
+  if (on && !running) { running = true; epoch = now; hideAt = -1; hideFrom = null; }
+  else if (!on && running) { hideNow(); running = false; }
+}
+window.addEventListener('spazzSponsorRun', (e) => setRunning(!!(e.detail && e.detail.run)));
 window.addEventListener('spazzSponsorHide', hideNow);
 window.addEventListener('obsSourceActiveChanged', (e) => {
   const active = e.detail && e.detail.active;
@@ -738,7 +833,8 @@ window.__sponsor = {
   render: (ms) => render(ms),
   play: (ms) => { liveNow = ms; play(); },
   hide: (ms) => { liveNow = ms; hideNow(); },
-  state: () => ({ focus, n: list.length, idx: built && built.idx, lay: built && built.lay }),
+  run: (ms, on) => { liveNow = ms; setRunning(on); },
+  state: () => ({ focus, n: list.length, idx: built && built.idx, lay: built && built.lay, running }),
 };
 boot();
 </script>

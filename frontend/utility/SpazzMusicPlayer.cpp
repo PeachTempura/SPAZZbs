@@ -339,7 +339,7 @@ void SpazzMusicPlayer::AudioCapture(void *param, obs_source_t *, const struct au
 
 	std::lock_guard<std::mutex> lock(self->analyzerMutex);
 
-	if (muted) {
+	if (muted || self->State() != OBS_MEDIA_STATE_PLAYING) {
 		spazz_analyzer_push_silence(self->analyzer.get(), audio->frames);
 	} else {
 		if (self->monoScratch.size() < audio->frames) {
@@ -366,8 +366,9 @@ void SpazzMusicPlayer::AudioCapture(void *param, obs_source_t *, const struct au
 void SpazzMusicPlayer::HandleMediaEnded()
 {
 	/* switching files can report the old one as ended; only advance when
-	 * the source really is sitting at the end of a song */
-	if (State() != OBS_MEDIA_STATE_ENDED) {
+	 * the source really is sitting at the end of a song, and not in the
+	 * moment right after a new song was asked for */
+	if (State() != OBS_MEDIA_STATE_ENDED || os_gettime_ns() - startedNs < 800000000ULL) {
 		emit StateChanged();
 		return;
 	}
@@ -646,11 +647,10 @@ void SpazzMusicPlayer::StartTrack(int index)
 		}
 	}
 
-	/* stopping first means the old song won't report "ended" */
-	obs_media_state state = State();
-	if (state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED) {
-		obs_source_media_stop(source);
-	}
+	/* No separate "stop" first: loading a different file replaces the old
+	 * one in the same step, and a queued stop could land on the new song
+	 * (it then sat there silent until Play / Pause was pressed a few times). */
+	startedNs = os_gettime_ns();
 
 	/* Updates to a media source are applied once per frame, so setting the
 	 * same file again wouldn't restart it: restart what's loaded instead */

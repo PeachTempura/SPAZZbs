@@ -20,6 +20,7 @@
 #include "OBSBasic.hpp"
 
 #include <components/SpazzDockTabs.hpp>
+#include <dialogs/SpazzSponsorCenter.hpp>
 #include <docks/SpazzMusicDock.hpp>
 #include <qt-wrappers.hpp>
 
@@ -89,6 +90,7 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 		spazzTabs->ResetToDefault(
 			{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock, controlsDock});
 		PlaceSpazzMusicDock();
+		PlaceSpazzSponsorDock();
 	}
 
 	activateWindow();
@@ -207,7 +209,8 @@ bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 	     << "controlsDock"
 	     << "statsDock"
 	     << "spazzTabsDock"
-	     << "spazzMusicDock";
+	     << "spazzMusicDock"
+	     << "spazzSponsorDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;
 
@@ -284,9 +287,15 @@ void OBSBasic::SetupSpazzTabs()
 		/* no saved tabs yet: stock layout plus the Music tab */
 		spazzTabs->ResetToDefault(defaults);
 		PlaceSpazzMusicDock();
-	} else if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
-		/* saved tabs from before the music player existed */
-		PlaceSpazzMusicDock();
+		PlaceSpazzSponsorDock();
+	} else {
+		/* saved tabs from before the music player / SPONSORCENTER tab existed */
+		if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
+			PlaceSpazzMusicDock();
+		}
+		if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "SponsorDockPlaced")) {
+			PlaceSpazzSponsorDock();
+		}
 	}
 
 	/* Docks menu: "Dock Tabs" submenu, rebuilt every time it opens */
@@ -294,6 +303,16 @@ void OBSBasic::SetupSpazzTabs()
 	ui->menuDocks->insertMenu(ui->resetDocks, tabsMenu);
 	ui->menuDocks->insertSeparator(ui->resetDocks);
 	connect(tabsMenu, &QMenu::aboutToShow, this, [this, tabsMenu]() { spazzTabs->PopulateDocksMenu(tabsMenu); });
+}
+
+void OBSBasic::PlaceSpazzSponsorDock()
+{
+	if (!spazzTabs || !spazzSponsorDock) {
+		return;
+	}
+
+	spazzTabs->PlaceInTab(spazzSponsorDock, QTStr("Sponsorcenter.TabName"));
+	config_set_bool(App()->GetUserConfig(), "SPAZZbs", "SponsorDockPlaced", true);
 }
 
 void OBSBasic::PlaceSpazzMusicDock()

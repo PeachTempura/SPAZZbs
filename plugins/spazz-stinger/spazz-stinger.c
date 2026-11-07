@@ -408,11 +408,16 @@ static void *stg_create(obs_data_t *settings, obs_source_t *source)
 		}
 	}
 
-	/* a brand new stinger starts as the classic Matrix look */
+	/* a brand new stinger starts from the preset it was made with (the
+	 * Scene Transitions "+" menu lists them all), or the classic Matrix */
 	if (!obs_data_has_user_value(settings, "preset_applied")) {
-		apply_preset(settings, 0);
-		obs_data_set_string(settings, "preset", stg_presets[0].name);
-		obs_data_set_string(settings, "preset_applied", stg_presets[0].name);
+		int idx = preset_index(obs_data_get_string(settings, "preset"));
+		if (idx < 0) {
+			idx = 0;
+		}
+		apply_preset(settings, idx);
+		obs_data_set_string(settings, "preset", stg_presets[idx].name);
+		obs_data_set_string(settings, "preset_applied", stg_presets[idx].name);
 	}
 
 	stg_update(s, settings);

@@ -37,22 +37,22 @@ static constexpr const char *kStingerId = "spazz_stinger";
 
 QPointer<SpazzStingerStudio> SpazzStingerStudio::instance;
 
-void SpazzStingerStudio::Open(QWidget *parent)
+void SpazzStingerStudio::Open(QWidget *parent, const QString &uuid)
 {
-	if (instance) {
-		instance->show();
-		instance->raise();
-		instance->activateWindow();
-		return;
+	if (!instance) {
+		if (!obs_source_get_display_name(kStingerId)) {
+			OBSMessageBox::warning(parent, QTStr("SpazzStudio.Title"), QTStr("SpazzStudio.Missing"));
+			return;
+		}
+		instance = new SpazzStingerStudio(parent);
 	}
-
-	if (!obs_source_get_display_name(kStingerId)) {
-		OBSMessageBox::warning(parent, QTStr("SpazzStudio.Title"), QTStr("SpazzStudio.Missing"));
-		return;
+	/* opened from a transition's gear menu: edit that one */
+	if (!uuid.isEmpty() && instance->editing->findData(uuid) >= 0) {
+		instance->RefreshEditing(uuid);
 	}
-
-	instance = new SpazzStingerStudio(parent);
 	instance->show();
+	instance->raise();
+	instance->activateWindow();
 }
 
 SpazzStingerStudio::SpazzStingerStudio(QWidget *parent) : QDialog(parent, Qt::Window)

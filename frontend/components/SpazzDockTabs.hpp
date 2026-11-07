@@ -83,6 +83,9 @@ public:
 	 * without switching away from the tab you're on. */
 	void PlaceInTab(QDockWidget *dock, const QString &tabName);
 
+	/* Shows a dock: switches to its tab, or shows it where it lives. */
+	void ShowDock(QDockWidget *dock);
+
 	/* Fills a menu with "move dock to tab" actions, used by the Docks menu. */
 	void PopulateDocksMenu(QMenu *menu);
 

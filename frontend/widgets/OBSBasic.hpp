@@ -70,6 +70,7 @@ class SpazzMusicPlayer;
 class SpazzMusicDock;
 class SpazzUpdater;
 class SpazzMultistream;
+class SpazzSponsorSwitch;
 struct QuickTransition;
 
 namespace OBS {
@@ -467,6 +468,8 @@ private:
 	QPointer<SpazzMusicPlayer> spazzMusic;
 	QPointer<SpazzMusicDock> spazzMusicDock;
 	void PlaceSpazzMusicDock();
+	QPointer<OBSDock> spazzSponsorDock;
+	void PlaceSpazzSponsorDock();
 
 	/* SPAZZbs: copy scene collections, profiles and browser docks over
 	 * from a regular OBS Studio install */
@@ -476,6 +479,7 @@ private:
 	/* SPAZZbs: updates itself from the project's GitHub releases */
 	QPointer<SpazzUpdater> spazzUpdater;
 	QPointer<SpazzMultistream> spazzMulti;
+	QPointer<SpazzSponsorSwitch> spazzSponsors;
 
 public:
 	SpazzMultistream *GetSpazzMultistream() const;
@@ -802,6 +806,7 @@ public:
 
 	/* SPAZZbs: add a transition with the given settings straight into the
 	 * transition list (no name prompt), for Stinger Studio */
+	void SpazzAddStingerPreset(const QString &preset);
 	OBSSource SpazzAddTransition(const char *id, const std::string &name, obs_data_t *settings);
 	void ResetOutputs();
 

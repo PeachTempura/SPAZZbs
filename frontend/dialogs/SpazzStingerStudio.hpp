@@ -30,7 +30,7 @@ class SpazzStingerStudio : public QDialog {
 	Q_OBJECT
 
 public:
-	static void Open(QWidget *parent);
+	static void Open(QWidget *parent, const QString &uuid = QString());
 	~SpazzStingerStudio();
 
 protected:

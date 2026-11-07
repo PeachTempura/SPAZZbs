@@ -55,7 +55,49 @@ struct spazz_sponsor {
 	volatile long width, height;
 	bool preview;
 	uint64_t last_write_ns;
+
+	/* whether the wheel may turn: the Sponsors switch, and streaming /
+	 * recording if this spot waits for them. Set from the UI thread. */
+	volatile long st_switch, st_streaming, st_recording;
+	volatile long run_when; /* 0 always, 1 streaming, 2 streaming or recording */
+	volatile long running;
 };
+
+static bool compute_run(struct spazz_sponsor *sp)
+{
+	if (!os_atomic_load_long(&sp->st_switch)) {
+		return false;
+	}
+	switch (os_atomic_load_long(&sp->run_when)) {
+	case 1:
+		return os_atomic_load_long(&sp->st_streaming) != 0;
+	case 2:
+		return os_atomic_load_long(&sp->st_streaming) || os_atomic_load_long(&sp->st_recording);
+	default:
+		return true;
+	}
+}
+
+static long run_when_index(const char *v)
+{
+	if (v && strcmp(v, "streaming") == 0) {
+		return 1;
+	}
+	if (v && strcmp(v, "live") == 0) {
+		return 2;
+	}
+	return 0;
+}
+
+static const char *mask_path(const char *id)
+{
+	for (const struct spn_shape *m = spn_masks; id && m->id; m++) {
+		if (strcmp(m->id, id) == 0) {
+			return m->path;
+		}
+	}
+	return "";
+}
 
 /* ------------------------------------------------------------------------ */
 /* helpers                                                                   */
@@ -177,6 +219,13 @@ static obs_data_t *new_item(obs_data_t *s, const char *head, const char *sub, co
 	obs_data_set_string(it, "exit", obs_data_get_string(s, "exit"));
 	obs_data_set_double(it, "show_sec", 8.0);
 	obs_data_set_bool(it, "off", false);
+	obs_data_set_string(it, "mask", "frame");
+	obs_data_set_string(it, "aspect", "square");
+	obs_data_set_string(it, "fit", "contain");
+	obs_data_set_double(it, "zoom", 1.0);
+	obs_data_set_double(it, "pan_x", 0.0);
+	obs_data_set_double(it, "pan_y", 0.0);
+	obs_data_set_double(it, "volume", 1.0);
 	return it;
 }
 
@@ -262,7 +311,7 @@ static void migrate_items(obs_data_t *s)
 /* ------------------------------------------------------------------------ */
 /* settings -> the page's config                                             */
 
-static char *build_config(obs_data_t *s, bool preview)
+static char *build_config(struct spazz_sponsor *sp, obs_data_t *s, bool preview)
 {
 	obs_data_t *c = obs_data_create();
 	char hex[8];
@@ -299,6 +348,9 @@ static char *build_config(obs_data_t *s, bool preview)
 	obs_data_set_int(c, "enterMs", obs_data_get_int(s, "enter_ms"));
 	obs_data_set_int(c, "exitMs", obs_data_get_int(s, "exit_ms"));
 	obs_data_set_int(c, "loops", obs_data_get_int(s, "loops"));
+	obs_data_set_double(c, "everyMin", obs_data_get_double(s, "every_min"));
+	obs_data_set_int(c, "cycles", obs_data_get_int(s, "cycles"));
+	obs_data_set_bool(c, "run", compute_run(sp));
 	if (preview) {
 		obs_data_set_bool(c, "__preview", true);
 		/* the studio holds the sponsor being edited on screen */
@@ -306,9 +358,10 @@ static char *build_config(obs_data_t *s, bool preview)
 	}
 
 	/* the sponsors, in order. Images become addresses the page can load */
-	static const char *item_strs[][2] = {{"layout", "layout"}, {"head", "head"},          {"sub", "sub"},
-					     {"badge", "badge"},   {"text_anim", "textAnim"}, {"logo_anim", "logoAnim"},
-					     {"enter", "enter"},   {"exit", "exit"}};
+	static const char *item_strs[][2] = {
+		{"layout", "layout"},      {"head", "head"},          {"sub", "sub"},     {"badge", "badge"},
+		{"text_anim", "textAnim"}, {"logo_anim", "logoAnim"}, {"enter", "enter"}, {"exit", "exit"},
+		{"mask", "mask"},          {"aspect", "aspect"},      {"fit", "fit"}};
 	obs_data_array_t *out = obs_data_array_create();
 	obs_data_array_t *items = obs_data_get_array(s, "items");
 	for (size_t i = 0; i < obs_data_array_count(items); i++) {
@@ -327,6 +380,14 @@ static char *build_config(obs_data_t *s, bool preview)
 			}
 			obs_data_set_double(o, "imageSize", obs_data_get_double(it, "image_size"));
 			obs_data_set_double(o, "showSec", obs_data_get_double(it, "show_sec"));
+			obs_data_set_string(o, "maskPath", mask_path(obs_data_get_string(it, "mask")));
+			obs_data_set_double(o, "zoom", obs_data_get_double(it, "zoom"));
+			obs_data_set_double(o, "panX", obs_data_get_double(it, "pan_x"));
+			obs_data_set_double(o, "panY", obs_data_get_double(it, "pan_y"));
+			/* sponsors saved before videos were possible play at full volume */
+			obs_data_set_double(o, "volume",
+					    obs_data_has_user_value(it, "volume") ? obs_data_get_double(it, "volume")
+										  : 1.0);
 			obs_data_array_push_back(out, o);
 			obs_data_release(o);
 		}
@@ -390,7 +451,8 @@ static void make_browser(struct spazz_sponsor *sp, uint32_t w, uint32_t h)
 	obs_data_set_int(bs, "fps", 60);
 	obs_data_set_bool(bs, "shutdown", false);
 	obs_data_set_bool(bs, "restart_when_active", false);
-	obs_data_set_bool(bs, "reroute_audio", false);
+	/* video sound goes through this source onto the stream */
+	obs_data_set_bool(bs, "reroute_audio", true);
 	obs_data_set_string(bs, "css",
 			    "body { background-color: rgba(0, 0, 0, 0); margin: 0px auto; overflow: hidden; }");
 
@@ -399,6 +461,7 @@ static void make_browser(struct spazz_sponsor *sp, uint32_t w, uint32_t h)
 		blog(LOG_WARNING, "[sponsorcenter] the browser source isn't available");
 	} else {
 		obs_source_add_active_child(sp->source, sp->browser);
+		obs_source_set_audio_mixers(sp->browser, 0xFF);
 	}
 
 	obs_data_release(bs);
@@ -419,12 +482,14 @@ static void spn_update(void *data, obs_data_t *settings)
 	os_atomic_set_long(&sp->width, (long)w);
 	os_atomic_set_long(&sp->height, (long)h);
 	sp->preview = obs_data_get_bool(settings, "studio_preview");
+	os_atomic_set_long(&sp->run_when, run_when_index(obs_data_get_string(settings, "run_when")));
+	os_atomic_set_long(&sp->running, compute_run(sp) ? 1 : 0);
 
 	/* the page reads this when it (re)loads ... Updates run on the
 	 * graphics thread, and the SPONSORCENTER preview updates as you type,
 	 * so the preview's copy on disk is only refreshed now and then: the
 	 * running page gets every change through the event below anyway. */
-	char *json = build_config(settings, sp->preview);
+	char *json = build_config(sp, settings, sp->preview);
 	const uint64_t now = os_gettime_ns();
 	if (sp->config_path && (!sp->preview || !sp->browser || now - sp->last_write_ns > 1500000000ULL)) {
 		os_quick_write_utf8_file_safe(sp->config_path, json, strlen(json), false, "tmp", NULL);
@@ -444,7 +509,81 @@ static void spn_update(void *data, obs_data_t *settings)
 		/* ... and gets it live while it's running */
 		send_event(sp, "spazzSponsorConfig", json);
 	}
+
+	/* hear sponsor videos: always in the studio (it isn't on stream), and on
+	 * a live spot if asked */
+	if (sp->browser) {
+		const bool mon = sp->preview || obs_data_get_bool(settings, "hear_video");
+		if (obs_source_get_monitoring_enabled(sp->browser) != mon) {
+			obs_source_set_monitoring_enabled(sp->browser, mon);
+		}
+	}
 	bfree(json);
+}
+
+/* the Sponsors switch / streaming / recording changed (from SPAZZbs) */
+static void apply_state(struct spazz_sponsor *sp, bool streaming, bool recording, bool on)
+{
+	os_atomic_set_long(&sp->st_streaming, streaming ? 1 : 0);
+	os_atomic_set_long(&sp->st_recording, recording ? 1 : 0);
+	os_atomic_set_long(&sp->st_switch, on ? 1 : 0);
+	const long run = compute_run(sp) ? 1 : 0;
+	if (os_atomic_set_long(&sp->running, run) != run && !sp->preview) {
+		send_event(sp, "spazzSponsorRun", run ? "{\"run\":true}" : "{\"run\":false}");
+	}
+}
+
+static void proc_set_state(void *data, calldata_t *cd)
+{
+	apply_state(data, calldata_bool(cd, "streaming"), calldata_bool(cd, "recording"), calldata_bool(cd, "enabled"));
+}
+
+/* ask SPAZZbs for the current state when a spot is made */
+static void fetch_state(struct spazz_sponsor *sp)
+{
+	calldata_t cd;
+	calldata_init(&cd);
+	calldata_set_bool(&cd, "enabled", true);
+	calldata_set_bool(&cd, "streaming", false);
+	calldata_set_bool(&cd, "recording", false);
+	proc_handler_call(obs_get_proc_handler(), "spazz_sponsor_state", &cd);
+	os_atomic_set_long(&sp->st_switch, calldata_bool(&cd, "enabled") ? 1 : 0);
+	os_atomic_set_long(&sp->st_streaming, calldata_bool(&cd, "streaming") ? 1 : 0);
+	os_atomic_set_long(&sp->st_recording, calldata_bool(&cd, "recording") ? 1 : 0);
+	calldata_free(&cd);
+}
+
+/* the browser's sound (sponsor videos) onto the stream */
+static bool spn_audio_render(void *data, uint64_t *ts_out, struct obs_source_audio_mix *audio_output, uint32_t mixers,
+			     size_t channels, size_t sample_rate)
+{
+	UNUSED_PARAMETER(sample_rate);
+	struct spazz_sponsor *sp = data;
+	obs_source_t *child = sp->browser;
+	if (!child || obs_source_audio_pending(child)) {
+		return false;
+	}
+	const uint64_t ts = obs_source_get_audio_timestamp(child);
+	if (!ts) {
+		return false;
+	}
+
+	struct obs_source_audio_mix child_audio;
+	obs_source_get_audio_mix(child, &child_audio);
+	for (size_t mix = 0; mix < MAX_AUDIO_MIXES; mix++) {
+		if ((mixers & (1 << mix)) == 0) {
+			continue;
+		}
+		for (size_t ch = 0; ch < channels; ch++) {
+			float *out = audio_output->output[mix].data[ch];
+			const float *in = child_audio.output[mix].data[ch];
+			for (size_t i = 0; i < AUDIO_OUTPUT_FRAMES; i++) {
+				out[i] += in[i];
+			}
+		}
+	}
+	*ts_out = ts;
+	return true;
 }
 
 static void spn_defaults(obs_data_t *s)
@@ -473,6 +612,10 @@ static void spn_defaults(obs_data_t *s)
 	obs_data_set_default_bool(s, "upper", false);
 	obs_data_set_default_double(s, "show_sec", 12.0);
 	obs_data_set_default_double(s, "gap_sec", 45.0);
+	obs_data_set_default_double(s, "every_min", 5.0);
+	obs_data_set_default_int(s, "cycles", 1);
+	obs_data_set_default_string(s, "run_when", "always");
+	obs_data_set_default_bool(s, "hear_video", false);
 	obs_data_set_default_double(s, "between_sec", 0.4);
 	obs_data_set_default_double(s, "delay_sec", 0.0);
 	obs_data_set_default_int(s, "enter_ms", 700);
@@ -526,7 +669,8 @@ static bool mode_modified(obs_properties_t *props, obs_property_t *prop, obs_dat
 	const char *mode = obs_data_get_string(settings, "mode");
 	const bool loop = mode && strcmp(mode, "loop") == 0;
 	const bool always = mode && strcmp(mode, "always") == 0;
-	obs_property_set_visible(obs_properties_get(props, "gap_sec"), loop);
+	obs_property_set_visible(obs_properties_get(props, "every_min"), loop);
+	obs_property_set_visible(obs_properties_get(props, "cycles"), !always);
 	obs_property_set_visible(obs_properties_get(props, "loops"), loop);
 	obs_property_set_visible(obs_properties_get(props, "delay_sec"), loop || always);
 	return true;
@@ -635,17 +779,23 @@ static obs_properties_t *spn_properties(void *data)
 	obs_property_int_set_suffix(p, " ms");
 	p = obs_properties_add_int_slider(look, "exit_ms", T_("ExitMs"), 100, 3000, 50);
 	obs_property_int_set_suffix(p, " ms");
+	p = obs_properties_add_bool(look, "hear_video", T_("HearVideo"));
+	obs_property_set_long_description(p, T_("HearVideo.Tip"));
 	obs_properties_add_group(props, "grp_look", T_("Look"), OBS_GROUP_NORMAL, look);
 
 	/* when it shows */
 	obs_properties_t *timing = obs_properties_create();
+	p = add_list(timing, "run_when", T_("RunWhen"), spn_runWhen);
+	obs_property_set_long_description(p, T_("RunWhen.Tip"));
 	p = add_list(timing, "mode", T_("Mode"), spn_mode);
 	obs_property_set_modified_callback(p, mode_modified);
+	p = obs_properties_add_float(timing, "every_min", T_("EveryMin"), 0.5, 240.0, 0.5);
+	obs_property_float_set_suffix(p, T_("Minutes"));
+	obs_property_set_long_description(p, T_("EveryMin.Tip"));
+	p = obs_properties_add_int(timing, "cycles", T_("Cycles"), 1, 50, 1);
+	obs_property_set_long_description(p, T_("Cycles.Tip"));
 	p = obs_properties_add_float_slider(timing, "between_sec", T_("BetweenSec"), 0.0, 10.0, 0.1);
 	obs_property_float_set_suffix(p, " s");
-	p = obs_properties_add_float_slider(timing, "gap_sec", T_("GapSec"), 0.0, 900.0, 1.0);
-	obs_property_float_set_suffix(p, " s");
-	obs_property_set_long_description(p, T_("GapSec.Tip"));
 	p = obs_properties_add_int(timing, "loops", T_("Loops"), 0, 1000, 1);
 	obs_property_set_long_description(p, T_("Loops.Tip"));
 	p = obs_properties_add_float_slider(timing, "delay_sec", T_("DelaySec"), 0.0, 600.0, 1.0);
@@ -738,12 +888,35 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 	}
 	obs_data_array_release(items);
 
+	/* spots from before "every X minutes": keep roughly the same rhythm */
+	if (!obs_data_has_user_value(settings, "every_min") && obs_data_has_user_value(settings, "preset_applied")) {
+		double run = 0.0;
+		obs_data_array_t *all = obs_data_get_array(settings, "items");
+		const double move =
+			(double)(obs_data_get_int(settings, "enter_ms") + obs_data_get_int(settings, "exit_ms")) /
+			1000.0;
+		for (size_t i = 0; i < obs_data_array_count(all); i++) {
+			obs_data_t *it = obs_data_array_item(all, i);
+			run += obs_data_get_double(it, "show_sec") + move +
+			       obs_data_get_double(settings, "between_sec");
+			obs_data_release(it);
+		}
+		obs_data_array_release(all);
+		double every = (run + obs_data_get_double(settings, "gap_sec")) / 60.0;
+		every = floor(every * 2.0 + 0.5) / 2.0;
+		obs_data_set_double(settings, "every_min", every < 0.5 ? 0.5 : every);
+	}
+
 	obs_hotkey_register_source(source, "Sponsorcenter.Play", T_("Hotkey.Play"), hk_play, sp);
 	obs_hotkey_register_source(source, "Sponsorcenter.Hide", T_("Hotkey.Hide"), hk_hide, sp);
 
 	proc_handler_t *ph = obs_source_get_proc_handler(source);
 	proc_handler_add(ph, "void play()", proc_play, sp);
 	proc_handler_add(ph, "void hide()", proc_hide, sp);
+	proc_handler_add(ph, "void set_state(in bool streaming, in bool recording, in bool enabled)", proc_set_state,
+			 sp);
+	os_atomic_set_long(&sp->st_switch, 1);
+	fetch_state(sp);
 
 	spn_update(sp, settings);
 	return sp;
@@ -806,7 +979,7 @@ static enum gs_color_space spn_color_space(void *data, size_t count, const enum 
 static struct obs_source_info spazz_sponsor_info = {
 	.id = "spazz_sponsor",
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
+	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_COMPOSITE,
 	.get_name = spn_get_name,
 	.create = spn_create,
 	.destroy = spn_destroy,
@@ -817,6 +990,8 @@ static struct obs_source_info spazz_sponsor_info = {
 	.get_width = spn_width,
 	.get_height = spn_height,
 	.enum_active_sources = spn_enum_sources,
+	.enum_all_sources = spn_enum_sources,
+	.audio_render = spn_audio_render,
 	.video_get_color_space = spn_color_space,
 	.icon_type = OBS_ICON_TYPE_SLIDESHOW,
 };

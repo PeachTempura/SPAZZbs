@@ -12,6 +12,7 @@
 
 #include <OBSApp.hpp>
 #include <utility/display-helpers.hpp>
+#include <docks/OBSDock.hpp>
 #include <widgets/OBSBasic.hpp>
 #include <widgets/OBSQTDisplay.hpp>
 #include <properties-view.hpp>
@@ -35,6 +36,10 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPainterPath>
+#include <QSvgRenderer>
+#include <QWheelEvent>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPushButton>
@@ -47,6 +52,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 
 /* the option lists the sponsor page understands, shared with the source */
@@ -93,60 +100,161 @@ static void CloneItems(obs_data_t *settings)
 	obs_data_set_array(settings, "items", copy);
 }
 
-static const QString kImageFilter = "Images (*.png *.jpg *.jpeg *.gif *.webp *.svg *.bmp);;All files (*.*)";
+static const QString kImageFilter =
+	"Logos and videos (*.png *.jpg *.jpeg *.gif *.webp *.svg *.bmp *.mp4 *.webm *.mov *.m4v);;All files (*.*)";
 
-static bool IsImageFile(const QString &path)
+static bool IsVideoFile(const QString &path)
 {
-	static const QStringList exts = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"};
+	static const QStringList exts = {"mp4", "webm", "mov", "m4v"};
 	return exts.contains(QFileInfo(path).suffix().toLower());
 }
 
-/* ------------------------------------------------------------------------ */
-/* the logo square: drop a file on it, or click to pick one                   */
+static bool IsMediaFile(const QString &path)
+{
+	static const QStringList exts = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"};
+	return exts.contains(QFileInfo(path).suffix().toLower()) || IsVideoFile(path);
+}
 
-class LogoDrop : public QLabel {
+static const char *MaskPath(const QString &id)
+{
+	for (const spn_shape *m = spn_masks; m->id; m++) {
+		if (id == QLatin1String(m->id)) {
+			return m->path;
+		}
+	}
+	return nullptr;
+}
+
+/* how the page cuts the picture, so the card thumbnail can show the same */
+struct LogoLook {
+	QString mask = "frame";
+	QString aspect = "square";
+	QString fit = "contain";
+	double zoom = 1.0, panX = 0.0, panY = 0.0;
+};
+
+/* ------------------------------------------------------------------------ */
+/* the logo: drop a file on it, or click to pick one. With a picture in it,  */
+/* drag to move the crop and scroll to zoom; it shows the shape it'll have. */
+
+class LogoDrop : public QWidget {
 public:
 	std::function<void(const QString &)> picked;
+	std::function<void(double panX, double panY, double zoom)> cropped;
 
-	explicit LogoDrop(QWidget *parent) : QLabel(parent)
+	explicit LogoDrop(QWidget *parent) : QWidget(parent)
 	{
 		setAcceptDrops(true);
-		setFixedSize(104, 104);
-		setAlignment(Qt::AlignCenter);
-		setWordWrap(true);
+		setFixedSize(116, 116);
 		setCursor(Qt::PointingHandCursor);
 		setToolTip(QTStr("Sponsorcenter.Card.LogoTip"));
-		Show(QString());
 	}
 
-	void Show(const QString &path)
+	void Show(const QString &file)
 	{
-		QPixmap pm;
-		if (!path.isEmpty()) {
-			pm.load(path);
+		path = file;
+		video = IsVideoFile(file);
+		pix = QPixmap();
+		if (!file.isEmpty() && !video) {
+			pix.load(file);
 		}
-		if (!pm.isNull()) {
-			setPixmap(pm.scaled(QSize(92, 92) * devicePixelRatioF(), Qt::KeepAspectRatio,
-					    Qt::SmoothTransformation));
-			setStyleSheet("QLabel { border: 1px solid palette(mid); border-radius: 8px; }");
-		} else {
-			setPixmap(QPixmap());
-			setText(path.isEmpty() ? QTStr("Sponsorcenter.Card.DropLogo") : QFileInfo(path).fileName());
-			setStyleSheet("QLabel { border: 2px dashed palette(mid); border-radius: 8px; padding: 6px; }");
-		}
+		setCursor(pix.isNull() ? Qt::PointingHandCursor : Qt::OpenHandCursor);
+		update();
+	}
+
+	void SetLook(const LogoLook &l)
+	{
+		look = l;
+		update();
 	}
 
 protected:
-	void dragEnterEvent(QDragEnterEvent *e) override
+	void paintEvent(QPaintEvent *) override
 	{
-		if (FirstImage(e->mimeData()).isEmpty()) {
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		p.setRenderHint(QPainter::SmoothPixmapTransform);
+		const QRectF area = QRectF(rect()).adjusted(4, 4, -4, -4);
+
+		if (path.isEmpty()) {
+			p.setPen(QPen(palette().color(QPalette::Mid), 2, Qt::DashLine));
+			p.drawRoundedRect(area, 8, 8);
+			p.setPen(palette().color(QPalette::WindowText));
+			p.drawText(area, Qt::AlignCenter | Qt::TextWordWrap, QTStr("Sponsorcenter.Card.DropLogo"));
 			return;
 		}
-		e->acceptProposedAction();
+
+		const QRectF box = BoxRect(area);
+
+		/* the picture, cut like the page cuts it */
+		const qreal dpr = devicePixelRatioF();
+		QImage layer(QSize(int(box.width() * dpr), int(box.height() * dpr)),
+			     QImage::Format_ARGB32_Premultiplied);
+		layer.setDevicePixelRatio(dpr);
+		layer.fill(Qt::transparent);
+		{
+			QPainter lp(&layer);
+			lp.setRenderHint(QPainter::Antialiasing);
+			lp.setRenderHint(QPainter::SmoothPixmapTransform);
+			const QRectF b(0, 0, box.width(), box.height());
+			if (look.mask == "frame") {
+				lp.fillRect(b, QColor(255, 255, 255, 30));
+			}
+			if (!pix.isNull()) {
+				lp.drawPixmap(PictureRect(b), pix, QRectF(pix.rect()));
+			} else {
+				/* videos: no frame to show here; the preview plays it */
+				QLinearGradient g(b.topLeft(), b.bottomRight());
+				g.setColorAt(0, QColor(60, 40, 90));
+				g.setColorAt(1, QColor(20, 15, 35));
+				lp.fillRect(b, g);
+				lp.setPen(Qt::white);
+				lp.drawText(b.adjusted(4, 4, -4, -4), Qt::AlignCenter | Qt::TextWordWrap,
+					    QString::fromUtf8("\xE2\x96\xB6 ") + QFileInfo(path).fileName());
+			}
+			/* keep only what's inside the shape */
+			lp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+			const char *svgPath = MaskPath(look.mask);
+			if (svgPath) {
+				QByteArray svg =
+					QByteArray("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' "
+						   "preserveAspectRatio='none'><path d='") +
+					svgPath + "'/></svg>";
+				QSvgRenderer r(svg);
+				r.render(&lp, b);
+			} else {
+				QPainterPath clip;
+				clip.addRoundedRect(b, look.mask == "frame" ? 12 : 0, look.mask == "frame" ? 12 : 0);
+				lp.fillPath(clip, Qt::black);
+			}
+		}
+
+		/* chequerboard behind, so transparent PNGs read as transparent */
+		p.save();
+		p.setClipRect(box);
+		const int cell = 8;
+		for (int y = 0; y * cell < box.height(); y++) {
+			for (int x = 0; x * cell < box.width(); x++) {
+				p.fillRect(QRectF(box.left() + x * cell, box.top() + y * cell, cell, cell),
+					   (x + y) % 2 ? QColor(70, 70, 80, 90) : QColor(110, 110, 120, 90));
+			}
+		}
+		p.restore();
+		p.drawImage(box.topLeft(), layer);
+		p.setPen(QPen(palette().color(QPalette::Mid), 1, Qt::DotLine));
+		p.setBrush(Qt::NoBrush);
+		p.drawRect(box);
+	}
+
+	void dragEnterEvent(QDragEnterEvent *e) override
+	{
+		if (!FirstMedia(e->mimeData()).isEmpty()) {
+			e->acceptProposedAction();
+		}
 	}
 	void dropEvent(QDropEvent *e) override
 	{
-		const QString file = FirstImage(e->mimeData());
+		const QString file = FirstMedia(e->mimeData());
 		if (!file.isEmpty() && picked) {
 			e->acceptProposedAction();
 			picked(file);
@@ -157,6 +265,66 @@ protected:
 		if (e->button() != Qt::LeftButton) {
 			return;
 		}
+		if (path.isEmpty()) {
+			Browse();
+			return;
+		}
+		dragFrom = e->position();
+		dragging = true;
+		setCursor(Qt::ClosedHandCursor);
+	}
+	void mouseMoveEvent(QMouseEvent *e) override
+	{
+		if (!dragging || pix.isNull()) {
+			return;
+		}
+		/* move the picture with the mouse: the inverse of the page's
+		 * object-position + scale(zoom) maths */
+		const QRectF b = BoxRect(QRectF(rect()).adjusted(4, 4, -4, -4));
+		const QSizeF d = DrawnSize(b.size());
+		const QPointF delta = e->position() - dragFrom;
+		dragFrom = e->position();
+		auto step = [](double box, double drawn, double z, double moved) {
+			const double denom = box - drawn * z;
+			return std::abs(denom) < 1.0 ? 0.0 : 2.0 * moved / denom;
+		};
+		look.panX = std::clamp(look.panX + step(b.width(), d.width(), look.zoom, delta.x()), -1.0, 1.0);
+		look.panY = std::clamp(look.panY + step(b.height(), d.height(), look.zoom, delta.y()), -1.0, 1.0);
+		update();
+		if (cropped) {
+			cropped(look.panX, look.panY, look.zoom);
+		}
+	}
+	void mouseReleaseEvent(QMouseEvent *) override
+	{
+		dragging = false;
+		setCursor(path.isEmpty() ? Qt::PointingHandCursor : Qt::OpenHandCursor);
+	}
+	void mouseDoubleClickEvent(QMouseEvent *) override { Browse(); }
+	void wheelEvent(QWheelEvent *e) override
+	{
+		if (path.isEmpty()) {
+			return;
+		}
+		const double steps = e->angleDelta().y() / 120.0;
+		look.zoom = std::clamp(look.zoom * std::pow(1.1, steps), 1.0, 5.0);
+		update();
+		if (cropped) {
+			cropped(look.panX, look.panY, look.zoom);
+		}
+		e->accept();
+	}
+
+private:
+	QString path;
+	QPixmap pix;
+	bool video = false;
+	LogoLook look;
+	bool dragging = false;
+	QPointF dragFrom;
+
+	void Browse()
+	{
 		const QString file = QFileDialog::getOpenFileName(this, QTStr("Sponsorcenter.Card.PickLogo"), QString(),
 								  kImageFilter);
 		if (!file.isEmpty() && picked) {
@@ -164,15 +332,57 @@ protected:
 		}
 	}
 
-private:
-	static QString FirstImage(const QMimeData *md)
+	/* the logo's box inside the thumbnail, in the chosen proportions */
+	QRectF BoxRect(const QRectF &area) const
+	{
+		double ar = 1.0;
+		if (look.aspect == "wide") {
+			ar = 16.0 / 9.0;
+		} else if (look.aspect == "landscape") {
+			ar = 4.0 / 3.0;
+		} else if (look.aspect == "portrait") {
+			ar = 3.0 / 4.0;
+		} else if (look.aspect == "original" && !pix.isNull() && pix.height() > 0) {
+			ar = double(pix.width()) / double(pix.height());
+		}
+		double w = area.width(), h = area.height();
+		if (ar >= 1.0) {
+			h = w / ar;
+		} else {
+			w = h * ar;
+		}
+		return QRectF(area.center().x() - w / 2, area.center().y() - h / 2, w, h);
+	}
+
+	/* the picture's size in the box before zoom (object-fit) */
+	QSizeF DrawnSize(const QSizeF &box) const
+	{
+		if (pix.isNull()) {
+			return box;
+		}
+		const double sx = box.width() / pix.width(), sy = box.height() / pix.height();
+		const double sc = look.fit == "cover" ? std::max(sx, sy) : std::min(sx, sy);
+		return QSizeF(pix.width() * sc, pix.height() * sc);
+	}
+
+	/* object-position + transform: scale(zoom) around that same point */
+	QRectF PictureRect(const QRectF &b) const
+	{
+		const QSizeF d = DrawnSize(b.size());
+		const double px = 0.5 + look.panX * 0.5, py = 0.5 + look.panY * 0.5;
+		const double x = px * (b.width() - d.width() * look.zoom);
+		const double y = py * (b.height() - d.height() * look.zoom);
+		return QRectF(x, y, d.width() * look.zoom, d.height() * look.zoom);
+	}
+
+	static QString FirstMedia(const QMimeData *md)
 	{
 		if (!md || !md->hasUrls()) {
 			return QString();
 		}
 		for (const QUrl &u : md->urls()) {
 			const QString f = u.toLocalFile();
-			if (!f.isEmpty() && IsImageFile(f)) {
+			if (!f.isEmpty() && IsMediaFile(f)) {
 				return f;
 			}
 		}
@@ -250,6 +460,55 @@ public:
 		sizeRow->addWidget(size, 1);
 		sizeRow->addWidget(sizeLabel);
 		form->addRow(QTStr("Sponsorcenter.Card.Size"), sizeRow);
+
+		/* how the picture is cut */
+		QHBoxLayout *shapeRow = new QHBoxLayout();
+		maskBox = new QComboBox(this);
+		FillCombo(maskBox, spn_mask);
+		maskBox->setToolTip(QTStr("Sponsorcenter.Card.ShapeTip"));
+		aspectBox = new QComboBox(this);
+		FillCombo(aspectBox, spn_aspect);
+		aspectBox->setToolTip(QTStr("Sponsorcenter.Card.BoxTip"));
+		shapeRow->addWidget(maskBox, 1);
+		shapeRow->addWidget(aspectBox, 1);
+		form->addRow(QTStr("Sponsorcenter.Card.Shape"), shapeRow);
+
+		QHBoxLayout *cropRow = new QHBoxLayout();
+		fitBox = new QComboBox(this);
+		FillCombo(fitBox, spn_fit);
+		zoom = new QSlider(Qt::Horizontal, this);
+		zoom->setRange(100, 500);
+		zoom->setToolTip(QTStr("Sponsorcenter.Card.ZoomTip"));
+		QPushButton *resetCrop = new QPushButton(QTStr("Sponsorcenter.Card.ResetCrop"), this);
+		resetCrop->setFlat(true);
+		cropRow->addWidget(fitBox, 1);
+		cropRow->addWidget(zoom, 1);
+		cropRow->addWidget(resetCrop);
+		form->addRow(QTStr("Sponsorcenter.Card.Crop"), cropRow);
+
+		QHBoxLayout *moveRow = new QHBoxLayout();
+		panX = new QSlider(Qt::Horizontal, this);
+		panY = new QSlider(Qt::Horizontal, this);
+		for (QSlider *sl : {panX, panY}) {
+			sl->setRange(-100, 100);
+			moveRow->addWidget(sl, 1);
+		}
+		panX->setToolTip(QTStr("Sponsorcenter.Card.MoveX"));
+		panY->setToolTip(QTStr("Sponsorcenter.Card.MoveY"));
+		form->addRow(QTStr("Sponsorcenter.Card.Move"), moveRow);
+
+		/* videos: how loud */
+		QHBoxLayout *soundRow = new QHBoxLayout();
+		volume = new QSlider(Qt::Horizontal, this);
+		volume->setRange(0, 100);
+		volumeLabel = new QLabel(this);
+		volumeLabel->setMinimumWidth(44);
+		soundRow->addWidget(volume, 1);
+		soundRow->addWidget(volumeLabel);
+		soundLabel = new QLabel(QTStr("Sponsorcenter.Card.Sound"), this);
+		form->addRow(soundLabel, soundRow);
+		soundWidgets = {soundLabel, volume, volumeLabel};
+
 		head = new QLineEdit(this);
 		head->setPlaceholderText(QTStr("Sponsorcenter.Card.HeadHint"));
 		form->addRow(QTStr("Sponsorcenter.Card.Head"), head);
@@ -299,13 +558,38 @@ public:
 		logo->picked = [this](const QString &file) {
 			image = file;
 			logo->Show(image);
-			clearLogo->setVisible(true);
+			UpdateMediaRows();
+			Changed();
+		};
+		/* dragging / scrolling the thumbnail moves the sliders */
+		logo->cropped = [this](double x, double y, double z) {
+			QSignalBlocker b1(panX), b2(panY), b3(zoom);
+			panX->setValue(int(std::lround(x * 100.0)));
+			panY->setValue(int(std::lround(y * 100.0)));
+			zoom->setValue(int(std::lround(z * 100.0)));
 			Changed();
 		};
 		connect(clearLogo, &QPushButton::clicked, this, [this]() {
 			image.clear();
 			logo->Show(image);
-			clearLogo->setVisible(false);
+			UpdateMediaRows();
+			Changed();
+		});
+		connect(resetCrop, &QPushButton::clicked, this, [this]() {
+			QSignalBlocker b1(panX), b2(panY), b3(zoom);
+			panX->setValue(0);
+			panY->setValue(0);
+			zoom->setValue(100);
+			LookChanged();
+		});
+		for (QComboBox *c : {maskBox, aspectBox, fitBox}) {
+			connect(c, &QComboBox::currentIndexChanged, this, [this]() { LookChanged(); });
+		}
+		for (QSlider *sl : {zoom, panX, panY}) {
+			connect(sl, &QSlider::valueChanged, this, [this]() { LookChanged(); });
+		}
+		connect(volume, &QSlider::valueChanged, this, [this]() {
+			volumeLabel->setText(QString("%1%").arg(volume->value()));
 			Changed();
 		});
 		auto onChange = [this]() {
@@ -330,7 +614,21 @@ public:
 		loading = true;
 		image = QT_UTF8(obs_data_get_string(it, "image"));
 		logo->Show(image);
-		clearLogo->setVisible(!image.isEmpty());
+		const char *mask = obs_data_get_string(it, "mask");
+		SetCombo(maskBox, *mask ? mask : "frame");
+		const char *aspect = obs_data_get_string(it, "aspect");
+		SetCombo(aspectBox, *aspect ? aspect : "square");
+		const char *fit = obs_data_get_string(it, "fit");
+		SetCombo(fitBox, *fit ? fit : "contain");
+		const double z = obs_data_get_double(it, "zoom");
+		zoom->setValue(int(std::lround((z >= 1.0 ? z : 1.0) * 100.0)));
+		panX->setValue(int(std::lround(obs_data_get_double(it, "pan_x") * 100.0)));
+		panY->setValue(int(std::lround(obs_data_get_double(it, "pan_y") * 100.0)));
+		const double vol = obs_data_has_user_value(it, "volume") ? obs_data_get_double(it, "volume") : 1.0;
+		volume->setValue(int(std::lround(vol * 100.0)));
+		volumeLabel->setText(QString("%1%").arg(volume->value()));
+		UpdateMediaRows();
+		logo->SetLook(Look());
 		SetCombo(layoutBox, obs_data_get_string(it, "layout"));
 		double sz = obs_data_get_double(it, "image_size");
 		size->setValue(int((sz > 0.0 ? sz : 1.0) * 100.0 + 0.5));
@@ -365,6 +663,13 @@ public:
 		obs_data_set_string(it, "exit", QT_TO_UTF8(leave->currentData().toString()));
 		obs_data_set_double(it, "show_sec", showSec->value());
 		obs_data_set_bool(it, "off", !showBox->isChecked());
+		obs_data_set_string(it, "mask", QT_TO_UTF8(maskBox->currentData().toString()));
+		obs_data_set_string(it, "aspect", QT_TO_UTF8(aspectBox->currentData().toString()));
+		obs_data_set_string(it, "fit", QT_TO_UTF8(fitBox->currentData().toString()));
+		obs_data_set_double(it, "zoom", zoom->value() / 100.0);
+		obs_data_set_double(it, "pan_x", panX->value() / 100.0);
+		obs_data_set_double(it, "pan_y", panY->value() / 100.0);
+		obs_data_set_double(it, "volume", volume->value() / 100.0);
 		return it;
 	}
 
@@ -396,6 +701,10 @@ private:
 	QLabel *sizeLabel = nullptr;
 	QLineEdit *head = nullptr, *sub = nullptr, *badge = nullptr;
 	QDoubleSpinBox *showSec = nullptr;
+	QComboBox *maskBox = nullptr, *aspectBox = nullptr, *fitBox = nullptr;
+	QSlider *zoom = nullptr, *panX = nullptr, *panY = nullptr, *volume = nullptr;
+	QLabel *volumeLabel = nullptr, *soundLabel = nullptr;
+	std::vector<QWidget *> soundWidgets;
 	QString image;
 	int number = 1;
 	bool loading = false;
@@ -412,6 +721,34 @@ private:
 		title->setText(t);
 	}
 
+	LogoLook Look() const
+	{
+		LogoLook l;
+		l.mask = maskBox->currentData().toString();
+		l.aspect = aspectBox->currentData().toString();
+		l.fit = fitBox->currentData().toString();
+		l.zoom = zoom->value() / 100.0;
+		l.panX = panX->value() / 100.0;
+		l.panY = panY->value() / 100.0;
+		return l;
+	}
+
+	void LookChanged()
+	{
+		logo->SetLook(Look());
+		Changed();
+	}
+
+	/* the logo-only rows show when there's a logo; Sound only for videos */
+	void UpdateMediaRows()
+	{
+		clearLogo->setVisible(!image.isEmpty());
+		const bool vid = IsVideoFile(image);
+		for (QWidget *w : soundWidgets) {
+			w->setVisible(vid);
+		}
+	}
+
 	void Changed()
 	{
 		UpdateTitle();
@@ -423,32 +760,51 @@ private:
 
 /* ------------------------------------------------------------------------ */
 
+QPointer<OBSDock> SpazzSponsorCenter::dock;
+std::function<void(QDockWidget *)> SpazzSponsorCenter::showDock;
+
+OBSDock *SpazzSponsorCenter::CreateDock(QWidget *mainWindow)
+{
+	dock = new OBSDock(mainWindow);
+	dock->setObjectName("spazzSponsorDock");
+	dock->setWindowTitle(QTStr("Sponsorcenter.Title"));
+	instance = new SpazzSponsorCenter(dock);
+	dock->setWidget(instance);
+	return dock;
+}
+
 void SpazzSponsorCenter::Open(QWidget *parent, const QString &uuid)
 {
-	if (instance) {
-		/* opening another spot while this one has unsaved edits: ask first */
-		if (!uuid.isEmpty() && uuid != instance->editing->currentData().toString()) {
-			bool go = !instance->dirty ||
-				  OBSMessageBox::question(instance, QTStr("Sponsorcenter.Title"),
-							  QTStr("Sponsorcenter.Discard")) == QMessageBox::Yes;
-			if (go) {
-				instance->RefreshEditing(uuid);
-			}
-		}
-		instance->show();
-		instance->raise();
-		instance->activateWindow();
-		return;
-	}
 	if (!obs_source_get_display_name(kSponsorId)) {
 		OBSMessageBox::warning(parent, QTStr("Sponsorcenter.Title"), QTStr("Sponsorcenter.Missing"));
 		return;
 	}
-	instance = new SpazzSponsorCenter(parent);
-	if (!uuid.isEmpty()) {
-		instance->RefreshEditing(uuid);
+	if (!instance || !dock) {
+		return;
 	}
-	instance->show();
+	if (showDock) {
+		showDock(dock);
+	} else {
+		dock->show();
+		dock->raise();
+	}
+
+	if (uuid.isEmpty()) {
+		return;
+	}
+	if (!instance->preview) {
+		instance->pendingUuid = uuid; /* picked up when it first shows */
+		return;
+	}
+	/* opening another spot while this one has unsaved edits: ask first */
+	if (uuid != instance->editing->currentData().toString()) {
+		bool go = !instance->dirty ||
+			  OBSMessageBox::question(instance, QTStr("Sponsorcenter.Title"),
+						  QTStr("Sponsorcenter.Discard")) == QMessageBox::Yes;
+		if (go) {
+			instance->RefreshEditing(uuid);
+		}
+	}
 }
 
 void SpazzSponsorCenter::RegisterOpenProc(QWidget *mainWindow)
@@ -469,23 +825,9 @@ void SpazzSponsorCenter::RegisterOpenProc(QWidget *mainWindow)
 	proc_handler_add(obs_get_proc_handler(), "void spazz_sponsorcenter_open(in string uuid)", open, nullptr);
 }
 
-SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Window)
+SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 {
-	setAttribute(Qt::WA_DeleteOnClose);
-	setWindowTitle(QTStr("Sponsorcenter.Title"));
-	setMinimumSize(960, 600);
-
-	/* the spot being designed: private, sized to the canvas, and it
-	 * replays every time a setting changes */
-	OBSDataAutoRelease init = obs_data_create();
-	struct obs_video_info ovi;
-	if (obs_get_video_info(&ovi)) {
-		obs_data_set_int(init, "width", ovi.base_width);
-		obs_data_set_int(init, "height", ovi.base_height);
-	}
-	obs_data_set_bool(init, "studio_preview", true);
-	preview = obs_source_create_private(kSponsorId, "SPONSORCENTER preview", init);
-	obs_source_inc_showing(preview);
+	setMinimumSize(420, 220);
 
 	pushTimer = new QTimer(this);
 	pushTimer->setSingleShot(true);
@@ -497,7 +839,7 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	QVBoxLayout *ll = new QVBoxLayout(left);
 	ll->setContentsMargins(0, 0, 0, 0);
 	display = new OBSQTDisplay(left);
-	display->setMinimumSize(480, 270);
+	display->setMinimumSize(256, 144);
 	display->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 	ll->addWidget(display, 1);
 
@@ -537,12 +879,7 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	cardsLayout->addStretch(1);
 	cardScroll->setWidget(host);
 	tabs->addTab(cardScroll, QTStr("Sponsorcenter.Tab.Sponsors"));
-
-	OBSDataAutoRelease settings = obs_source_get_settings(preview);
-	view = new OBSPropertiesView(settings.Get(), preview.Get(), (PropertiesReloadCallback)obs_source_properties,
-				     (PropertiesUpdateCallback) nullptr, (PropertiesVisualUpdateCb)obs_source_update);
-	view->setMinimumWidth(400);
-	tabs->addTab(view, QTStr("Sponsorcenter.Tab.Look"));
+	lookTabs = tabs;
 	rl->addWidget(tabs, 1);
 
 	QFormLayout *bottom = new QFormLayout();
@@ -556,11 +893,9 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	liveButton = new QPushButton(QTStr("Sponsorcenter.PlayLive"), right);
 	saveButton = new QPushButton(right);
 	saveButton->setDefault(true);
-	QPushButton *close = new QPushButton(QTStr("Close"), right);
 	buttons->addWidget(status, 1);
 	buttons->addWidget(liveButton);
 	buttons->addWidget(saveButton);
-	buttons->addWidget(close);
 	rl->addLayout(buttons);
 
 	QSplitter *split = new QSplitter(Qt::Horizontal, this);
@@ -572,13 +907,6 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	QVBoxLayout *main = new QVBoxLayout(this);
 	main->addWidget(split);
 
-	const char *geom = config_get_string(App()->GetUserConfig(), "SpazzSponsorCenter", "geometry");
-	if (!(geom && *geom && restoreGeometry(QByteArray::fromBase64(QByteArray(geom))))) {
-		resize(1320, 780);
-	}
-
-	RefreshEditing();
-
 	connect(display, &OBSQTDisplay::DisplayCreated, this,
 		[this]() { obs_display_add_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this); });
 	connect(editing, &QComboBox::currentIndexChanged, this, &SpazzSponsorCenter::EditingChanged);
@@ -586,13 +914,7 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	connect(saveButton, &QPushButton::clicked, this, &SpazzSponsorCenter::Save);
 	connect(liveButton, &QPushButton::clicked, this, &SpazzSponsorCenter::PlayLive);
 	connect(addButton, &QPushButton::clicked, this, &SpazzSponsorCenter::AddSponsor);
-	connect(close, &QPushButton::clicked, this, &QDialog::close);
-	/* a preset in the Look tab restyles every sponsor's motion too */
-	connect(view, &OBSPropertiesView::Changed, this, [this]() {
-		status->clear();
-		dirty = true;
-		SyncCardsFromSettings();
-	});
+
 	/* clicking into a sponsor's card shows that sponsor in the preview */
 	connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *now) {
 		for (QWidget *w = now; w; w = w->parentWidget()) {
@@ -612,16 +934,63 @@ SpazzSponsorCenter::~SpazzSponsorCenter()
 	if (display && display->GetDisplay()) {
 		obs_display_remove_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this);
 	}
-	if (preview) {
+	if (preview && previewShowing) {
 		obs_source_dec_showing(preview);
 	}
 }
 
-void SpazzSponsorCenter::closeEvent(QCloseEvent *e)
+/* The preview (a browser) only exists once the tab is first opened, and
+ * only renders while the tab is on screen. */
+void SpazzSponsorCenter::Start()
 {
-	config_set_string(App()->GetUserConfig(), "SpazzSponsorCenter", "geometry",
-			  saveGeometry().toBase64().constData());
-	QDialog::closeEvent(e);
+	OBSDataAutoRelease init = obs_data_create();
+	struct obs_video_info ovi;
+	if (obs_get_video_info(&ovi)) {
+		obs_data_set_int(init, "width", ovi.base_width);
+		obs_data_set_int(init, "height", ovi.base_height);
+	}
+	obs_data_set_bool(init, "studio_preview", true);
+	preview = obs_source_create_private(kSponsorId, "SPONSORCENTER preview", init);
+	if (!preview) {
+		return;
+	}
+
+	OBSDataAutoRelease settings = obs_source_get_settings(preview);
+	view = new OBSPropertiesView(settings.Get(), preview.Get(), (PropertiesReloadCallback)obs_source_properties,
+				     (PropertiesUpdateCallback) nullptr, (PropertiesVisualUpdateCb)obs_source_update);
+	view->setMinimumWidth(300);
+	lookTabs->addTab(view, QTStr("Sponsorcenter.Tab.Look"));
+	/* a preset in the Look tab restyles every sponsor's motion too */
+	connect(view, &OBSPropertiesView::Changed, this, [this]() {
+		status->clear();
+		dirty = true;
+		SyncCardsFromSettings();
+	});
+
+	const QString uuid = pendingUuid;
+	pendingUuid.clear();
+	RefreshEditing(uuid);
+}
+
+void SpazzSponsorCenter::showEvent(QShowEvent *e)
+{
+	QWidget::showEvent(e);
+	if (!preview) {
+		Start();
+	}
+	if (preview && !previewShowing) {
+		obs_source_inc_showing(preview);
+		previewShowing = true;
+	}
+}
+
+void SpazzSponsorCenter::hideEvent(QHideEvent *e)
+{
+	QWidget::hideEvent(e);
+	if (preview && previewShowing) {
+		obs_source_dec_showing(preview);
+		previewShowing = false;
+	}
 }
 
 /* ---- which spot we're editing ---- */
@@ -648,6 +1017,9 @@ void SpazzSponsorCenter::RefreshEditing(const QString &selectUuid)
 
 void SpazzSponsorCenter::EditingChanged()
 {
+	if (!preview) {
+		return;
+	}
 	const QString uuid = editing->currentData().toString();
 	OBSSourceAutoRelease existing = uuid.isEmpty() ? nullptr : obs_get_source_by_uuid(QT_TO_UTF8(uuid));
 
@@ -718,6 +1090,9 @@ SponsorCard *SpazzSponsorCenter::MakeCard(obs_data_t *item)
 
 void SpazzSponsorCenter::LoadCards()
 {
+	if (!preview) {
+		return;
+	}
 	for (SponsorCard *c : cards) {
 		c->deleteLater();
 	}
@@ -734,6 +1109,9 @@ void SpazzSponsorCenter::LoadCards()
 
 void SpazzSponsorCenter::SyncCardsFromSettings()
 {
+	if (!preview) {
+		return;
+	}
 	OBSDataAutoRelease settings = obs_source_get_settings(preview);
 	OBSDataArrayAutoRelease items = obs_data_get_array(settings, "items");
 	if (obs_data_array_count(items) != cards.size()) {
@@ -767,6 +1145,9 @@ void SpazzSponsorCenter::Relayout()
 /* every edit goes straight into the preview's settings */
 void SpazzSponsorCenter::WriteItems()
 {
+	if (!preview) {
+		return;
+	}
 	OBSDataAutoRelease settings = obs_source_get_settings(preview);
 	OBSDataArrayAutoRelease items = obs_data_array_create();
 	for (SponsorCard *c : cards) {
@@ -790,6 +1171,9 @@ void SpazzSponsorCenter::WriteItems()
 
 void SpazzSponsorCenter::Push()
 {
+	if (!preview) {
+		return;
+	}
 	pushTimer->stop();
 	obs_source_update(preview, nullptr);
 }
@@ -972,6 +1356,9 @@ void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
 
 void SpazzSponsorCenter::Save()
 {
+	if (!preview) {
+		return;
+	}
 	OBSDataAutoRelease settings = obs_data_create();
 	OBSDataAutoRelease mine = obs_source_get_settings(preview);
 	obs_data_apply(settings, mine);

@@ -115,6 +115,7 @@ private:
 	QList<quint64> shuffleHistory;
 	QString loadedPath; /* the file the source has open */
 	int durationRetries = 0;
+	uint64_t startedNs = 0; /* when the current song was asked for */
 
 	bool shuffle = false;
 	Repeat repeat = Repeat::All;

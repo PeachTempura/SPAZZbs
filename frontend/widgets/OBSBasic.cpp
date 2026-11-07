@@ -37,6 +37,7 @@
 #include <dialogs/SpazzStingerStudio.hpp>
 #include <dialogs/SpazzSponsorCenter.hpp>
 #include <utility/SpazzMultistream.hpp>
+#include <utility/SpazzSponsorSwitch.hpp>
 #include <dialogs/NameDialog.hpp>
 #include <dialogs/OBSAbout.hpp>
 #include <dialogs/OBSBasicAdvAudio.hpp>
@@ -194,8 +195,12 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 
 	/* SPAZZbs: "Also go live on: Kick X Rumble" right under Start Streaming */
 	spazzMulti = new SpazzMultistream(this);
-	if (QVBoxLayout *buttons = controls->findChild<QVBoxLayout *>("buttonsVLayout"))
+	/* and the Sponsors switch for SPONSORCENTER spots */
+	spazzSponsors = new SpazzSponsorSwitch(this);
+	if (QVBoxLayout *buttons = controls->findChild<QVBoxLayout *>("buttonsVLayout")) {
 		buttons->insertWidget(1, spazzMulti->MakeToggles(controls));
+		buttons->insertWidget(2, spazzSponsors->MakeToggle(controls));
+	}
 
 	connect(controls, &OBSBasicControls::StreamButtonClicked, this, &OBSBasic::StreamActionTriggered);
 
@@ -1142,6 +1147,18 @@ void OBSBasic::OBSInit()
 	spazzMusic = new SpazzMusicPlayer(this);
 	spazzMusicDock = new SpazzMusicDock(spazzMusic, this);
 	AddDockWidget(spazzMusicDock, Qt::BottomDockWidgetArea);
+
+	/* SPONSORCENTER, as its own tab next to Main / Misc / Music */
+	spazzSponsorDock = SpazzSponsorCenter::CreateDock(this);
+	AddDockWidget(spazzSponsorDock, Qt::BottomDockWidgetArea);
+	SpazzSponsorCenter::showDock = [this](QDockWidget *dock) {
+		if (spazzTabs) {
+			spazzTabs->ShowDock(dock);
+		} else {
+			dock->show();
+			dock->raise();
+		}
+	};
 
 	const char *dockStateStr = config_get_string(App()->GetUserConfig(), "BasicWindow", "DockState");
 

@@ -13,12 +13,16 @@
 
 #include <obs.hpp>
 
-#include <QDialog>
+#include <QWidget>
 #include <QPointer>
 
+#include <functional>
 #include <vector>
 
+class OBSDock;
 class OBSPropertiesView;
+class QDockWidget;
+class QTabWidget;
 class OBSQTDisplay;
 class QComboBox;
 class QLabel;
@@ -29,22 +33,30 @@ class QTimer;
 class QVBoxLayout;
 class SponsorCard;
 
-class SpazzSponsorCenter : public QDialog {
+class SpazzSponsorCenter : public QWidget {
 	Q_OBJECT
 
 public:
+	/* SPONSORCENTER lives in a dock (its own tab in the bottom area) */
+	static OBSDock *CreateDock(QWidget *mainWindow);
+	static std::function<void(QDockWidget *)> showDock;
 	static void Open(QWidget *parent, const QString &uuid = QString());
 	/* lets a spot's own Properties window open it here */
 	static void RegisterOpenProc(QWidget *mainWindow);
 	~SpazzSponsorCenter();
 
 protected:
-	void closeEvent(QCloseEvent *e) override;
+	void showEvent(QShowEvent *e) override;
+	void hideEvent(QHideEvent *e) override;
 
 private:
 	explicit SpazzSponsorCenter(QWidget *parent);
 
 	OBSSourceAutoRelease preview;
+	bool previewShowing = false;
+	QString pendingUuid;
+	QTabWidget *lookTabs = nullptr;
+	void Start();
 	OBSPropertiesView *view = nullptr;
 	OBSQTDisplay *display = nullptr;
 
@@ -86,4 +98,5 @@ private:
 	static void Draw(void *data, uint32_t cx, uint32_t cy);
 
 	static QPointer<SpazzSponsorCenter> instance;
+	static QPointer<OBSDock> dock;
 };
