@@ -2,6 +2,7 @@
  * D3DCompile, so the Windows job can check it with fxc before building. */
 /* Parse an OBS .effect with OBS's real parser and dump the HLSL each pass
  * would hand to D3DCompile (after the d3d11 token replacements). */
+#include <ctype.h>
 #include "graphics/effect-parser.c"
 #include <stdio.h>
 
