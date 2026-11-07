@@ -1917,6 +1917,8 @@ static void FillVizMenu(QMenu *menu, obs_source_t *src)
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Colors")), src, "palette", VizChoices("palette"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Mirror")), src, "mirror", VizChoices("mirror"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Background")), src, "background", VizChoices("background"));
+	/* the SPAZZamp player styles' own screen */
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.PlayerViz")), src, "player_viz", VizChoices("player_viz"));
 	menu->addSeparator();
 	menu->addAction(QTStr("SPAZZ.Music.Vis.Settings"), menu,
 			withSource([](obs_source_t *s) { obs_frontend_open_source_properties(s); }));
@@ -1950,8 +1952,9 @@ void SpazzMusicDock::VisualizerMenu(const QPoint &at)
 		menu.addSeparator();
 	}
 
-	/* a new one, full canvas, in the scene on screen */
-	menu.addAction(QTStr("SPAZZ.Music.Vis.Add"), this, []() {
+	/* a new one in the scene on screen: full canvas, or the SPAZZamp
+	 * player as a strip along the bottom */
+	auto add = [](bool player) {
 		OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
 		obs_scene_t *scene = obs_scene_from_source(sceneSource);
 		if (!scene) {
@@ -1959,11 +1962,20 @@ void SpazzMusicDock::VisualizerMenu(const QPoint &at)
 		}
 		OBSDataAutoRelease settings = obs_data_create();
 		struct obs_video_info ovi;
-		if (obs_get_video_info(&ovi)) {
-			obs_data_set_int(settings, "width", ovi.base_width);
-			obs_data_set_int(settings, "height", ovi.base_height);
+		const bool haveVideo = obs_get_video_info(&ovi);
+		const uint32_t cw = haveVideo ? ovi.base_width : 1920;
+		const uint32_t ch = haveVideo ? ovi.base_height : 1080;
+		uint32_t w = cw, h = ch;
+		if (player) {
+			/* the player window is about 2.4 times as wide as tall */
+			w = std::min<uint32_t>(1100, cw * 3 / 5);
+			h = w * 470 / 1100;
+			obs_data_set_string(settings, "style", "PlayerSpazz");
 		}
-		const QString base = QT_UTF8(obs_source_get_display_name(kVizId));
+		obs_data_set_int(settings, "width", w);
+		obs_data_set_int(settings, "height", h);
+		const QString base = player ? QTStr("SPAZZ.Music.Vis.PlayerName")
+					    : QT_UTF8(obs_source_get_display_name(kVizId));
 		QString name = base;
 		for (int i = 2;; i++) {
 			OBSSourceAutoRelease taken = obs_get_source_by_name(QT_TO_UTF8(name));
@@ -1974,9 +1986,16 @@ void SpazzMusicDock::VisualizerMenu(const QPoint &at)
 		}
 		OBSSourceAutoRelease created = obs_source_create(kVizId, QT_TO_UTF8(name), settings, nullptr);
 		if (created) {
-			obs_scene_add(scene, created);
+			obs_sceneitem_t *item = obs_scene_add(scene, created);
+			if (player && item) {
+				struct vec2 pos;
+				vec2_set(&pos, float(cw - w) * 0.5f, float(ch > h + 16 ? ch - h - 16 : 0));
+				obs_sceneitem_set_pos(item, &pos);
+			}
 			obs_frontend_open_source_properties(created);
 		}
-	});
+	};
+	menu.addAction(QTStr("SPAZZ.Music.Vis.Add"), this, [add]() { add(false); });
+	menu.addAction(QTStr("SPAZZ.Music.Vis.AddPlayer"), this, [add]() { add(true); });
 	menu.exec(at);
 }

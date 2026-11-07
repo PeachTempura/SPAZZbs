@@ -43,13 +43,13 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define SILENCE_NS 250000000ULL
 
 static const char *style_techniques[] = {
-	"PrismRain",     "PrismHalo",    "PrismPetals", "PrismAurora", "PrismTunnel",   "PrismWaves",  "PrismKaleido",
-	"SpectrumGlass", "CandyBars",    "Bubbles",     "Confetti",    "BounceBuddies", "DiscoFloor",  "LavaLamp",
-	"GroovySwirl",   "StarWarp",     "Fireflies",   "Fireworks",   "Galaxy",        "Synthwave",   "RainbowRipples",
-	"NeonHeartbeat", "FlowerGarden", "DiscoBall",   "PixelEQ",     "DNAHelix",      "PlasmaGlobe", "OceanSunset",
+	"PrismRain", "PrismHalo", "PrismPetals", "PrismAurora", "PrismTunnel", "PrismWaves", "PrismKaleido",
+	"SpectrumGlass", "CandyBars", "Bubbles", "Confetti", "BounceBuddies", "DiscoFloor", "LavaLamp", "GroovySwirl",
+	"StarWarp", "Fireflies", "Fireworks", "Galaxy", "Synthwave", "RainbowRipples", "NeonHeartbeat", "FlowerGarden",
+	"DiscoBall", "PixelEQ", "DNAHelix", "PlasmaGlobe", "OceanSunset",
 	/* the SPAZZamp player on stream, in a few skins (keep these together,
 	 * in this order: the skin number is the offset from PlayerSpazz) */
-	"PlayerSpazz",   "PlayerClassic", "PlayerNeon", "PlayerSynthwave", "PlayerCRT", "PlayerGlitch",
+	"PlayerSpazz", "PlayerClassic", "PlayerNeon", "PlayerSynthwave", "PlayerCRT", "PlayerGlitch",
 	/* retro screens */
 	"NeonScope", "CRTSpectrum", "GlitchBars", "VHSTape"};
 #define NUM_STYLES (sizeof(style_techniques) / sizeof(style_techniques[0]))
@@ -57,7 +57,7 @@ static const char *style_techniques[] = {
 
 /* the player's text: a font atlas (95 glyphs, 6 pixels apart, 8 tall) and
  * a little texture of character codes, one string per row */
-#define FONT_TEX_W (95 * 6)
+#define FONT_TEX_W (96 * 6) /* 95 glyphs; 576 keeps rows 4-byte aligned for OpenGL */
 #define FONT_TEX_H 8
 #define TEXT_TEX_W 256
 #define TEXT_TEX_H 4
@@ -875,14 +875,21 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 			const char *name;
 		} params[] = {
 #define P(field, name) {offsetof(struct spazz_viz, field), name}
-			P(p_bands, "bands"),   P(p_res, "res"),       P(p_time, "time"),       P(p_flow, "flow"),
-			P(p_bass, "bass"),     P(p_mid, "mid"),       P(p_treble, "treble"),   P(p_level, "level"),
-			P(p_beat, "beat"),     P(p_hue, "hue"),       P(p_density, "density"), P(p_bg, "bg"),
-			P(p_pal_a, "pal_a"),   P(p_pal_b, "pal_b"),   P(p_pal_c, "pal_c"),     P(p_pal_mix, "pal_mix"),
-			P(p_grade, "grade"),   P(p_bg_col, "bg_col"), P(p_bg_flat, "bg_flat"), P(p_view, "view"),
-			P(p_flip_x, "flip_x"),     P(p_font_tex, "font_tex"),   P(p_text_tex, "text_tex"),
-			P(p_pl_state, "pl_state"), P(p_pl_digits, "pl_digits"), P(p_pl_info, "pl_info"),
-			P(p_pl_look, "pl_look"),   P(p_pl_accent, "pl_accent"), P(p_pl_show, "pl_show"),
+			P(p_bands, "bands"),         P(p_res, "res"),
+			P(p_time, "time"),           P(p_flow, "flow"),
+			P(p_bass, "bass"),           P(p_mid, "mid"),
+			P(p_treble, "treble"),       P(p_level, "level"),
+			P(p_beat, "beat"),           P(p_hue, "hue"),
+			P(p_density, "density"),     P(p_bg, "bg"),
+			P(p_pal_a, "pal_a"),         P(p_pal_b, "pal_b"),
+			P(p_pal_c, "pal_c"),         P(p_pal_mix, "pal_mix"),
+			P(p_grade, "grade"),         P(p_bg_col, "bg_col"),
+			P(p_bg_flat, "bg_flat"),     P(p_view, "view"),
+			P(p_flip_x, "flip_x"),       P(p_font_tex, "font_tex"),
+			P(p_text_tex, "text_tex"),   P(p_pl_state, "pl_state"),
+			P(p_pl_digits, "pl_digits"), P(p_pl_info, "pl_info"),
+			P(p_pl_look, "pl_look"),     P(p_pl_accent, "pl_accent"),
+			P(p_pl_show, "pl_show"),
 #undef P
 		};
 		for (size_t i = 0; i < sizeof(params) / sizeof(params[0]); i++) {
@@ -1075,9 +1082,15 @@ static void player_poll(struct spazz_viz *v)
 	calldata_free(&cd);
 }
 
+/* styles that show what's playing: the player skins, and VHS Tape's clock */
+static bool uses_music_info(int style)
+{
+	return player_skin(style) >= 0 || (style >= 0 && strcmp(style_techniques[style], "VHSTape") == 0);
+}
+
 static void player_tick(struct spazz_viz *v, float seconds)
 {
-	const bool wanted = player_skin(v->shown) >= 0 || (v->fade < 1.0f && player_skin(v->prev_shown) >= 0);
+	const bool wanted = uses_music_info(v->shown) || (v->fade < 1.0f && uses_music_info(v->prev_shown));
 	if (!wanted) {
 		return;
 	}
@@ -1292,7 +1305,11 @@ static void viz_render(void *data, gs_effect_t *unused)
 	const bool going = playing || paused;
 	const float progress = going && v->now_dur_ms > 0.0 ? (float)(v->now_pos_ms / v->now_dur_ms) : 0.0f;
 	struct vec4 pstate;
-	vec4_set(&pstate, fminf(fmaxf(progress, 0.0f), 1.0f), playing ? 1.0f : paused ? 2.0f : v->now_title ? 3.0f : 0.0f,
+	vec4_set(&pstate, fminf(fmaxf(progress, 0.0f), 1.0f),
+		 playing        ? 1.0f
+		 : paused       ? 2.0f
+		 : v->now_title ? 3.0f
+				: 0.0f,
 		 v->marquee_pos, v->marquee_len > MARQUEE_CELLS ? (float)v->marquee_len : 0.0f);
 	gs_effect_set_vec4(v->p_pl_state, &pstate);
 	const bool minus = v->player_remaining && going && v->now_dur_ms > 0.0;
@@ -1312,8 +1329,7 @@ static void viz_render(void *data, gs_effect_t *unused)
 	vec4_set(&show, v->show_title ? 1.0f : 0.0f, v->show_seek ? 1.0f : 0.0f, v->show_buttons ? 1.0f : 0.0f,
 		 v->stereo ? 1.0f : 0.0f);
 	gs_effect_set_vec4(v->p_pl_show, &show);
-	/* draw_style sets pl_look and pl_accent per style; these are the
-	 * defaults if it ever didn't */
+	/* pl_look and pl_accent depend on the skin: draw_style sets them */
 
 	/* crossfading: the old style fades out under the new one */
 	if (v->fade < 1.0f && v->prev_shown != v->shown) {

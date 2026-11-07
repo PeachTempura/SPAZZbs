@@ -42,7 +42,7 @@ uniform float4 view;     /* x zoom, y mirror left-right, z mirror top-bottom, w 
 uniform float flip_x;
 
 /* the SPAZZamp player styles */
-uniform texture2d font_tex;  /* pixel font: 95 glyphs, 6 pixels apart, 8 tall (570x8) */
+uniform texture2d font_tex;  /* pixel font: 95 glyphs, 6 pixels apart, 8 tall (576x8) */
 uniform texture2d text_tex;  /* 256x4 character codes: 0 marquee, 1 kbps, 2 kHz, 3 labels */
 uniform float4 pl_state;     /* x progress 0..1, y 0 idle 1 playing 2 paused 3 stopped, z marquee scroll (chars), w marquee loop length (0 = still) */
 uniform float4 pl_digits;    /* the clock, m m s s */
@@ -1920,7 +1920,7 @@ float pl_char(float row, float idx)
 
 float pl_glyph(float code, float2 g)
 {
-	float2 t = float2((code * 6.0 + floor(g.x) + 0.5) / 570.0, (floor(g.y) + 0.5) / 8.0);
+	float2 t = float2((code * 6.0 + floor(g.x) + 0.5) / 576.0, (floor(g.y) + 0.5) / 8.0);
 	return font_tex.SampleLevel(font_sampler, t, 0.0).r;
 }
 
