@@ -1,0 +1,482 @@
+// SPAZZ Movement: one pass that moves, bends and restyles a source.
+//
+// The filter's output is the source plus some "room to move" on every side.
+// For each output pixel the C side gives an affine map back into the source
+// (xf / xo: the motion and the enter / exit animation), then this shader
+//   1. bends that position   (Distort: waves, glitch, CRT, VHS, pixels ...)
+//   2. reads the source      (with an optional RGB split)
+//   3. restyles the colour   (Look: neon glow, hologram, synthwave ...)
+// The source texture is premultiplied, and so is what we write.
+
+#ifdef _D3D11
+#define BRANCH [branch]
+#else
+#define BRANCH
+#endif
+
+uniform float4x4 ViewProj;
+uniform texture2d image;
+
+uniform float2 out_size;   // output, pixels
+uniform float2 src_size;   // source, pixels
+uniform float4 xf;         // output px -> source px: 2x2 (row0.xy, row1.zw)
+uniform float2 xo;         // ... plus this offset
+uniform float time;        // seconds, already scaled by speed
+uniform float opacity;
+uniform float4 dist;       // mode, amount, size, time for distort
+uniform float4 look;       // mode, amount, glow size (px), hue angle (rgb cycle)
+uniform float3 col_a;
+uniform float3 col_b;
+uniform float4 fx;         // enter / exit: glitch, white flash, pixel block (px), wipe (1 = whole)
+uniform float4 fx2;        // vhs, seed, unused, unused
+
+sampler_state clamp_sampler {
+	Filter   = Linear;
+	AddressU = Clamp;
+	AddressV = Clamp;
+};
+
+struct VertData {
+	float4 pos : POSITION;
+	float2 uv  : TEXCOORD0;
+};
+
+VertData VSDefault(VertData v_in)
+{
+	VertData vert_out;
+	vert_out.pos = mul(float4(v_in.pos.xyz, 1.0), ViewProj);
+	vert_out.uv  = v_in.uv;
+	return vert_out;
+}
+
+/* ------------------------------------------------------------------ */
+/* helpers                                                             */
+
+float glmod(float x, float y)
+{
+	return x - y * floor(x / y);
+}
+
+float hash11(float p)
+{
+	p = frac(p * 0.1031);
+	p *= p + 33.33;
+	p *= p + p;
+	return frac(p);
+}
+
+float hash21(float2 p)
+{
+	float3 p3 = frac(float3(p.x, p.y, p.x) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac((p3.x + p3.y) * p3.z);
+}
+
+float vnoise(float2 p)
+{
+	float2 i = floor(p);
+	float2 f = frac(p);
+	float2 u = f * f * (3.0 - 2.0 * f);
+	float n00 = hash21(i);
+	float n10 = hash21(i + float2(1.0, 0.0));
+	float n01 = hash21(i + float2(0.0, 1.0));
+	float n11 = hash21(i + float2(1.0, 1.0));
+	return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
+}
+
+bool is_mode(float m, float k)
+{
+	return abs(m - k) < 0.5;
+}
+
+float luma(float3 c)
+{
+	return dot(c, float3(0.299, 0.587, 0.114));
+}
+
+float3 hue_rot(float3 c, float a)
+{
+	float cs = cos(a);
+	float sn = sin(a);
+	float3 k = float3(0.57735, 0.57735, 0.57735);
+	return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+}
+
+float3 hue_color(float h)
+{
+	float3 k = abs(frac(float3(h, h, h) + float3(0.0, 0.6667, 0.3333)) * 6.0 - 3.0);
+	return saturate(k - 1.0);
+}
+
+/* the source at uv, transparent outside, soft (anti-aliased) at its edges */
+float4 tap(float2 suv)
+{
+	float2 e = min(suv, 1.0 - suv) * src_size + 0.5;
+	float inside = saturate(e.x) * saturate(e.y);
+	/* no mip maps, and SampleLevel is allowed inside real (D3D) branches */
+	return image.SampleLevel(clamp_sampler, suv, 0.0) * inside;
+}
+
+/* alpha of the source around uv, for glows / outlines / shadows */
+float ring_alpha(float2 suv, float radius_px)
+{
+	float2 r = radius_px / src_size;
+	float acc = 0.0;
+	acc += tap(suv + r * float2(1.0, 0.0)).a;
+	acc += tap(suv + r * float2(-1.0, 0.0)).a;
+	acc += tap(suv + r * float2(0.0, 1.0)).a;
+	acc += tap(suv + r * float2(0.0, -1.0)).a;
+	acc += tap(suv + r * float2(0.7071, 0.7071)).a;
+	acc += tap(suv + r * float2(-0.7071, 0.7071)).a;
+	acc += tap(suv + r * float2(0.7071, -0.7071)).a;
+	acc += tap(suv + r * float2(-0.7071, -0.7071)).a;
+	acc += tap(suv + r * float2(0.5, 0.0)).a;
+	acc += tap(suv + r * float2(-0.5, 0.0)).a;
+	acc += tap(suv + r * float2(0.0, 0.5)).a;
+	acc += tap(suv + r * float2(0.0, -0.5)).a;
+	return acc / 12.0;
+}
+
+float ring_max(float2 suv, float radius_px)
+{
+	float2 r = radius_px / src_size;
+	float m = 0.0;
+	m = max(m, tap(suv + r * float2(1.0, 0.0)).a);
+	m = max(m, tap(suv + r * float2(-1.0, 0.0)).a);
+	m = max(m, tap(suv + r * float2(0.0, 1.0)).a);
+	m = max(m, tap(suv + r * float2(0.0, -1.0)).a);
+	m = max(m, tap(suv + r * float2(0.7071, 0.7071)).a);
+	m = max(m, tap(suv + r * float2(-0.7071, 0.7071)).a);
+	m = max(m, tap(suv + r * float2(0.7071, -0.7071)).a);
+	m = max(m, tap(suv + r * float2(-0.7071, -0.7071)).a);
+	m = max(m, tap(suv + r * float2(0.9239, 0.3827)).a);
+	m = max(m, tap(suv + r * float2(-0.9239, 0.3827)).a);
+	m = max(m, tap(suv + r * float2(0.9239, -0.3827)).a);
+	m = max(m, tap(suv + r * float2(-0.9239, -0.3827)).a);
+	m = max(m, tap(suv + r * float2(0.3827, 0.9239)).a);
+	m = max(m, tap(suv + r * float2(-0.3827, 0.9239)).a);
+	m = max(m, tap(suv + r * float2(0.3827, -0.9239)).a);
+	m = max(m, tap(suv + r * float2(-0.3827, -0.9239)).a);
+	return m;
+}
+
+/* lay a colour (straight alpha) under / around a premultiplied pixel */
+float4 under(float4 c, float3 col, float a)
+{
+	float k = a * (1.0 - c.a);
+	return float4(c.rgb + col * k, c.a + k);
+}
+
+/* ------------------------------------------------------------------ */
+/* the pass                                                            */
+
+float4 PSMotion(VertData v_in) : TARGET
+{
+	float2 opx = v_in.uv * out_size;
+	float2 spx = float2(dot(xf.xy, opx), dot(xf.zw, opx)) + xo;
+	float2 suv = spx / src_size;
+	float2 src_uv = suv; /* undistorted, for looks that follow the frame */
+
+	float dm = dist.x;
+	float da = dist.y;
+	float dsz = max(dist.z, 0.05);
+	float dt = dist.w;
+	float2 split = float2(0.0, 0.0);
+	float3 add_rgb = float3(0.0, 0.0, 0.0);
+	float dim = 1.0;
+
+	/* ---------- 1. distort ---------- */
+	BRANCH
+	if (dm > 0.5) {
+		if (is_mode(dm, 1.0)) {
+			/* undulate: soft waves across the whole picture (lily pad) */
+			float w1 = sin(suv.y * 6.2832 * 1.3 / dsz + dt * 1.7);
+			float w2 = sin(suv.x * 6.2832 * 1.1 / dsz - dt * 1.3);
+			suv += float2(w1, w2) * 0.012 * da;
+		} else if (is_mode(dm, 2.0)) {
+			/* flag wave: travels left to right, stronger away from the pole */
+			float ph = suv.x * 6.2832 * 1.6 / dsz - dt * 3.0;
+			suv.y += sin(ph) * 0.025 * da * (0.25 + suv.x);
+			dim = 1.0 - 0.12 * da * cos(ph);
+		} else if (is_mode(dm, 3.0)) {
+			/* ripple: rings out from the middle */
+			float2 d = suv - 0.5;
+			float r = length(d * src_size) / max(src_size.x, src_size.y);
+			float w = sin(r * 60.0 / dsz - dt * 5.0) * exp(-r * 2.5);
+			suv += normalize(d + 0.0001) * w * 0.012 * da;
+		} else if (is_mode(dm, 4.0)) {
+			/* wobble warp: slow liquid noise */
+			float2 q = suv * 3.0 / dsz;
+			float2 n = float2(vnoise(q + dt * 0.4), vnoise(q + 7.3 - dt * 0.35)) - 0.5;
+			suv += n * 0.05 * da;
+		} else if (is_mode(dm, 5.0)) {
+			/* heat haze: rising shimmer */
+			float n = vnoise(float2(suv.x * 18.0 / dsz, suv.y * 9.0 / dsz + dt * 2.5)) - 0.5;
+			suv.x += n * 0.012 * da;
+			suv.y += (vnoise(float2(suv.x * 11.0, dt * 1.7)) - 0.5) * 0.006 * da;
+		} else if (is_mode(dm, 6.0)) {
+			/* glitch: bursts of torn slices and RGB split */
+			float tick = floor(dt * 12.0);
+			float burst = step(0.62, hash11(floor(dt * 3.0) + 1.7));
+			float rows = floor(suv.y * (14.0 + 26.0 * hash11(tick)) / dsz);
+			float tear = (hash21(float2(rows, tick)) - 0.5) * step(0.72, hash21(float2(rows * 1.3, tick + 4.0)));
+			suv.x += tear * 0.12 * da * (0.3 + burst);
+			split.x = (0.004 + 0.012 * burst) * da;
+			dim = 1.0 - 0.25 * step(0.97, hash21(float2(rows, tick * 1.7))) * da;
+		} else if (is_mode(dm, 7.0)) {
+			/* datamosh: blocks that slide and smear */
+			float tick = floor(dt * 8.0);
+			float2 cells = float2(16.0, 9.0) / dsz;
+			float2 cell = floor(suv * cells);
+			float h = hash21(cell + tick * 0.37);
+			float on = step(1.0 - 0.28 * da, h);
+			float2 off = (float2(hash21(cell + 3.1 + tick), hash21(cell + 9.4 + tick)) - 0.5) / cells;
+			suv += off * on * 1.6;
+			split.x = 0.006 * da * on;
+			add_rgb = float3(0.15, -0.05, 0.2) * on * da;
+		} else if (is_mode(dm, 8.0)) {
+			/* VHS: line jitter, a tracking band rolling down, chroma bleed */
+			float line_n = floor(suv.y * src_size.y / 2.0);
+			suv.x += (hash21(float2(line_n, floor(dt * 30.0))) - 0.5) * 0.004 * da;
+			float band_y = frac(dt * 0.15);
+			float bd = abs(suv.y - band_y);
+			float band = saturate(1.0 - bd * 14.0);
+			suv.x += band * band * 0.04 * da * sin(suv.y * 400.0 + dt * 40.0);
+			split.x = 0.005 * da;
+			add_rgb = float3(1.0, 1.0, 1.0) * band * 0.18 * da;
+		} else if (is_mode(dm, 9.0)) {
+			/* CRT: curved glass, scanlines, phosphor mask, dark corners */
+			float2 cc = suv * 2.0 - 1.0;
+			float k = 0.12 * da;
+			cc *= 1.0 + k * dot(cc, cc) * 0.5;
+			suv = cc * 0.5 + 0.5;
+			float sl = 0.5 + 0.5 * cos(suv.y * src_size.y * 3.14159 / max(1.0, 2.0 * dsz));
+			float mask = 0.85 + 0.15 * sin(opx.x * 2.0944);
+			float vig = saturate(1.0 - dot(cc, cc) * 0.18 * da);
+			dim = lerp(1.0, (0.7 + 0.3 * sl) * mask * vig * 1.22, saturate(da));
+			split.x = 0.0015 * da;
+		} else if (is_mode(dm, 10.0)) {
+			/* pixelate: chunky 8-bit blocks */
+			float blk = max(2.0, 6.0 * dsz * max(da, 0.2));
+			suv = (floor(suv * src_size / blk) + 0.5) * blk / src_size;
+		} else if (is_mode(dm, 11.0)) {
+			/* chromatic aberration: colours pull apart toward the edges */
+			float2 d = suv - 0.5;
+			split = d * 0.03 * da * (0.8 + 0.2 * sin(dt * 2.0));
+		} else if (is_mode(dm, 12.0)) {
+			/* swirl: a slow twist around the middle */
+			float2 d = (suv - 0.5) * src_size;
+			float r = length(d) / max(src_size.x, src_size.y);
+			float a = sin(dt * 0.8) * 1.1 * da * saturate(1.0 - r * 1.6 / dsz);
+			float cs = cos(a);
+			float sn = sin(a);
+			d = float2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
+			suv = d / src_size + 0.5;
+		} else if (is_mode(dm, 13.0)) {
+			/* bulge: a lens that breathes */
+			float2 d = suv - 0.5;
+			float r = length(d);
+			float pw = 1.0 - 0.35 * da * (0.6 + 0.4 * sin(dt * 2.0)) * saturate(1.0 - r * 2.0);
+			suv = 0.5 + d * pw;
+		}
+	}
+
+	/* ---------- enter / exit effects ---------- */
+	BRANCH
+	if (fx.x > 0.001) {
+		/* glitch in / out */
+		float tick = floor(time * 20.0 + fx2.y * 13.0);
+		float rows = floor(suv.y * 22.0);
+		float tear = (hash21(float2(rows, tick)) - 0.5) * step(0.5, hash21(float2(rows * 1.7, tick + 2.0)));
+		suv.x += tear * 0.25 * fx.x;
+		split.x += 0.02 * fx.x;
+		dim *= 1.0 - 0.6 * fx.x * step(0.7, hash21(float2(rows + 3.0, tick)));
+	}
+	BRANCH
+	if (fx2.x > 0.001) {
+		/* VHS in / out */
+		float line_n = floor(suv.y * 90.0);
+		suv.x += (hash21(float2(line_n, floor(time * 30.0))) - 0.5) * 0.08 * fx2.x;
+		suv.y = frac(suv.y + fx2.x * fx2.x * 0.6);
+		split.x += 0.012 * fx2.x;
+		add_rgb += float3(0.4, 0.4, 0.4) * fx2.x * hash21(float2(line_n, time));
+	}
+	BRANCH
+	if (fx.z > 1.0) {
+		/* pixel in / out */
+		suv = (floor(suv * src_size / fx.z) + 0.5) * fx.z / src_size;
+	}
+
+	/* ---------- 2. read the source ---------- */
+	float4 c = tap(suv);
+	BRANCH
+	if (abs(split.x) + abs(split.y) > 0.00001) {
+		float4 cr = tap(suv + split);
+		float4 cb = tap(suv - split);
+		c = float4(cr.r, c.g, cb.b, max(c.a, max(cr.a, cb.a)));
+	}
+
+	/* wipe in / out: reveal left to right */
+	float wipe = saturate((fx.w * 1.05 - src_uv.x) * 40.0 + 0.5);
+	c *= lerp(wipe, 1.0, step(0.9999, fx.w));
+
+	float3 rgb = c.rgb / max(c.a, 0.0001);
+	rgb = rgb * dim + add_rgb;
+
+	/* ---------- 3. look ---------- */
+	float lm = look.x;
+	float la = look.y;
+	float gpx = max(look.z, 0.5);
+	float4 res = float4(saturate(rgb) * c.a, c.a);
+
+	BRANCH
+	if (lm > 0.5) {
+		float y = luma(saturate(rgb));
+		if (is_mode(lm, 1.0) || is_mode(lm, 2.0)) {
+			/* neon glow (2: with a neon-sign flicker) */
+			float fl = 1.0;
+			if (is_mode(lm, 2.0)) {
+				float h = hash11(floor(time * 9.0));
+				fl = 1.0 - step(0.9, h) * 0.75 - step(0.97, hash11(floor(time * 23.0) + 4.0)) * 0.2;
+				res.rgb *= lerp(1.0, fl, 0.6);
+			}
+			float g1 = ring_alpha(src_uv, gpx);
+			float g2 = ring_alpha(src_uv, gpx * 0.45);
+			float glow = saturate((g1 * 0.6 + g2 * 0.9) * (0.8 + 0.6 * la)) * fl;
+			float edge = saturate(g2 - c.a) * 1.4;
+			res = under(res, lerp(col_a, float3(1.0, 1.0, 1.0), edge * 0.35), glow);
+			res.rgb += col_a * edge * c.a * 0.25 * la;
+		} else if (is_mode(lm, 3.0)) {
+			/* solid outline */
+			float o = ring_max(src_uv, gpx);
+			res = under(res, col_a, saturate(o * 1.5) * saturate(la * 1.5));
+		} else if (is_mode(lm, 4.0)) {
+			/* rainbow outline that runs around the edge */
+			float o = ring_max(src_uv, gpx);
+			float2 d = src_uv - 0.5;
+			float ang = atan2(d.y, d.x) / 6.2832 + time * 0.25;
+			res = under(res, hue_color(ang), saturate(o * 1.5) * saturate(la * 1.5));
+		} else if (is_mode(lm, 5.0)) {
+			/* drop shadow, down and to the right */
+			float2 off = float2(gpx, gpx) * 0.6 / src_size;
+			float s = ring_alpha(src_uv - off, gpx * 0.5);
+			res = under(res, col_a, s * 0.75 * saturate(la));
+		} else if (is_mode(lm, 6.0)) {
+			/* soft glow / bloom: the picture glows in its own colours */
+			float2 r = gpx / src_size;
+			float4 b = tap(src_uv + r * float2(1.0, 0.0)) + tap(src_uv - r * float2(1.0, 0.0)) +
+				   tap(src_uv + r * float2(0.0, 1.0)) + tap(src_uv - r * float2(0.0, 1.0)) +
+				   tap(src_uv + r * float2(0.7, 0.7)) + tap(src_uv - r * float2(0.7, 0.7)) +
+				   tap(src_uv + r * float2(0.7, -0.7)) + tap(src_uv - r * float2(0.7, -0.7));
+			b *= 0.125;
+			float3 bc = b.rgb / max(b.a, 0.0001);
+			float bright = smoothstep(0.55, 1.0, luma(bc));
+			res.rgb += bc * b.a * bright * 0.3 * la * c.a;
+			res = under(res, bc, b.a * 0.4 * la);
+		} else if (is_mode(lm, 7.0)) {
+			/* RGB cycle: the picture's colours roll through the rainbow */
+			float3 h = hue_rot(saturate(rgb), look.w);
+			res.rgb = lerp(saturate(rgb), saturate(h), saturate(la)) * c.a;
+		} else if (is_mode(lm, 8.0)) {
+			/* duotone: shadows in colour B, highlights in colour A */
+			float3 d2 = lerp(col_b, col_a, smoothstep(0.05, 0.95, y));
+			res.rgb = lerp(saturate(rgb), d2, saturate(la)) * c.a;
+		} else if (is_mode(lm, 9.0)) {
+			/* synthwave: purple / hot pink / orange gradient map + soft lines */
+			float3 g = lerp(float3(0.12, 0.02, 0.28), float3(0.95, 0.15, 0.6), smoothstep(0.0, 0.55, y));
+			g = lerp(g, float3(1.0, 0.65, 0.2), smoothstep(0.55, 0.9, y));
+			g = lerp(g, float3(1.0, 0.95, 0.75), smoothstep(0.9, 1.0, y));
+			g *= 0.88 + 0.12 * sin(opx.y * 1.5708);
+			res.rgb = lerp(saturate(rgb), g, saturate(la)) * c.a;
+			float glow = ring_alpha(src_uv, gpx);
+			res = under(res, float3(1.0, 0.2, 0.7), glow * 0.6 * la);
+		} else if (is_mode(lm, 10.0)) {
+			/* 80s chrome: sky above the horizon, sunset below, shiny */
+			float hz = src_uv.y + (y - 0.5) * 0.25;
+			float3 top = lerp(float3(0.15, 0.25, 0.6), float3(0.85, 0.95, 1.0), smoothstep(0.1, 0.5, hz));
+			float3 bot = lerp(float3(0.35, 0.12, 0.05), float3(1.0, 0.7, 0.35), smoothstep(0.5, 0.95, hz));
+			float3 g = lerp(top, bot, step(0.5, hz));
+			g += pow(saturate(y), 6.0) * 0.6;
+			res.rgb = lerp(saturate(rgb), saturate(g), saturate(la)) * c.a;
+		} else if (is_mode(lm, 11.0)) {
+			/* hologram: tinted, see-through, scan lines, flicker, edge glow */
+			float scan = 0.65 + 0.35 * sin(opx.y * 1.2 - time * 6.0);
+			float band = smoothstep(0.0, 0.05, abs(frac(src_uv.y * 0.5 - time * 0.12) - 0.5));
+			float fl = 0.85 + 0.15 * hash11(floor(time * 15.0));
+			float3 hc = col_a * (0.5 + 1.25 * y) * scan * fl + col_a * (1.0 - band) * 0.4;
+			float a2 = c.a * lerp(1.0, 0.72, saturate(la));
+			res = float4(lerp(saturate(rgb), hc, saturate(la)) * a2, a2);
+			float edge = saturate(ring_alpha(src_uv, gpx * 0.5) - c.a);
+			res = under(res, col_a, edge * 0.8 * la);
+		} else if (is_mode(lm, 12.0)) {
+			/* thermal camera */
+			float3 tcol = lerp(float3(0.05, 0.0, 0.3), float3(0.6, 0.0, 0.7), smoothstep(0.0, 0.3, y));
+			tcol = lerp(tcol, float3(1.0, 0.15, 0.1), smoothstep(0.3, 0.55, y));
+			tcol = lerp(tcol, float3(1.0, 0.85, 0.1), smoothstep(0.55, 0.8, y));
+			tcol = lerp(tcol, float3(1.0, 1.0, 0.95), smoothstep(0.8, 1.0, y));
+			res.rgb = lerp(saturate(rgb), tcol, saturate(la)) * c.a;
+		} else if (is_mode(lm, 13.0)) {
+			/* Game Boy: four greens, ordered dither */
+			float2 cell = floor(opx * 0.5);
+			float bayer = glmod(cell.x + 2.0 * glmod(cell.y, 2.0), 4.0) / 4.0 - 0.375;
+			float q = floor(saturate(y + bayer * 0.25) * 3.999);
+			float3 gb = float3(0.06, 0.22, 0.06);
+			gb = lerp(gb, float3(0.19, 0.38, 0.19), step(0.5, q));
+			gb = lerp(gb, float3(0.55, 0.67, 0.06), step(1.5, q));
+			gb = lerp(gb, float3(0.61, 0.74, 0.06), step(2.5, q));
+			res.rgb = lerp(saturate(rgb), gb, saturate(la)) * c.a;
+		} else if (is_mode(lm, 14.0)) {
+			/* old film: sepia, grain, flicker, scratches, dark corners */
+			float3 sep = float3(dot(rgb, float3(0.393, 0.769, 0.189)), dot(rgb, float3(0.349, 0.686, 0.168)),
+					    dot(rgb, float3(0.272, 0.534, 0.131)));
+			float grain = (hash21(opx + frac(time * 7.0) * 91.0) - 0.5) * 0.18;
+			float fl = 0.9 + 0.1 * hash11(floor(time * 18.0));
+			float scr = step(0.997, hash21(float2(floor(src_uv.x * 220.0), floor(time * 12.0)))) * 0.5;
+			float2 vd = src_uv - 0.5;
+			float vig = saturate(1.0 - dot(vd, vd) * 1.6);
+			float3 f = (saturate(sep) + grain + scr) * fl * vig;
+			res.rgb = lerp(saturate(rgb), saturate(f), saturate(la)) * c.a;
+		} else if (is_mode(lm, 15.0)) {
+			/* noir: hard black & white with grain */
+			float g = smoothstep(0.15, 0.85, y);
+			g += (hash21(opx + frac(time * 5.0) * 57.0) - 0.5) * 0.08;
+			res.rgb = lerp(saturate(rgb), saturate(float3(g, g, g)), saturate(la)) * c.a;
+		} else if (is_mode(lm, 16.0)) {
+			/* pop art: posterised, punchy, halftone dots */
+			float3 p = floor(saturate(rgb) * 3.0 + 0.5) / 3.0;
+			float3 grey = float3(luma(p), luma(p), luma(p));
+			p = saturate(lerp(grey, p, 1.8));
+			float2 cell = frac(opx / 6.0) - 0.5;
+			float dots = step(length(cell), 0.42 * (1.0 - y));
+			p *= 1.0 - dots * 0.2;
+			res.rgb = lerp(saturate(rgb), p, saturate(la)) * c.a;
+		} else if (is_mode(lm, 17.0)) {
+			/* scanlines */
+			float sl = 0.5 + 0.5 * cos(opx.y * 3.14159 / max(1.0, gpx * 0.25));
+			res.rgb *= 1.0 - 0.45 * saturate(la) * (1.0 - sl);
+		} else if (is_mode(lm, 18.0)) {
+			/* shine: a light sweep every few seconds */
+			float sweep = frac(time * 0.28) * 2.2 - 0.6;
+			float d = src_uv.x + src_uv.y * 0.45 - sweep;
+			float s = exp(-d * d * 180.0) * 0.8 * la;
+			res.rgb += float3(1.0, 1.0, 1.0) * s * c.a;
+		} else if (is_mode(lm, 19.0)) {
+			/* tint: colour A over the picture */
+			res.rgb = lerp(saturate(rgb), col_a * (0.25 + 0.95 * y), saturate(la)) * c.a;
+		}
+	}
+
+	/* enter / exit white flash (CRT power on) */
+	res.rgb += float3(1.0, 1.0, 1.0) * fx.y * res.a;
+
+	return saturate(res) * opacity;
+}
+
+technique Draw
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSMotion(v_in);
+	}
+}
