@@ -49,6 +49,7 @@ struct ffmpeg_source {
 	bool is_clear_on_media_end;
 	bool restart_on_activate;
 	bool resync_audio; /* SPAZZbs: each start lines the audio up afresh */
+	bool audio_only;   /* SPAZZbs: sound only; cover art never shows or holds it up */
 	bool close_when_inactive;
 	bool seekable;
 	bool is_stinger;
@@ -310,6 +311,7 @@ static void ffmpeg_source_open(struct ffmpeg_source *s)
 			.reconnecting = s->reconnecting,
 			.request_preload = s->is_stinger,
 			.full_decode = s->full_decode,
+			.audio_only = s->audio_only,
 		};
 
 		s->media = media_playback_create(&info);
@@ -399,7 +401,9 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 	bool is_local_file = obs_data_get_bool(settings, "is_local_file");
 	bool is_stinger = obs_data_get_bool(settings, "is_stinger");
 	bool is_track_matte = obs_data_get_bool(settings, "is_track_matte");
-	bool should_restart_media = (is_local_file != s->is_local_file) || (is_stinger != s->is_stinger);
+	bool audio_only = obs_data_get_bool(settings, "audio_only");
+	bool should_restart_media = (is_local_file != s->is_local_file) || (is_stinger != s->is_stinger) ||
+				    (audio_only != s->audio_only);
 
 	const char *input;
 	const char *input_format;
@@ -475,6 +479,7 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 	s->is_track_matte = is_track_matte;
 	s->log_changes = obs_data_get_bool(settings, "log_changes");
 	s->resync_audio = obs_data_get_bool(settings, "resync_audio");
+	s->audio_only = audio_only;
 
 	if (s->speed_percent < 1 || s->speed_percent > 200)
 		s->speed_percent = 100;

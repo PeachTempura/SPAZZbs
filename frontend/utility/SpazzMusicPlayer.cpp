@@ -193,6 +193,7 @@ void SpazzMusicPlayer::Bind()
 		obs_data_set_bool(settings, "hw_decode", false);
 		obs_data_set_int(settings, "speed_percent", 100);
 		obs_data_set_bool(settings, "resync_audio", true);
+		obs_data_set_bool(settings, "audio_only", true);
 
 		src = obs_source_create("ffmpeg_source", QT_TO_UTF8(name), settings, nullptr);
 		if (!src) {
@@ -269,7 +270,12 @@ void SpazzMusicPlayer::ApplySafeSettings(obs_source_t *src, const char *localFil
 	 * could line up with the last one's timing, arrive late, and be dropped
 	 * by the mixer (playing, but silent) */
 	obs_data_set_bool(settings, "resync_audio", true);
+	/* songs often carry cover art, which the media source would treat as
+	 * video: drawn in the corner of the canvas, and OBS then holds the
+	 * sound back to "sync" with a picture that never moves (silence) */
+	obs_data_set_bool(settings, "audio_only", true);
 	obs_source_update(src, settings);
+	obs_source_output_video(src, nullptr);
 }
 
 /* OBS is about to write the source into the scene collection. Leave the song

@@ -707,7 +707,7 @@ static bool init_avformat(mp_media_t *m)
 	}
 
 	m->reconnecting = false;
-	m->has_video = mp_decode_init(m, AVMEDIA_TYPE_VIDEO, m->hw);
+	m->has_video = !m->audio_only && mp_decode_init(m, AVMEDIA_TYPE_VIDEO, m->hw);
 	m->has_audio = mp_decode_init(m, AVMEDIA_TYPE_AUDIO, m->hw);
 
 	if (!m->has_video && !m->has_audio) {
@@ -888,6 +888,7 @@ bool mp_media_init(mp_media_t *media, const struct mp_media_info *info)
 	media->buffering = info->buffering;
 	media->speed = info->speed;
 	media->request_preload = info->request_preload;
+	media->audio_only = info->audio_only;
 	media->is_local_file = info->is_local_file;
 	da_init(media->packet_pool);
 
