@@ -27,12 +27,18 @@
  *
  * The page's address never changes, so the browser never reloads. Text from
  * SPAZZamp or a text file is fetched here and pushed the same way.
+ *
+ * Reacting to sound: an audio capture callback on desktop audio or on
+ * SPAZZamp's music source sums a few bands on the audio thread; the video
+ * tick turns them into 0..1 levels (and beats) about 30 times a second and
+ * sends them to the page. Nothing is attached while it's off or hidden.
  */
 
 #include <obs-module.h>
 #include <util/dstr.h>
 #include <util/platform.h>
 #include <util/threading.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -49,6 +55,21 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define T_(s) obs_module_text(s)
 #define FILE_MAX_BYTES (64 * 1024)
 
+/* SPAZZamp keeps its music source on this output channel, marked with this
+ * private setting (frontend/utility/SpazzMusicPlayer) */
+#define MUSIC_CHANNEL 60
+#define MUSIC_MARKER "spazz_music"
+#define DESKTOP_CHANNEL 1
+#define REACT_RATE (1.0f / 30.0f)
+
+enum react_mode { REACT_OFF, REACT_DESKTOP, REACT_MUSIC };
+
+/* what the audio thread hands the video tick */
+struct band_sums {
+	double level, bass, mid, treble;
+	size_t frames;
+};
+
 struct spazz_text {
 	obs_source_t *source;
 	obs_source_t *browser;
@@ -62,6 +83,17 @@ struct spazz_text {
 	float file_wait;
 	float song_wait;
 	char *song_json; /* last SPAZZamp song sent */
+
+	/* reacting to sound */
+	volatile long react;        /* enum react_mode */
+	obs_weak_source_t *heard;   /* the source the capture callback is on */
+	float find_wait, send_wait; /* graphics thread */
+	float peak[4], bass_avg;    /* graphics thread: auto gain, beat */
+	uint64_t last_beat_ns;
+	pthread_mutex_t au_mutex; /* guards what follows */
+	struct band_sums sums;
+	float lp_bass1, lp_bass2, lp_mid; /* filter state */
+	float k_bass, k_mid;              /* filter coefficients */
 };
 
 /* ------------------------------------------------------------------------ */
@@ -125,6 +157,16 @@ static int preset_index(const char *name)
 	return -1;
 }
 
+static bool key_is_preset(const char *setting)
+{
+	for (const struct stx_key *k = stx_keys; k->setting; k++) {
+		if (strcmp(k->setting, setting) == 0) {
+			return k->preset;
+		}
+	}
+	return true;
+}
+
 /* a preset starts from a clean look: everything it governs goes back to its
  * default first, then the preset's own values. Your text, where it comes
  * from, its place on screen and its timing stay. */
@@ -138,6 +180,10 @@ static void apply_preset(obs_data_t *s, int idx)
 	const struct stx_preset *pr = &stx_presets[idx];
 	for (int i = 0; i < pr->count; i++) {
 		const struct stx_preset_val *v = &pr->vals[i];
+		/* your own settings: a preset only suggests one you haven't set */
+		if (!key_is_preset(v->key) && obs_data_has_user_value(s, v->key)) {
+			continue;
+		}
 		switch (v->kind) {
 		case STX_STR:
 			obs_data_set_string(s, v->key, v->str);
@@ -214,6 +260,211 @@ static char *read_text_file(const char *path)
 	}
 	char *text = os_quick_read_utf8_file(path);
 	return text ? text : bstrdup("");
+}
+
+/* ------------------------------------------------------------------------ */
+/* reacting to sound                                                         */
+
+static enum react_mode react_from(const char *v)
+{
+	if (v && strcmp(v, "desktop") == 0) {
+		return REACT_DESKTOP;
+	}
+	if (v && strcmp(v, "music") == 0) {
+		return REACT_MUSIC;
+	}
+	return REACT_OFF;
+}
+
+/* audio thread: a mono mix through two low-passes, summed per band. Bass is
+ * under ~160 Hz, mid up to ~2.5 kHz, treble the rest. */
+static void heard_audio(void *param, obs_source_t *source, const struct audio_data *audio, bool muted)
+{
+	UNUSED_PARAMETER(source);
+	struct spazz_text *st = param;
+	const float *c0 = (const float *)audio->data[0];
+	if (!c0 || !audio->frames) {
+		return;
+	}
+	const float *c1 = audio->data[1] ? (const float *)audio->data[1] : c0;
+
+	pthread_mutex_lock(&st->au_mutex);
+	float b1 = st->lp_bass1, b2 = st->lp_bass2, md = st->lp_mid;
+	const float kb = st->k_bass, km = st->k_mid;
+	double sl = 0.0, sb = 0.0, sm = 0.0, stt = 0.0;
+	for (uint32_t i = 0; i < audio->frames; i++) {
+		/* muted in the mixer: you can't hear it, so neither does the text */
+		const float x = muted ? 0.0f : 0.5f * (c0[i] + c1[i]);
+		b1 += kb * (x - b1);
+		b2 += kb * (b1 - b2);
+		md += km * (x - md);
+		const float mid = md - b2, tre = x - md;
+		sl += (double)(x * x);
+		sb += (double)(b2 * b2);
+		sm += (double)(mid * mid);
+		stt += (double)(tre * tre);
+	}
+	st->lp_bass1 = b1;
+	st->lp_bass2 = b2;
+	st->lp_mid = md;
+	st->sums.level += sl;
+	st->sums.bass += sb;
+	st->sums.mid += sm;
+	st->sums.treble += stt;
+	st->sums.frames += audio->frames;
+	pthread_mutex_unlock(&st->au_mutex);
+}
+
+/* SPAZZamp's music source: on its channel, or anywhere by its marker */
+static bool is_music(obs_source_t *src)
+{
+	obs_data_t *priv = src ? obs_source_get_private_settings(src) : NULL;
+	const bool yes = priv && obs_data_get_bool(priv, MUSIC_MARKER);
+	obs_data_release(priv);
+	return yes;
+}
+
+static bool find_music_cb(void *param, obs_source_t *src)
+{
+	obs_source_t **found = param;
+	if (is_music(src)) {
+		*found = obs_source_get_ref(src);
+		return false;
+	}
+	return true;
+}
+
+/* the source to listen to (a new reference), or NULL */
+static obs_source_t *react_target(enum react_mode mode)
+{
+	if (mode == REACT_DESKTOP) {
+		return obs_get_output_source(DESKTOP_CHANNEL);
+	}
+	if (mode == REACT_MUSIC) {
+		obs_source_t *src = obs_get_output_source(MUSIC_CHANNEL);
+		if (src && is_music(src)) {
+			return src;
+		}
+		obs_source_release(src);
+		obs_source_t *found = NULL;
+		obs_enum_sources(find_music_cb, &found);
+		return found;
+	}
+	return NULL;
+}
+
+static void stop_hearing(struct spazz_text *st)
+{
+	if (!st->heard) {
+		return;
+	}
+	/* once this returns the callback won't run again: libobs holds the
+	 * same lock while it calls capture callbacks */
+	obs_source_t *src = obs_weak_source_get_source(st->heard);
+	if (src) {
+		obs_source_remove_audio_capture_callback(src, heard_audio, st);
+		obs_source_release(src);
+	}
+	obs_weak_source_release(st->heard);
+	st->heard = NULL;
+	/* let the page settle at once */
+	send_event(st, "spazzTextAudio", "{\"l\":0,\"b\":0,\"m\":0,\"t\":0,\"k\":0}");
+}
+
+static void start_hearing(struct spazz_text *st, obs_source_t *src)
+{
+	const uint32_t rate = audio_output_get_sample_rate(obs_get_audio());
+	const float sr = rate ? (float)rate : 48000.0f;
+	const float two_pi = 6.2831853f;
+	pthread_mutex_lock(&st->au_mutex);
+	st->k_bass = 1.0f - expf(-two_pi * 160.0f / sr);
+	st->k_mid = 1.0f - expf(-two_pi * 2500.0f / sr);
+	st->lp_bass1 = st->lp_bass2 = st->lp_mid = 0.0f;
+	memset(&st->sums, 0, sizeof(st->sums));
+	pthread_mutex_unlock(&st->au_mutex);
+	for (int i = 0; i < 4; i++) {
+		st->peak[i] = 0.0f;
+	}
+	st->bass_avg = 0.0f;
+	st->heard = obs_source_get_weak_source(src);
+	obs_source_add_audio_capture_callback(src, heard_audio, st);
+}
+
+/* RMS, auto-gained against the last few seconds so quiet and loud sources
+ * both move the text; then a little curve for more contrast */
+static float shape_level(float rms, float *peak, float dt)
+{
+	const float decay = powf(0.5f, dt / 3.0f); /* the peak halves in 3 s */
+	*peak = rms > *peak * decay ? rms : *peak * decay;
+	if (rms < 0.002f) {
+		return 0.0f;
+	}
+	const float floor_ = 0.02f;
+	float x = rms / (*peak > floor_ ? *peak : floor_);
+	x = x > 1.0f ? 1.0f : x;
+	return powf(x, 1.6f);
+}
+
+static void react_tick(struct spazz_text *st, float seconds)
+{
+	const enum react_mode mode = (enum react_mode)os_atomic_load_long(&st->react);
+	if (mode == REACT_OFF || !st->browser || !obs_source_showing(st->source)) {
+		stop_hearing(st);
+		st->find_wait = 0.0f;
+		return;
+	}
+
+	/* keep listening to the right source (it can come, go or change) */
+	st->find_wait -= seconds;
+	if (st->find_wait <= 0.0f) {
+		st->find_wait = 1.0f;
+		obs_source_t *want = react_target(mode);
+		if (!want) {
+			stop_hearing(st);
+		} else if (!st->heard || !obs_weak_source_references_source(st->heard, want)) {
+			stop_hearing(st);
+			start_hearing(st, want);
+		}
+		obs_source_release(want);
+	}
+	if (!st->heard) {
+		return;
+	}
+
+	st->send_wait += seconds;
+	if (st->send_wait < REACT_RATE) {
+		return;
+	}
+	const float dt = st->send_wait;
+	st->send_wait = 0.0f;
+
+	struct band_sums got;
+	pthread_mutex_lock(&st->au_mutex);
+	got = st->sums;
+	memset(&st->sums, 0, sizeof(st->sums));
+	pthread_mutex_unlock(&st->au_mutex);
+
+	const double n = got.frames ? (double)got.frames : 1.0;
+	const float rms[4] = {(float)sqrt(got.level / n), (float)sqrt(got.bass / n), (float)sqrt(got.mid / n),
+			      (float)sqrt(got.treble / n)};
+	float v[4];
+	for (int i = 0; i < 4; i++) {
+		v[i] = shape_level(rms[i], &st->peak[i], dt);
+	}
+
+	/* a beat: bass jumping well above its recent average */
+	int beat = 0;
+	const uint64_t now = os_gettime_ns();
+	if (rms[1] > 0.01f && rms[1] > st->bass_avg * 1.4f && now - st->last_beat_ns > 200000000ULL) {
+		beat = 1;
+		st->last_beat_ns = now;
+	}
+	st->bass_avg += (rms[1] - st->bass_avg) * (1.0f - expf(-dt / 1.0f));
+
+	char json[96];
+	snprintf(json, sizeof(json), "{\"l\":%.3f,\"b\":%.3f,\"m\":%.3f,\"t\":%.3f,\"k\":%d}", v[0], v[1], v[2], v[3],
+		 beat);
+	send_event(st, "spazzTextAudio", json);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -322,6 +573,10 @@ static void stx_update(void *data, obs_data_t *settings)
 	os_atomic_set_long(&st->height, (long)h);
 
 	snprintf(st->kind, sizeof(st->kind), "%s", obs_data_get_string(settings, "source"));
+	const long react = (long)react_from(obs_data_get_string(settings, "react"));
+	if (os_atomic_set_long(&st->react, react) != react) {
+		st->find_wait = 0.0f; /* look for the new source right away */
+	}
 
 	/* a text file: read it now (and on every change, in tick) */
 	const char *path = obs_data_get_string(settings, "file_path");
@@ -361,10 +616,12 @@ static void stx_update(void *data, obs_data_t *settings)
 	bfree(json);
 }
 
-/* SPAZZamp's song (twice a second) and the text file (every second) */
+/* sound levels, SPAZZamp's song (twice a second) and the text file (every
+ * second) */
 static void stx_tick(void *data, float seconds)
 {
 	struct spazz_text *st = data;
+	react_tick(st, seconds);
 	if (!st->browser || !obs_source_showing(st->source)) {
 		return;
 	}
@@ -505,6 +762,13 @@ static bool refresh_visible(obs_properties_t *props, obs_property_t *prop, obs_d
 	show(props, "bg_border_width", box);
 
 	show(props, "glitch_every", is(s, "idle", "glitch"));
+
+	const bool react = !is(s, "react", "off");
+	static const char *react_keys[] = {"react_size",  "react_glow",  "react_bounce", "react_color",
+					   "react_shake", "react_flash", "react_sens",   "react_smooth"};
+	for (size_t i = 0; i < sizeof(react_keys) / sizeof(react_keys[0]); i++) {
+		show(props, react_keys[i], react);
+	}
 	show(props, "rgb_speed", obs_data_get_bool(s, "rgb_cycle"));
 	const bool cycle = obs_data_get_bool(s, "loop_cycle");
 	show(props, "show_sec", cycle);
@@ -640,6 +904,8 @@ static obs_properties_t *stx_properties(void *data)
 
 	/* animation */
 	obs_properties_t *anim = obs_properties_create();
+	p = add_list(anim, "anim_by", T_("AnimBy"), stx_animBy);
+	obs_property_set_long_description(p, T_("AnimBy.Tip"));
 	add_list(anim, "enter", T_("Enter"), stx_enter);
 	p = add_list(anim, "idle", T_("Idle"), stx_idle);
 	obs_property_set_modified_callback(p, refresh_visible);
@@ -648,6 +914,23 @@ static obs_properties_t *stx_properties(void *data)
 	slider(anim, "idle_amount", T_("IdleAmount"), 0.0, 3.0, 0.05, NULL);
 	slider(anim, "glitch_every", T_("GlitchEvery"), 0.5, 30.0, 0.5, " s");
 	obs_properties_add_group(props, "grp_anim", T_("Group.Animation"), OBS_GROUP_NORMAL, anim);
+
+	/* reacting to sound */
+	obs_properties_t *snd = obs_properties_create();
+	p = add_list(snd, "react", T_("React"), stx_react);
+	obs_property_set_long_description(p, T_("React.Tip"));
+	obs_property_set_modified_callback(p, refresh_visible);
+	obs_properties_add_bool(snd, "react_size", T_("ReactSize"));
+	obs_properties_add_bool(snd, "react_glow", T_("ReactGlow"));
+	p = obs_properties_add_bool(snd, "react_bounce", T_("ReactBounce"));
+	obs_property_set_long_description(p, T_("ReactBounce.Tip"));
+	obs_properties_add_bool(snd, "react_color", T_("ReactColor"));
+	obs_properties_add_bool(snd, "react_shake", T_("ReactShake"));
+	obs_properties_add_bool(snd, "react_flash", T_("ReactFlash"));
+	slider(snd, "react_sens", T_("ReactSens"), 0.0, 3.0, 0.05, NULL);
+	p = slider(snd, "react_smooth", T_("ReactSmooth"), 0.0, 1.0, 0.01, NULL);
+	obs_property_set_long_description(p, T_("ReactSmooth.Tip"));
+	obs_properties_add_group(props, "grp_react", T_("Group.React"), OBS_GROUP_NORMAL, snd);
 
 	/* timing */
 	obs_properties_t *timing = obs_properties_create();
@@ -730,6 +1013,7 @@ static void *stx_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct spazz_text *st = bzalloc(sizeof(*st));
 	st->source = source;
+	pthread_mutex_init(&st->au_mutex, NULL);
 	st->config_path = config_path_for(source);
 
 	/* a brand new text starts with the first preset's look */
@@ -753,6 +1037,8 @@ static void *stx_create(obs_data_t *settings, obs_source_t *source)
 static void stx_destroy(void *data)
 {
 	struct spazz_text *st = data;
+	/* first: after this the audio thread never calls us again */
+	stop_hearing(st);
 	if (st->browser) {
 		obs_source_remove_active_child(st->source, st->browser);
 		obs_source_release(st->browser);
@@ -765,6 +1051,7 @@ static void stx_destroy(void *data)
 	bfree(st->file_path);
 	bfree(st->file_text);
 	bfree(st->song_json);
+	pthread_mutex_destroy(&st->au_mutex);
 	bfree(st);
 }
 

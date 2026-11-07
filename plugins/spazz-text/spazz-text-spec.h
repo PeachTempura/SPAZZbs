@@ -31,6 +31,16 @@ struct stx_preset {
 	int count;
 };
 
+static const struct stx_option stx_animBy[] = {
+	{"letter", "Letter by letter"},
+	{"word", "Word by word"},
+	{"whole", "The whole text at once"},
+	{NULL, NULL}};
+static const struct stx_option stx_react[] = {
+	{"off", "Off"},
+	{"desktop", "Desktop audio"},
+	{"music", "SPAZZamp music"},
+	{NULL, NULL}};
 static const struct stx_option stx_source[] = {
 	{"typed", "Text I type"},
 	{"nowplaying", "SPAZZamp: now playing"},
@@ -267,6 +277,16 @@ static const struct stx_key stx_keys[] = {
 	{"loop_cycle", "cycle", STX_BOOL, NULL, 0.0, false},
 	{"show_sec", "showSec", STX_NUM, NULL, 10.0, false},
 	{"hide_sec", "hideSec", STX_NUM, NULL, 5.0, false},
+	{"anim_by", "animBy", STX_STR, "letter", 0.0, true},
+	{"react", "react", STX_STR, "off", 0.0, false},
+	{"react_size", "reactSize", STX_BOOL, NULL, 1.0, true},
+	{"react_glow", "reactGlow", STX_BOOL, NULL, 1.0, true},
+	{"react_bounce", "reactBounce", STX_BOOL, NULL, 0.0, true},
+	{"react_color", "reactColor", STX_BOOL, NULL, 0.0, true},
+	{"react_shake", "reactShake", STX_BOOL, NULL, 0.0, true},
+	{"react_flash", "reactFlash", STX_BOOL, NULL, 0.0, true},
+	{"react_sens", "reactSens", STX_NUM, NULL, 1.0, false},
+	{"react_smooth", "reactSmooth", STX_NUM, NULL, 0.5, false},
 	{NULL, NULL, STX_STR, NULL, 0.0, false}};
 
 static const struct stx_preset_val stx_preset_0[] = {
@@ -290,6 +310,9 @@ static const struct stx_preset_val stx_preset_0[] = {
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"extrude", STX_INT, NULL, 0.0},
 	{"shadow_opacity", STX_NUM, NULL, 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_1[] = {
 	{"font", STX_STR, "sacramento", 0.0},
@@ -306,6 +329,9 @@ static const struct stx_preset_val stx_preset_1[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"extrude", STX_INT, NULL, 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_2[] = {
 	{"font", STX_STR, "monoton", 0.0},
@@ -321,6 +347,9 @@ static const struct stx_preset_val stx_preset_2[] = {
 	{"spacing", STX_NUM, NULL, 0.08},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"extrude", STX_INT, NULL, 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_3[] = {
 	{"font", STX_STR, "neonderthaw", 0.0},
@@ -336,6 +365,9 @@ static const struct stx_preset_val stx_preset_3[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_4[] = {
 	{"font", STX_STR, "yellowtail", 0.0},
@@ -350,6 +382,9 @@ static const struct stx_preset_val stx_preset_4[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_5[] = {
 	{"font", STX_STR, "bungee", 0.0},
@@ -365,6 +400,9 @@ static const struct stx_preset_val stx_preset_5[] = {
 	{"spacing", STX_NUM, NULL, 0.06},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 1.6},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_6[] = {
 	{"font", STX_STR, "orbitron", 0.0},
@@ -380,6 +418,9 @@ static const struct stx_preset_val stx_preset_6[] = {
 	{"spacing", STX_NUM, NULL, 0.12},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"chroma", STX_NUM, NULL, 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_7[] = {
 	{"font", STX_STR, "monoton", 0.0},
@@ -396,6 +437,9 @@ static const struct stx_preset_val stx_preset_7[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.05},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_8[] = {
 	{"font", STX_STR, "tiltneon", 0.0},
@@ -414,6 +458,9 @@ static const struct stx_preset_val stx_preset_8[] = {
 	{"enter", STX_STR, "flicker", 0.0},
 	{"idle", STX_STR, "buzz", 0.0},
 	{"exit", STX_STR, "flicker", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_9[] = {
 	{"font", STX_STR, "tiltneon", 0.0},
@@ -428,6 +475,11 @@ static const struct stx_preset_val stx_preset_9[] = {
 	{"idle", STX_STR, "breathe", 0.0},
 	{"exit", STX_STR, "fade", 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
+	{"react_color", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 static const struct stx_preset_val stx_preset_10[] = {
 	{"font", STX_STR, "audiowide", 0.0},
@@ -449,6 +501,8 @@ static const struct stx_preset_val stx_preset_10[] = {
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"italic", STX_BOOL, NULL, 1.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_11[] = {
 	{"font", STX_STR, "fasterone", 0.0},
@@ -468,6 +522,8 @@ static const struct stx_preset_val stx_preset_11[] = {
 	{"spacing", STX_NUM, NULL, 0.03},
 	{"italic", STX_BOOL, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_12[] = {
 	{"font", STX_STR, "michroma", 0.0},
@@ -486,6 +542,8 @@ static const struct stx_preset_val stx_preset_12[] = {
 	{"chroma", STX_NUM, NULL, 3.0},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"scanlines", STX_NUM, NULL, 0.25},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_13[] = {
 	{"font", STX_STR, "yellowtail", 0.0},
@@ -505,6 +563,8 @@ static const struct stx_preset_val stx_preset_13[] = {
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"italic", STX_BOOL, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_14[] = {
 	{"font", STX_STR, "bungeeshade", 0.0},
@@ -523,6 +583,8 @@ static const struct stx_preset_val stx_preset_14[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_15[] = {
 	{"font", STX_STR, "orbitron", 0.0},
@@ -540,6 +602,8 @@ static const struct stx_preset_val stx_preset_15[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.18},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_16[] = {
 	{"font", STX_STR, "shrikhand", 0.0},
@@ -559,6 +623,8 @@ static const struct stx_preset_val stx_preset_16[] = {
 	{"idle_amount", STX_NUM, NULL, 0.6},
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_17[] = {
 	{"font", STX_STR, "righteous", 0.0},
@@ -575,6 +641,10 @@ static const struct stx_preset_val stx_preset_17[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.08},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 static const struct stx_preset_val stx_preset_18[] = {
 	{"font", STX_STR, "Segoe UI", 0.0},
@@ -593,6 +663,8 @@ static const struct stx_preset_val stx_preset_18[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"size", STX_INT, NULL, 70.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_19[] = {
 	{"font", STX_STR, "Courier New", 0.0},
@@ -611,6 +683,8 @@ static const struct stx_preset_val stx_preset_19[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_20[] = {
 	{"font", STX_STR, "righteous", 0.0},
@@ -628,6 +702,8 @@ static const struct stx_preset_val stx_preset_20[] = {
 	{"exit", STX_STR, "slide_down", 0.0},
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.06},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_21[] = {
 	{"font", STX_STR, "rubikglitch", 0.0},
@@ -644,6 +720,10 @@ static const struct stx_preset_val stx_preset_21[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_22[] = {
 	{"font", STX_STR, "russo", 0.0},
@@ -659,6 +739,10 @@ static const struct stx_preset_val stx_preset_22[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.05},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_23[] = {
 	{"font", STX_STR, "sharetech", 0.0},
@@ -676,6 +760,10 @@ static const struct stx_preset_val stx_preset_23[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.1},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_24[] = {
 	{"font", STX_STR, "bebas", 0.0},
@@ -693,6 +781,10 @@ static const struct stx_preset_val stx_preset_24[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.08},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_25[] = {
 	{"font", STX_STR, "silkscreen", 0.0},
@@ -714,6 +806,10 @@ static const struct stx_preset_val stx_preset_25[] = {
 	{"exit", STX_STR, "crt", 0.0},
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.06},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_26[] = {
 	{"font", STX_STR, "turret", 0.0},
@@ -732,6 +828,10 @@ static const struct stx_preset_val stx_preset_26[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.14},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_27[] = {
 	{"font", STX_STR, "vt323", 0.0},
@@ -753,6 +853,9 @@ static const struct stx_preset_val stx_preset_27[] = {
 	{"bg_opacity", STX_NUM, NULL, 0.9},
 	{"bg_padding", STX_INT, NULL, 28.0},
 	{"bg_radius", STX_INT, NULL, 10.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_28[] = {
 	{"font", STX_STR, "vt323", 0.0},
@@ -769,6 +872,9 @@ static const struct stx_preset_val stx_preset_28[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_29[] = {
 	{"font", STX_STR, "michroma", 0.0},
@@ -787,6 +893,9 @@ static const struct stx_preset_val stx_preset_29[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.1},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_30[] = {
 	{"font", STX_STR, "bebas", 0.0},
@@ -806,6 +915,9 @@ static const struct stx_preset_val stx_preset_30[] = {
 	{"bg_color", STX_COLOR, NULL, 6312.0},
 	{"bg_opacity", STX_NUM, NULL, 0.85},
 	{"bg_padding", STX_INT, NULL, 18.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_31[] = {
 	{"font", STX_STR, "silkscreen", 0.0},
@@ -824,6 +936,9 @@ static const struct stx_preset_val stx_preset_31[] = {
 	{"exit", STX_STR, "pixel", 0.0},
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_32[] = {
 	{"font", STX_STR, "Consolas", 0.0},
@@ -843,6 +958,9 @@ static const struct stx_preset_val stx_preset_32[] = {
 	{"stagger_ms", STX_INT, NULL, 30.0},
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_33[] = {
 	{"font", STX_STR, "vt323", 0.0},
@@ -859,6 +977,9 @@ static const struct stx_preset_val stx_preset_33[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.06},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_34[] = {
 	{"font", STX_STR, "vt323", 0.0},
@@ -877,6 +998,9 @@ static const struct stx_preset_val stx_preset_34[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.08},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_35[] = {
 	{"font", STX_STR, "russo", 0.0},
@@ -896,6 +1020,9 @@ static const struct stx_preset_val stx_preset_35[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_36[] = {
 	{"font", STX_STR, "Courier New", 0.0},
@@ -912,6 +1039,9 @@ static const struct stx_preset_val stx_preset_36[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_37[] = {
 	{"font", STX_STR, "pressstart", 0.0},
@@ -929,6 +1059,10 @@ static const struct stx_preset_val stx_preset_37[] = {
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"size", STX_INT, NULL, 72.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 static const struct stx_preset_val stx_preset_38[] = {
 	{"font", STX_STR, "pressstart", 0.0},
@@ -945,6 +1079,9 @@ static const struct stx_preset_val stx_preset_38[] = {
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"size", STX_INT, NULL, 64.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_39[] = {
 	{"font", STX_STR, "pressstart", 0.0},
@@ -959,6 +1096,10 @@ static const struct stx_preset_val stx_preset_39[] = {
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"size", STX_INT, NULL, 64.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 static const struct stx_preset_val stx_preset_40[] = {
 	{"font", STX_STR, "pressstart", 0.0},
@@ -976,6 +1117,9 @@ static const struct stx_preset_val stx_preset_40[] = {
 	{"spacing", STX_NUM, NULL, 0.1},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"size", STX_INT, NULL, 80.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_41[] = {
 	{"font", STX_STR, "silkscreen", 0.0},
@@ -995,6 +1139,9 @@ static const struct stx_preset_val stx_preset_41[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_42[] = {
 	{"font", STX_STR, "bangers", 0.0},
@@ -1018,6 +1165,9 @@ static const struct stx_preset_val stx_preset_42[] = {
 	{"idle_amount", STX_NUM, NULL, 0.4},
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_43[] = {
 	{"font", STX_STR, "bangers", 0.0},
@@ -1038,6 +1188,9 @@ static const struct stx_preset_val stx_preset_43[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.03},
 	{"idle_amount", STX_NUM, NULL, 0.5},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_44[] = {
 	{"font", STX_STR, "bangers", 0.0},
@@ -1057,6 +1210,9 @@ static const struct stx_preset_val stx_preset_44[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_45[] = {
 	{"font", STX_STR, "bebas", 0.0},
@@ -1074,6 +1230,8 @@ static const struct stx_preset_val stx_preset_45[] = {
 	{"spacing", STX_NUM, NULL, 0.06},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 0.6},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_46[] = {
 	{"font", STX_STR, "michroma", 0.0},
@@ -1093,6 +1251,8 @@ static const struct stx_preset_val stx_preset_46[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.12},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_47[] = {
 	{"font", STX_STR, "russo", 0.0},
@@ -1113,6 +1273,8 @@ static const struct stx_preset_val stx_preset_47[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_48[] = {
 	{"font", STX_STR, "creepster", 0.0},
@@ -1129,6 +1291,8 @@ static const struct stx_preset_val stx_preset_48[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.05},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_49[] = {
 	{"font", STX_STR, "turret", 0.0},
@@ -1145,6 +1309,8 @@ static const struct stx_preset_val stx_preset_49[] = {
 	{"spacing", STX_NUM, NULL, 0.1},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 1.5},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_50[] = {
 	{"font", STX_STR, "fredoka", 0.0},
@@ -1165,6 +1331,9 @@ static const struct stx_preset_val stx_preset_50[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_51[] = {
 	{"font", STX_STR, "fredoka", 0.0},
@@ -1183,6 +1352,10 @@ static const struct stx_preset_val stx_preset_51[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 static const struct stx_preset_val stx_preset_52[] = {
 	{"font", STX_STR, "fredoka", 0.0},
@@ -1204,6 +1377,9 @@ static const struct stx_preset_val stx_preset_52[] = {
 	{"bg_color", STX_COLOR, NULL, 16777215.0},
 	{"bg_opacity", STX_NUM, NULL, 0.35},
 	{"bg_padding", STX_INT, NULL, 30.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_53[] = {
 	{"font", STX_STR, "bungee", 0.0},
@@ -1225,6 +1401,9 @@ static const struct stx_preset_val stx_preset_53[] = {
 	{"spacing", STX_NUM, NULL, 0.03},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 0.5},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_54[] = {
 	{"font", STX_STR, "Bahnschrift", 0.0},
@@ -1242,6 +1421,8 @@ static const struct stx_preset_val stx_preset_54[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"size", STX_INT, NULL, 64.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_55[] = {
 	{"font", STX_STR, "Segoe UI", 0.0},
@@ -1259,6 +1440,8 @@ static const struct stx_preset_val stx_preset_55[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.02},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_56[] = {
 	{"font", STX_STR, "Arial Black", 0.0},
@@ -1275,6 +1458,8 @@ static const struct stx_preset_val stx_preset_56[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.0},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_57[] = {
 	{"font", STX_STR, "Segoe UI", 0.0},
@@ -1294,6 +1479,8 @@ static const struct stx_preset_val stx_preset_57[] = {
 	{"upper", STX_BOOL, NULL, 0.0},
 	{"spacing", STX_NUM, NULL, 0.01},
 	{"size", STX_INT, NULL, 64.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_58[] = {
 	{"font", STX_STR, "bebas", 0.0},
@@ -1312,6 +1499,8 @@ static const struct stx_preset_val stx_preset_58[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"size", STX_INT, NULL, 64.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_59[] = {
 	{"font", STX_STR, "russo", 0.0},
@@ -1331,6 +1520,8 @@ static const struct stx_preset_val stx_preset_59[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.03},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
 };
 static const struct stx_preset_val stx_preset_60[] = {
 	{"font", STX_STR, "orbitron", 0.0},
@@ -1349,6 +1540,9 @@ static const struct stx_preset_val stx_preset_60[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.16},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_61[] = {
 	{"font", STX_STR, "sharetech", 0.0},
@@ -1366,6 +1560,9 @@ static const struct stx_preset_val stx_preset_61[] = {
 	{"spacing", STX_NUM, NULL, 0.06},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 0.4},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_62[] = {
 	{"font", STX_STR, "michroma", 0.0},
@@ -1382,6 +1579,9 @@ static const struct stx_preset_val stx_preset_62[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.3},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_63[] = {
 	{"font", STX_STR, "creepster", 0.0},
@@ -1400,6 +1600,9 @@ static const struct stx_preset_val stx_preset_63[] = {
 	{"spacing", STX_NUM, NULL, 0.05},
 	{"bg_shape", STX_STR, "none", 0.0},
 	{"idle_amount", STX_NUM, NULL, 0.6},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
 };
 static const struct stx_preset_val stx_preset_64[] = {
 	{"font", STX_STR, "creepster", 0.0},
@@ -1416,73 +1619,188 @@ static const struct stx_preset_val stx_preset_64[] = {
 	{"upper", STX_BOOL, NULL, 1.0},
 	{"spacing", STX_NUM, NULL, 0.04},
 	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+};
+static const struct stx_preset_val stx_preset_65[] = {
+	{"font", STX_STR, "Arial Black", 0.0},
+	{"weight", STX_STR, "900", 0.0},
+	{"fill", STX_STR, "solid", 0.0},
+	{"color1", STX_COLOR, NULL, 16777215.0},
+	{"outline_color", STX_COLOR, NULL, 0.0},
+	{"outline_width", STX_NUM, NULL, 6.0},
+	{"glow", STX_NUM, NULL, 0.0},
+	{"enter", STX_STR, "pop", 0.0},
+	{"idle", STX_STR, "none", 0.0},
+	{"exit", STX_STR, "pop", 0.0},
+	{"anim_by", STX_STR, "word", 0.0},
+	{"stagger_ms", STX_INT, NULL, 40.0},
+	{"enter_ms", STX_INT, NULL, 380.0},
+	{"upper", STX_BOOL, NULL, 1.0},
+	{"spacing", STX_NUM, NULL, 0.0},
+	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 0.0},
+};
+static const struct stx_preset_val stx_preset_66[] = {
+	{"font", STX_STR, "vt323", 0.0},
+	{"weight", STX_STR, "400", 0.0},
+	{"fill", STX_STR, "solid", 0.0},
+	{"color1", STX_COLOR, NULL, 14221284.0},
+	{"glow_color", STX_COLOR, NULL, 4063098.0},
+	{"glow", STX_NUM, NULL, 0.6},
+	{"scanlines", STX_NUM, NULL, 0.45},
+	{"enter", STX_STR, "typewriter", 0.0},
+	{"idle", STX_STR, "cursor", 0.0},
+	{"exit", STX_STR, "typewriter", 0.0},
+	{"anim_by", STX_STR, "whole", 0.0},
+	{"stagger_ms", STX_INT, NULL, 35.0},
+	{"upper", STX_BOOL, NULL, 1.0},
+	{"spacing", STX_NUM, NULL, 0.06},
+	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
+};
+static const struct stx_preset_val stx_preset_67[] = {
+	{"font", STX_STR, "tiltneon", 0.0},
+	{"weight", STX_STR, "400", 0.0},
+	{"fill", STX_STR, "solid", 0.0},
+	{"color1", STX_COLOR, NULL, 16773885.0},
+	{"glow_color", STX_COLOR, NULL, 16722902.0},
+	{"glow", STX_NUM, NULL, 0.9},
+	{"enter", STX_STR, "flicker", 0.0},
+	{"idle", STX_STR, "buzz", 0.0},
+	{"exit", STX_STR, "flicker", 0.0},
+	{"anim_by", STX_STR, "whole", 0.0},
+	{"idle_amount", STX_NUM, NULL, 0.6},
+	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
+};
+static const struct stx_preset_val stx_preset_68[] = {
+	{"font", STX_STR, "bungee", 0.0},
+	{"weight", STX_STR, "400", 0.0},
+	{"fill", STX_STR, "grad3", 0.0},
+	{"color1", STX_COLOR, NULL, 16727968.0},
+	{"color2", STX_COLOR, NULL, 16765503.0},
+	{"color3", STX_COLOR, NULL, 4182271.0},
+	{"grad_angle", STX_INT, NULL, 0.0},
+	{"outline_color", STX_COLOR, NULL, 1179684.0},
+	{"outline_width", STX_NUM, NULL, 3.0},
+	{"extrude", STX_INT, NULL, 8.0},
+	{"extrude_color", STX_COLOR, NULL, 1179684.0},
+	{"glow_color", STX_COLOR, NULL, 16727968.0},
+	{"glow", STX_NUM, NULL, 0.5},
+	{"enter", STX_STR, "pop", 0.0},
+	{"idle", STX_STR, "pulse", 0.0},
+	{"exit", STX_STR, "pop", 0.0},
+	{"anim_by", STX_STR, "word", 0.0},
+	{"idle_amount", STX_NUM, NULL, 0.5},
+	{"upper", STX_BOOL, NULL, 1.0},
+	{"spacing", STX_NUM, NULL, 0.03},
+	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 1.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
+	{"react_color", STX_BOOL, NULL, 1.0},
+	{"react_shake", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
+};
+static const struct stx_preset_val stx_preset_69[] = {
+	{"font", STX_STR, "russo", 0.0},
+	{"weight", STX_STR, "400", 0.0},
+	{"fill", STX_STR, "rainbow", 0.0},
+	{"outline_color", STX_COLOR, NULL, 657940.0},
+	{"outline_width", STX_NUM, NULL, 2.0},
+	{"glow_color", STX_COLOR, NULL, 16777215.0},
+	{"glow", STX_NUM, NULL, 0.35},
+	{"enter", STX_STR, "drop", 0.0},
+	{"idle", STX_STR, "none", 0.0},
+	{"exit", STX_STR, "drop", 0.0},
+	{"upper", STX_BOOL, NULL, 1.0},
+	{"spacing", STX_NUM, NULL, 0.06},
+	{"bg_shape", STX_STR, "none", 0.0},
+	{"react_size", STX_BOOL, NULL, 0.0},
+	{"react_glow", STX_BOOL, NULL, 1.0},
+	{"react_bounce", STX_BOOL, NULL, 1.0},
+	{"react_flash", STX_BOOL, NULL, 1.0},
+	{"react", STX_STR, "music", 0.0},
 };
 
 static const struct stx_preset stx_presets[] = {
-	{"Neon \302\267 Pink Sign", stx_preset_0, 20},
-	{"Neon \302\267 Blue Bar Sign", stx_preset_1, 14},
-	{"Neon \302\267 Green Open Sign", stx_preset_2, 13},
-	{"Neon \302\267 Purple Haze", stx_preset_3, 13},
-	{"Neon \302\267 Red Hot", stx_preset_4, 12},
-	{"Neon \302\267 Motel Vacancy", stx_preset_5, 13},
-	{"Neon \302\267 Cyber Cyan", stx_preset_6, 13},
-	{"Neon \302\267 Double Tube", stx_preset_7, 14},
-	{"Neon \302\267 Sign Box", stx_preset_8, 16},
-	{"Neon \302\267 Rainbow Tube", stx_preset_9, 12},
-	{"Retro \302\267 Synthwave Chrome", stx_preset_10, 19},
-	{"Retro \302\267 Outrun Sunset", stx_preset_11, 17},
-	{"Retro \302\267 Vaporwave", stx_preset_12, 16},
-	{"Retro \302\267 Miami Script", stx_preset_13, 17},
-	{"Retro \302\267 80s Movie Title", stx_preset_14, 16},
-	{"Retro \302\267 Laser Grid", stx_preset_15, 15},
-	{"Retro \302\267 70s Groovy", stx_preset_16, 17},
-	{"Retro \302\267 Disco Gold", stx_preset_17, 14},
-	{"Retro \302\267 Windows 95", stx_preset_18, 16},
-	{"Retro \302\267 Typewriter", stx_preset_19, 16},
-	{"Retro \302\267 Cassette Label", stx_preset_20, 15},
-	{"Glitch \302\267 Datamosh", stx_preset_21, 14},
-	{"Glitch \302\267 RGB Split", stx_preset_22, 13},
-	{"Glitch \302\267 Corrupted File", stx_preset_23, 15},
-	{"Glitch \302\267 Static Burst", stx_preset_24, 15},
-	{"Glitch \302\267 Error 404", stx_preset_25, 19},
-	{"Glitch \302\267 Cyber Decode", stx_preset_26, 16},
-	{"CRT \302\267 Green Terminal", stx_preset_27, 19},
-	{"CRT \302\267 Amber Terminal", stx_preset_28, 14},
-	{"CRT \302\267 Power On", stx_preset_29, 16},
-	{"CRT \302\267 Broadcast", stx_preset_30, 17},
-	{"CRT \302\267 Teletext", stx_preset_31, 16},
-	{"CRT \302\267 Blue Screen", stx_preset_32, 17},
-	{"VHS \302\267 Tracking", stx_preset_33, 14},
-	{"VHS \302\267 Play OSD", stx_preset_34, 16},
-	{"VHS \302\267 Rewind", stx_preset_35, 17},
-	{"VHS \302\267 Home Video", stx_preset_36, 14},
-	{"Arcade \302\267 8-bit", stx_preset_37, 15},
-	{"Arcade \302\267 Insert Coin", stx_preset_38, 14},
-	{"Arcade \302\267 High Score", stx_preset_39, 12},
-	{"Arcade \302\267 Game Over", stx_preset_40, 15},
-	{"Arcade \302\267 Level Up", stx_preset_41, 17},
-	{"Comic \302\267 Pow", stx_preset_42, 21},
-	{"Comic \302\267 Speech Bubble", stx_preset_43, 18},
-	{"Comic \302\267 Kaboom", stx_preset_44, 17},
-	{"Elements \302\267 Fire", stx_preset_45, 15},
-	{"Elements \302\267 Ice", stx_preset_46, 17},
-	{"Elements \302\267 Gold", stx_preset_47, 18},
-	{"Elements \302\267 Toxic", stx_preset_48, 14},
-	{"Elements \302\267 Electric", stx_preset_49, 14},
-	{"Cute \302\267 Bubblegum", stx_preset_50, 18},
-	{"Cute \302\267 Kawaii Bounce", stx_preset_51, 16},
-	{"Cute \302\267 Pastel Cloud", stx_preset_52, 19},
-	{"Cute \302\267 Candy Pop", stx_preset_53, 19},
-	{"Clean \302\267 Lower Third", stx_preset_54, 15},
-	{"Clean \302\267 Minimal White", stx_preset_55, 15},
-	{"Clean \302\267 Bold Caption", stx_preset_56, 14},
-	{"Clean \302\267 Glass Pill", stx_preset_57, 17},
-	{"Clean \302\267 News Ticker", stx_preset_58, 16},
-	{"Clean \302\267 Gradient Title", stx_preset_59, 17},
-	{"Sci-fi \302\267 Hologram", stx_preset_60, 16},
-	{"Sci-fi \302\267 Matrix", stx_preset_61, 15},
-	{"Sci-fi \302\267 Warp Speed", stx_preset_62, 14},
-	{"Spooky \302\267 Haunted", stx_preset_63, 16},
-	{"Spooky \302\267 Blood Drip", stx_preset_64, 14},
+	{"Neon \302\267 Pink Sign", stx_preset_0, 23},
+	{"Neon \302\267 Blue Bar Sign", stx_preset_1, 17},
+	{"Neon \302\267 Green Open Sign", stx_preset_2, 16},
+	{"Neon \302\267 Purple Haze", stx_preset_3, 16},
+	{"Neon \302\267 Red Hot", stx_preset_4, 15},
+	{"Neon \302\267 Motel Vacancy", stx_preset_5, 16},
+	{"Neon \302\267 Cyber Cyan", stx_preset_6, 16},
+	{"Neon \302\267 Double Tube", stx_preset_7, 17},
+	{"Neon \302\267 Sign Box", stx_preset_8, 19},
+	{"Neon \302\267 Rainbow Tube", stx_preset_9, 17},
+	{"Retro \302\267 Synthwave Chrome", stx_preset_10, 21},
+	{"Retro \302\267 Outrun Sunset", stx_preset_11, 19},
+	{"Retro \302\267 Vaporwave", stx_preset_12, 18},
+	{"Retro \302\267 Miami Script", stx_preset_13, 19},
+	{"Retro \302\267 80s Movie Title", stx_preset_14, 18},
+	{"Retro \302\267 Laser Grid", stx_preset_15, 17},
+	{"Retro \302\267 70s Groovy", stx_preset_16, 19},
+	{"Retro \302\267 Disco Gold", stx_preset_17, 18},
+	{"Retro \302\267 Windows 95", stx_preset_18, 18},
+	{"Retro \302\267 Typewriter", stx_preset_19, 18},
+	{"Retro \302\267 Cassette Label", stx_preset_20, 17},
+	{"Glitch \302\267 Datamosh", stx_preset_21, 18},
+	{"Glitch \302\267 RGB Split", stx_preset_22, 17},
+	{"Glitch \302\267 Corrupted File", stx_preset_23, 19},
+	{"Glitch \302\267 Static Burst", stx_preset_24, 19},
+	{"Glitch \302\267 Error 404", stx_preset_25, 23},
+	{"Glitch \302\267 Cyber Decode", stx_preset_26, 20},
+	{"CRT \302\267 Green Terminal", stx_preset_27, 22},
+	{"CRT \302\267 Amber Terminal", stx_preset_28, 17},
+	{"CRT \302\267 Power On", stx_preset_29, 19},
+	{"CRT \302\267 Broadcast", stx_preset_30, 20},
+	{"CRT \302\267 Teletext", stx_preset_31, 19},
+	{"CRT \302\267 Blue Screen", stx_preset_32, 20},
+	{"VHS \302\267 Tracking", stx_preset_33, 17},
+	{"VHS \302\267 Play OSD", stx_preset_34, 19},
+	{"VHS \302\267 Rewind", stx_preset_35, 20},
+	{"VHS \302\267 Home Video", stx_preset_36, 17},
+	{"Arcade \302\267 8-bit", stx_preset_37, 19},
+	{"Arcade \302\267 Insert Coin", stx_preset_38, 17},
+	{"Arcade \302\267 High Score", stx_preset_39, 16},
+	{"Arcade \302\267 Game Over", stx_preset_40, 18},
+	{"Arcade \302\267 Level Up", stx_preset_41, 20},
+	{"Comic \302\267 Pow", stx_preset_42, 24},
+	{"Comic \302\267 Speech Bubble", stx_preset_43, 21},
+	{"Comic \302\267 Kaboom", stx_preset_44, 20},
+	{"Elements \302\267 Fire", stx_preset_45, 17},
+	{"Elements \302\267 Ice", stx_preset_46, 19},
+	{"Elements \302\267 Gold", stx_preset_47, 20},
+	{"Elements \302\267 Toxic", stx_preset_48, 16},
+	{"Elements \302\267 Electric", stx_preset_49, 16},
+	{"Cute \302\267 Bubblegum", stx_preset_50, 21},
+	{"Cute \302\267 Kawaii Bounce", stx_preset_51, 20},
+	{"Cute \302\267 Pastel Cloud", stx_preset_52, 22},
+	{"Cute \302\267 Candy Pop", stx_preset_53, 22},
+	{"Clean \302\267 Lower Third", stx_preset_54, 17},
+	{"Clean \302\267 Minimal White", stx_preset_55, 17},
+	{"Clean \302\267 Bold Caption", stx_preset_56, 16},
+	{"Clean \302\267 Glass Pill", stx_preset_57, 19},
+	{"Clean \302\267 News Ticker", stx_preset_58, 18},
+	{"Clean \302\267 Gradient Title", stx_preset_59, 19},
+	{"Sci-fi \302\267 Hologram", stx_preset_60, 19},
+	{"Sci-fi \302\267 Matrix", stx_preset_61, 18},
+	{"Sci-fi \302\267 Warp Speed", stx_preset_62, 17},
+	{"Spooky \302\267 Haunted", stx_preset_63, 19},
+	{"Spooky \302\267 Blood Drip", stx_preset_64, 17},
+	{"Clean \302\267 Word Pop Captions", stx_preset_65, 18},
+	{"CRT \302\267 Sweep Type", stx_preset_66, 18},
+	{"Neon \302\267 Beat Sign", stx_preset_67, 16},
+	{"Party \302\267 Bass Drop", stx_preset_68, 27},
+	{"Party \302\267 Equalizer", stx_preset_69, 18},
 };
-#define STX_PRESET_COUNT 65
+#define STX_PRESET_COUNT 70

@@ -3,9 +3,10 @@ const fs = require('fs');
 const path = require('path');
 const { KEYS, FONTS, LISTS, PRESETS } = require('./text-spec.js');
 
-/* a preset sets the look and the motion; these stay yours */
+/* a preset sets the look and the motion; these stay yours (a preset may still
+ * suggest one, e.g. a sound to react to, if you haven't chosen it yourself) */
 const KEEP = new Set(['source', 'text', 'npFormat', 'npHide', 'clock', 'cdKind', 'cdMin', 'cdTime', 'cdDone', 'alignH',
-  'alignV', 'margin', 'wrap', 'size', 'replayOnShow', 'cycle', 'showSec', 'hideSec']);
+  'alignV', 'margin', 'wrap', 'size', 'replayOnShow', 'cycle', 'showSec', 'hideSec', 'react', 'reactSens', 'reactSmooth']);
 
 function cs(s) {
   let o = '"';

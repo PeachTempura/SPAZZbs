@@ -7,6 +7,8 @@
     spazzTextConfig  (detail = settings)        restyle without reloading
     spazzTextValue   (detail = {text, replay})  text from SPAZZamp / a file
     spazzTextNow     (detail = {title, pos, dur, state})  SPAZZamp's song
+    spazzTextAudio   (detail = {l, b, m, t, k})  sound levels 0..1 (level, bass,
+                                                mid, treble) and k = 1 on a beat
     spazzTextPlay                               play the entrance again
     spazzTextHide                               play the exit
   obs-browser sends obsSourceVisibleChanged when the source shows / hides.
@@ -31,7 +33,7 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
 #fx { position: relative; }
 #txt { position: relative; }
 #txt .line { display: block; }
-#txt .w { display: inline-block; white-space: pre; }
+#txt .w { display: inline-block; white-space: pre; transform-origin: 50% 60%; }
 #txt .l { display: inline-block; white-space: pre; transform-origin: 50% 60%;
   -webkit-background-clip: text; background-clip: text; color: transparent; will-change: transform, opacity; }
 #cursor { position: absolute; display: none; }
@@ -80,8 +82,12 @@ const DEFAULTS = {
   bgBorder: '#ff2bd6', bgBorderW: 0, rgb: false, rgbSpeed: 1, scan: 0, chroma: 0,
   enter: 'fade', idle: 'none', exit: 'fade', idleSpeed: 1, idleAmount: 1, glitchEvery: 4,
   enterMs: 800, exitMs: 600, stagger: 45, replayOnShow: true, cycle: false, showSec: 10, hideSec: 5,
+  animBy: 'letter',
+  react: 'off', reactSize: true, reactGlow: true, reactBounce: false, reactColor: false, reactShake: false,
+  reactFlash: false, reactSens: 1, reactSmooth: 0.5,
 };
-/* enters (and exits) that move each letter on its own: these take the stagger */
+/* enters (and exits) that move each piece on its own: these take the stagger.
+ * A "piece" (unit) is a letter, a word or the whole text: cfg.animBy. */
 const LETTER_FX = new Set(['typewriter', 'flicker', 'scramble', 'drop', 'wave', 'pop', 'spin', 'unfold', 'split', 'glitch', 'pixel']);
 const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@*+=<>/\\|?!';
 
@@ -176,7 +182,7 @@ function build(text) {
   const s = cfg.upper ? text.toUpperCase() : text;
   txtEl.textContent = '';
   fxEl.querySelectorAll('.spark').forEach((e) => e.remove());
-  const letters = [];
+  const letters = [], pieces = [];
   for (const lineText of s.replace(/\r/g, '').split('\n')) {
     const line = document.createElement('div');
     line.className = 'line';
@@ -186,22 +192,56 @@ function build(text) {
       if (/^ +$/.test(w)) { line.appendChild(document.createTextNode(w)); continue; }
       const ws = document.createElement('span');
       ws.className = 'w';
+      const idx = [];
       for (const ch of Array.from(w)) {
         const l = document.createElement('span');
         l.className = 'l';
         l.textContent = ch;
         l.__ch = ch;
         ws.appendChild(l);
+        idx.push(letters.length);
         letters.push(l);
       }
+      pieces.push({ el: ws, idx });
       line.appendChild(ws);
     }
     if (!line.childNodes.length) line.appendChild(document.createTextNode(' '));
     txtEl.appendChild(line);
   }
-  built = { letters, n: letters.length, bw: 1, bh: 1, pos: [] };
+  built = { letters, words: pieces, n: letters.length, bw: 1, bh: 1, pos: [] };
+  units();
   layout();
 }
+
+/* what moves as one piece: each letter, each word, or the whole text.
+ * unitOf[i] = letter i's piece; before[j] = letters ahead of piece j */
+function units() {
+  const { letters, words } = built;
+  const by = cfg.animBy === 'word' || cfg.animBy === 'whole' ? cfg.animBy : 'letter';
+  built.by = by;
+  if (by === 'word') {
+    built.unitEls = words.map((w) => w.el);
+    built.unitOf = new Array(letters.length);
+    words.forEach((w, j) => w.idx.forEach((i) => { built.unitOf[i] = j; }));
+    built.before = words.map((w) => w.idx[0]);
+    built.last = words.map((w) => w.idx[w.idx.length - 1]);
+  } else if (by === 'whole') {
+    built.unitEls = [txtEl];
+    built.unitOf = letters.map(() => 0);
+    built.before = [0];
+    built.last = [Math.max(0, letters.length - 1)];
+  } else {
+    built.unitEls = letters;
+    built.unitOf = letters.map((_, i) => i);
+    built.before = letters.map((_, i) => i);
+    built.last = letters.map((_, i) => i);
+  }
+  built.nu = built.unitEls.length;
+  /* the block is reused: nothing from a previous mode stays on it */
+  setS(txtEl, 'transform', 'none'); setS(txtEl, 'opacity', '1'); setS(txtEl, 'clipPath', 'none');
+}
+/* stagger between pieces: words wait longer than letters */
+const unitStagger = () => Math.max(0, +cfg.stagger || 0) * (built && built.by === 'word' ? 3 : 1);
 
 function fillImage() {
   const c1 = cfg.color1, c2 = cfg.color2, c3 = cfg.color3, a = (+cfg.angle || 0) + 'deg';
@@ -232,10 +272,19 @@ function layout() {
   /* x, y, w, h, and the top / height of the line it's on (chrome and sunset
    * fills run per line, like a real chrome title) */
   built.pos = built.letters.map((l) => { const line = l.parentNode.parentNode;
-    return [l.offsetLeft, l.offsetTop, l.offsetWidth, l.offsetHeight, line.offsetTop, line.offsetHeight]; });
+    const [x, y] = offsetIn(l, txtEl);
+    return [x, y, l.offsetWidth, l.offsetHeight, line.offsetTop, line.offsetHeight]; });
   built.fill = fillImage();
   built.perLine = cfg.fill === 'chrome' || cfg.fill === 'split';
   paintLetters(-1, 0);
+}
+
+/* where an element sits inside the text block, however its parents are moved
+ * (a moved word becomes its letters' offset parent) */
+function offsetIn(el, root) {
+  let x = 0, y = 0;
+  for (let e = el; e && e !== root; e = e.offsetParent) { x += e.offsetLeft; y += e.offsetTop; }
+  return [x, y];
 }
 
 /* the background layers each letter shows: scanlines, a shine band, the fill */
@@ -345,32 +394,41 @@ function place() {
 function frame0() {
   return { x: 0, y: 0, s: 1, sx: 1, sy: 1, rot: 0, rotX: 0, rotY: 0, skew: 0, op: 1, blur: 0, bright: 1,
     chroma: Math.max(0, +cfg.chroma || 0), glitch: 0, glow: 1, hue: 0, cursor: false, shine: -1, scan: 0,
-    L: built ? built.letters.map(() => ({ x: 0, y: 0, s: 1, rot: 0, rotX: 0, op: 1, ch: null, hue: 0 })) : [] };
+    glowAdd: 0, wipe: undefined,
+    U: built ? built.unitEls.map(() => ({ x: 0, y: 0, s: 1, rot: 0, rotX: 0, op: 1 })) : [],
+    L: built ? built.letters.map(() => ({ ch: null, hue: 0 })) : [] };
 }
 
 /* an entrance at progress p (0 = not there yet, 1 = in place); the exit runs
- * it backwards. t = ms since it started, lp(i) = letter i's progress */
+ * it backwards. t = ms since it started, lp(j) = piece j's progress (a piece
+ * is a letter, a word or the whole text) */
 function entrance(kind, F, p, t, lp, dur) {
-  const n = F.L.length, size = +cfg.size || 100, W = innerWidth, H = innerHeight;
+  const size = +cfg.size || 100, W = innerWidth, H = innerHeight;
   switch (kind) {
     case 'none': if (p <= 0) F.op = 0; break;
     case 'fade': F.op *= easeOut(p); break;
-    case 'typewriter': F.L.forEach((L, i) => { L.op = lp(i) > 0 ? 1 : 0; }); F.cursor = p < 1; break;
-    case 'flicker': F.L.forEach((L, i) => {
-      const q = lp(i);
-      L.op = q <= 0 ? 0.07 : q >= 1 ? 1 : (hash(Math.floor(t / 45) * 13 + i * 7) > 0.45 ? 1 : 0.12);
+    case 'typewriter':
+      /* the whole text types as one sweep, left to right */
+      if (built.by === 'whole') F.wipe = p;
+      else F.U.forEach((U, j) => { U.op = lp(j) > 0 ? 1 : 0; });
+      F.cursor = p < 1; break;
+    case 'flicker': F.U.forEach((U, j) => {
+      const q = lp(j);
+      U.op = q <= 0 ? 0.07 : q >= 1 ? 1 : (hash(Math.floor(t / 45) * 13 + j * 7) > 0.45 ? 1 : 0.12);
     }); F.glow *= 0.3 + 0.7 * p; break;
     case 'glitch': {
       const k = 1 - p;
       F.chroma += 14 * k; F.glitch = 60 * k * (hash(Math.floor(t / 60)) > 0.3 ? 1 : 0.2);
       F.x += (hash(Math.floor(t / 50) + 3) - 0.5) * 40 * k;
-      F.L.forEach((L, i) => { const q = lp(i); L.op = q > 0 ? 1 : 0; L.x = (hash(Math.floor(t / 70) + i) - 0.5) * 30 * (1 - q); });
+      F.U.forEach((U, j) => { const q = lp(j); U.op = q > 0 ? 1 : 0; U.x = (hash(Math.floor(t / 70) + j) - 0.5) * 30 * (1 - q); });
       break; }
-    case 'scramble': F.L.forEach((L, i) => {
-      const q = lp(i);
-      L.op = q > 0 ? 1 : 0;
-      if (q > 0 && q < 1 && L.ch === null && !/\s/.test(built.letters[i].__ch)) L.ch = GLYPHS[Math.floor(hash(Math.floor(t / 55) * 31 + i) * GLYPHS.length)];
-    }); break;
+    case 'scramble':
+      F.U.forEach((U, j) => { U.op = lp(j) > 0 ? 1 : 0; });
+      /* each letter decodes while its piece is coming in */
+      F.L.forEach((L, i) => {
+        const q = lp(built.unitOf[i]);
+        if (q > 0 && q < 1 && L.ch === null && !/\s/.test(built.letters[i].__ch)) L.ch = GLYPHS[Math.floor(hash(Math.floor(t / 55) * 31 + i) * GLYPHS.length)];
+      }); break;
     case 'crt':
       if (p < 0.3) { F.sx *= easeOut(p / 0.3); F.sy *= 0.012; F.bright = 4; }
       else if (p < 0.75) { const q = (p - 0.3) / 0.45; F.sy *= Math.max(0.012, easeBack(q)); F.bright = lerp(4, 1.4, q); }
@@ -393,14 +451,14 @@ function entrance(kind, F, p, t, lp, dur) {
       else { const q = (p - 0.6) / 0.4; F.s *= 1 + 0.08 * Math.sin(q * Math.PI * 3) * (1 - q);
         F.x += (hash(Math.floor(t / 30)) - 0.5) * 16 * (1 - q); F.y += (hash(Math.floor(t / 30) + 9) - 0.5) * 16 * (1 - q); }
       break; }
-    case 'drop': F.L.forEach((L, i) => { const q = lp(i); L.y -= (1 - bounce(q)) * size * 1.6; L.op = clamp(q * 4); }); break;
-    case 'wave': F.L.forEach((L, i) => { const q = lp(i); L.y += (1 - easeBack(q)) * size * 0.9; L.op = easeOut(q); }); break;
-    case 'pop': F.L.forEach((L, i) => { const q = lp(i); L.s *= Math.max(0, easeBack(q)); L.op = clamp(q * 3); }); break;
-    case 'spin': F.L.forEach((L, i) => { const q = lp(i); L.rot -= (1 - easeOut(q)) * 360; L.s *= 0.3 + 0.7 * easeOut(q); L.op = clamp(q * 2); }); break;
-    case 'unfold': F.L.forEach((L, i) => { const q = lp(i); L.rotX = (1 - easeOut(q)) * 90; L.op = clamp(q * 2.5); }); break;
-    case 'split': F.L.forEach((L, i) => { const q = lp(i); L.x += (i % 2 ? 1 : -1) * (1 - easeOut(q)) * W * 0.35; L.op = clamp(q * 2); }); break;
+    case 'drop': F.U.forEach((U, j) => { const q = lp(j); U.y -= (1 - bounce(q)) * size * 1.6; U.op = clamp(q * 4); }); break;
+    case 'wave': F.U.forEach((U, j) => { const q = lp(j); U.y += (1 - easeBack(q)) * size * 0.9; U.op = easeOut(q); }); break;
+    case 'pop': F.U.forEach((U, j) => { const q = lp(j); U.s *= Math.max(0, easeBack(q)); U.op = clamp(q * 3); }); break;
+    case 'spin': F.U.forEach((U, j) => { const q = lp(j); U.rot -= (1 - easeOut(q)) * 360; U.s *= 0.3 + 0.7 * easeOut(q); U.op = clamp(q * 2); }); break;
+    case 'unfold': F.U.forEach((U, j) => { const q = lp(j); U.rotX = (1 - easeOut(q)) * 90; U.op = clamp(q * 2.5); }); break;
+    case 'split': F.U.forEach((U, j) => { const q = lp(j); U.x += (j % 2 ? 1 : -1) * (1 - easeOut(q)) * W * 0.35; U.op = clamp(q * 2); }); break;
     case 'blur': F.blur += (1 - p) * 24; F.op *= p; F.s *= 1.08 - 0.08 * p; break;
-    case 'pixel': F.L.forEach((L, i) => { const q = lp(i); L.op = q >= hash(i * 3.7) * 0.6 + 0.05 ? 1 : 0; L.s *= q < 1 ? Math.ceil(q * 4) / 4 : 1; });
+    case 'pixel': F.U.forEach((U, j) => { const q = lp(j); U.op = q >= hash(j * 3.7) * 0.6 + 0.05 ? 1 : 0; U.s *= q < 1 ? Math.ceil(q * 4) / 4 : 1; });
       F.blur += p < 1 ? Math.round((1 - p) * 4) * 2 : 0; break;
   }
 }
@@ -409,12 +467,13 @@ function entrance(kind, F, p, t, lp, dur) {
  * eases it in so nothing jumps */
 function idleFx(F, ti, ramp) {
   const k = Math.max(0.05, +cfg.idleSpeed || 1), a = Math.max(0, +cfg.idleAmount || 0) * ramp;
-  const size = +cfg.size || 100, n = F.L.length, tt = ti * k;
+  const size = +cfg.size || 100, tt = ti * k;
+  const ph = built.by === 'word' ? 1.1 : 0.5; /* how far apart neighbouring pieces move */
   switch (cfg.idle) {
     case 'flicker': {
       const win = Math.floor(tt * 9);
       if (hash(win * 1.7) > 1 - 0.06 * a) F.op *= 0.35 + 0.4 * hash(win);
-      F.L.forEach((L, i) => { if (hash(win * 7.3 + i * 1.9) > 1 - 0.025 * a) L.op *= 0.12; });
+      F.U.forEach((U, j) => { if (hash(win * 7.3 + j * 1.9) > 1 - 0.025 * a) U.op *= 0.12; });
       F.glow *= 1 + 0.08 * noise(tt * 20) * a; break; }
     case 'buzz': F.glow *= 1 + 0.18 * noise(tt * 45) * a; F.op *= 1 - 0.08 * a * Math.abs(noise(tt * 30));
       F.x += noise(tt * 50) * 0.8 * a; break;
@@ -423,9 +482,9 @@ function idleFx(F, ti, ramp) {
     case 'heartbeat': { const ph = (tt % 1.2) / 1.2; const beat = Math.exp(-Math.pow((ph - 0.08) / 0.04, 2)) + 0.6 * Math.exp(-Math.pow((ph - 0.28) / 0.05, 2));
       F.s *= 1 + 0.08 * a * beat; F.glow *= 1 + 0.6 * beat * a; break; }
     case 'float': F.y += Math.sin(tt * Math.PI * 0.7) * 12 * a; F.rot += Math.sin(tt * Math.PI * 0.45) * 0.8 * a; break;
-    case 'wave': F.L.forEach((L, i) => { L.y += Math.sin(tt * Math.PI * 1.6 - i * 0.5) * size * 0.1 * a; }); break;
-    case 'bounce': F.L.forEach((L, i) => { L.y -= Math.abs(Math.sin(tt * Math.PI * 1.2 - i * 0.35)) * size * 0.14 * a; }); break;
-    case 'rainbow': F.L.forEach((L, i) => { L.hue = (tt * 140 + i * 24) % 360; }); break;
+    case 'wave': F.U.forEach((U, j) => { U.y += Math.sin(tt * Math.PI * 1.6 - j * ph) * size * 0.1 * a; }); break;
+    case 'bounce': F.U.forEach((U, j) => { U.y -= Math.abs(Math.sin(tt * Math.PI * 1.2 - j * ph * 0.7)) * size * 0.14 * a; }); break;
+    case 'rainbow': F.L.forEach((L, i) => { L.hue = (tt * 140 + built.unitOf[i] * (built.by === 'word' ? 48 : 24)) % 360; }); break;
     case 'shimmer': F.shine = ((tt / 2.6) % 1) * 1.6 - 0.3; break;
     case 'glitch': {
       const every = Math.max(0.4, +cfg.glitchEvery || 4) / k;
@@ -435,7 +494,7 @@ function idleFx(F, ti, ramp) {
         const r = hash(Math.floor(ti * 30));
         F.chroma += (5 + 8 * r) * a; F.glitch = (20 + 50 * r) * a;
         F.x += (hash(Math.floor(ti * 25) + 1) - 0.5) * 24 * a; F.skew += (r - 0.5) * 8 * a;
-        F.L.forEach((L, i) => { if (hash(Math.floor(ti * 20) * 3 + i) > 0.7) { L.x += (hash(i + cyc) - 0.5) * size * 0.25 * a; L.op *= 0.7; } });
+        F.U.forEach((U, j) => { if (hash(Math.floor(ti * 20) * 3 + j) > 0.7) { U.x += (hash(j + cyc) - 0.5) * size * 0.25 * a; U.op *= 0.7; } });
       }
       break; }
     case 'vhs': F.skew += noise(tt * 3) * 1.6 * a; F.x += noise(tt * 7 + 4) * 3 * a;
@@ -445,7 +504,7 @@ function idleFx(F, ti, ramp) {
     case 'hologram': F.op *= 0.78 + 0.22 * Math.abs(noise(tt * 12)); F.scan = tt * 60; F.forceScan = !(+cfg.scan > 0);
       F.chroma += Math.abs(noise(tt * 4)) * 3 * a; if (hash(Math.floor(tt * 8)) > 0.93) F.x += (hash(tt) - 0.5) * 18 * a; break;
     case 'jitter': { const w = Math.floor(tt * 14);
-      F.L.forEach((L, i) => { L.x += (hash(w * 5 + i) - 0.5) * 5 * a; L.y += (hash(w * 9 + i + 50) - 0.5) * 5 * a; }); break; }
+      F.U.forEach((U, j) => { U.x += (hash(w * 5 + j) - 0.5) * 5 * a; U.y += (hash(w * 9 + j + 50) - 0.5) * 5 * a; }); break; }
     case 'shake': { const w = Math.floor(tt * 30); F.x += (hash(w) - 0.5) * 14 * a; F.y += (hash(w + 77) - 0.5) * 14 * a; break; }
     case 'swing': F.rot += Math.sin(tt * Math.PI) * 5 * a; break;
     case 'wobble': F.skew += Math.sin(tt * Math.PI * 1.4) * 7 * a; F.sx *= 1 + 0.035 * Math.sin(tt * Math.PI * 2.8) * a; break;
@@ -458,10 +517,12 @@ function idleFx(F, ti, ramp) {
 
 /* timeline at `now`: which phase, and how far into it */
 function timeline(now) {
-  const n = built ? built.n : 0;
-  const st = Math.max(0, +cfg.stagger || 0);
+  const n = built ? built.n : 0, nu = built ? built.nu : 0;
+  const st = Math.max(0, +cfg.stagger || 0), ust = unitStagger();
+  /* typing takes as long however it's split up: by word each word lands
+   * when its letters would have, the whole text sweeps in over that time */
   const span = (kind, ms) => (kind === 'typewriter' ? Math.max(1, n) * Math.max(st, 15)
-    : LETTER_FX.has(kind) ? ms + st * Math.max(0, n - 1) : ms);
+    : LETTER_FX.has(kind) ? ms + ust * Math.max(0, nu - 1) : ms);
   const enterLen = cfg.enter === 'none' ? 0 : span(cfg.enter, Math.max(1, +cfg.enterMs || 1));
   const exitLen = cfg.exit === 'none' ? 0 : span(cfg.exit, Math.max(1, +cfg.exitMs || 1));
   let t = now - playAt;
@@ -501,16 +562,17 @@ function render(now) {
   setS(animEl, 'visibility', 'visible');
 
   const F = frame0();
-  const st = Math.max(0, +cfg.stagger || 0);
+  const st = Math.max(0, +cfg.stagger || 0), ust = unitStagger(), step = Math.max(st, 15);
   if (tl.phase === 'enter') {
     const kind = cfg.enter, ms = Math.max(1, +cfg.enterMs || 1);
-    const lp = kind === 'typewriter' ? (i) => (tl.t >= i * Math.max(st, 15) ? 1 : 0)
-      : LETTER_FX.has(kind) ? (i) => clamp((tl.t - i * st) / ms) : () => clamp(tl.t / ms);
+    const lp = kind === 'typewriter' ? (j) => (tl.t >= built.before[j] * step ? 1 : 0)
+      : LETTER_FX.has(kind) ? (j) => clamp((tl.t - j * ust) / ms) : () => clamp(tl.t / ms);
     entrance(kind, F, clamp(tl.t / tl.len), tl.t, lp, ms);
   } else if (tl.phase === 'exit') {
     const kind = cfg.exit, ms = Math.max(1, +cfg.exitMs || 1);
-    const lp = kind === 'typewriter' ? (i) => (tl.t >= (F.L.length - 1 - i) * Math.max(st, 15) ? 0 : 1)
-      : LETTER_FX.has(kind) ? (i) => 1 - clamp((tl.t - i * st) / ms) : () => 1 - clamp(tl.t / ms);
+    /* typing backwards: a piece goes when its first letter is deleted */
+    const lp = kind === 'typewriter' ? (j) => (tl.t >= (built.n - 1 - built.before[j]) * step ? 0 : 1)
+      : LETTER_FX.has(kind) ? (j) => 1 - clamp((tl.t - j * ust) / ms) : () => 1 - clamp(tl.t / ms);
     const top = tl.from === undefined ? 1 : tl.from;
     entrance(kind, F, Math.min(top, 1 - clamp(tl.t / tl.len)), tl.t, (i) => Math.min(top, lp(i)), ms);
     if (kind === 'typewriter') F.cursor = true;
@@ -519,7 +581,50 @@ function render(now) {
   }
   if (tl.phase !== 'idle' && cfg.idle === 'marquee') F.marquee = 0;
   if (cfg.rgb) F.hue = ((now / 1000) * 90 * Math.max(0.05, +cfg.rgbSpeed || 1)) % 360;
+  react(F, now);
   draw(F);
+}
+
+/* ---------------- reacting to sound ---------------- */
+
+const AU0 = { l: 0, b: 0, m: 0, t: 0 };
+let au = Object.assign({}, AU0), auWant = Object.assign({}, AU0);
+let beatEnv = 0, auAt = -1e9, auPrev = 0;
+
+/* levels from the source (desktop audio or SPAZZamp), eased by Smoothing,
+ * then layered on top of whatever the text is doing */
+function react(F, now) {
+  const dt = clamp((now - auPrev) / 1000, 0, 0.1);
+  auPrev = now;
+  if (cfg.react === 'off') { au = Object.assign({}, AU0); beatEnv = 0; return; }
+  if (now - auAt > 300) auWant = AU0; /* nothing heard for a moment: settle */
+  const rate = lerp(30, 2.5, clamp(+cfg.reactSmooth || 0));
+  const e = 1 - Math.exp(-rate * dt);
+  /* tiny leftovers snap to zero, so quiet text sits perfectly still */
+  for (const k of ['l', 'b', 'm', 't']) { au[k] += (auWant[k] - au[k]) * e; if (au[k] < 1e-3) au[k] = 0; }
+  beatEnv *= Math.exp(-dt * 7);
+  if (beatEnv < 1e-3) beatEnv = 0;
+  const S = Math.max(0, +cfg.reactSens || 0), c = (x) => clamp(x * S, 0, 1.5);
+  const b = c(au.b), l = c(au.l), m = c(au.m), t = c(au.t), k = clamp(beatEnv * Math.min(S, 1.5), 0, 1.5);
+  const size = +cfg.size || 100;
+  if (cfg.reactSize && (b || k)) F.s *= 1 + 0.14 * b + 0.06 * k;
+  if (cfg.reactGlow) F.glowAdd += 0.9 * l + 0.7 * k;
+  if (cfg.reactBounce) {
+    /* across the text like an equaliser: bass on the left, treble on the right */
+    const nu = F.U.length;
+    F.U.forEach((U, j) => {
+      const x = nu > 1 ? j / (nu - 1) : 0;
+      const v = x < 0.5 ? lerp(b, m, x * 2) : lerp(m, t, x * 2 - 1);
+      U.y -= size * 0.22 * v;
+    });
+  }
+  if (cfg.reactColor) F.hue += 120 * m + 60 * k;
+  if (cfg.reactShake && k > 0.02) {
+    const w = Math.floor(now / 40);
+    F.x += (hash(w) - 0.5) * size * 0.16 * k; F.y += (hash(w + 5) - 0.5) * size * 0.16 * k;
+    F.rot += (hash(w + 11) - 0.5) * 4 * k;
+  }
+  if (cfg.reactFlash) F.bright *= 1 + 0.5 * k + 0.25 * t;
 }
 let songChanged = false;
 
@@ -538,7 +643,7 @@ function draw(F) {
   if (F.blur > 0.05) af.push(`blur(${F.blur.toFixed(1)}px)`);
   if (F.bright !== 1) af.push(`brightness(${F.bright.toFixed(2)})`);
   setS(animEl, 'filter', af.join(' ') || 'none');
-  setS(hueEl, 'filter', F.hue ? `hue-rotate(${F.hue.toFixed(1)}deg)` : 'none');
+  setS(hueEl, 'filter', F.hue ? `hue-rotate(${(F.hue % 360).toFixed(1)}deg)` : 'none');
 
   /* glow, shadow, 3D extrusion, colour split */
   const size = +cfg.size || 100, fl = [];
@@ -554,16 +659,16 @@ function draw(F) {
   if (ex > 0) { const steps = Math.min(8, Math.max(2, Math.ceil(ex / 2))), d = (ex / steps).toFixed(2);
     for (let i = 0; i < steps; i++) fl.push(`drop-shadow(${d}px ${d}px 0 ${cfg.extrudeColor})`); }
   if ((+cfg.shadowOpacity || 0) > 0) fl.push(`drop-shadow(${+cfg.shadowX || 0}px ${+cfg.shadowY || 0}px ${Math.max(0, +cfg.shadowBlur || 0)}px ${rgba(cfg.shadowColor, cfg.shadowOpacity)})`);
-  const g = (+cfg.glow || 0) * F.glow;
+  const g = (+cfg.glow || 0) * F.glow + F.glowAdd;
   if (g > 0.01) { const r = size * 0.05 * g;
     fl.push(`drop-shadow(0 0 ${(r * 0.25).toFixed(1)}px ${cfg.glowColor})`, `drop-shadow(0 0 ${(r * 0.7).toFixed(1)}px ${cfg.glowColor})`,
       `drop-shadow(0 0 ${(r * 1.6).toFixed(1)}px ${rgba(cfg.glowColor, 0.85)})`); }
   setS(fxEl, 'filter', fl.join(' ') || 'none');
 
-  /* letters */
-  const L = F.L, letters = built.letters;
-  for (let i = 0; i < letters.length; i++) {
-    const s = L[i], el = letters[i];
+  /* the pieces move (letters, words or the whole text) ... */
+  const U = F.U, pieces = built.unitEls;
+  for (let j = 0; j < pieces.length; j++) {
+    const s = U[j], el = pieces[j];
     const t = [];
     if (s.x || s.y) t.push(`translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`);
     if (s.rotX) t.push(`perspective(600px) rotateX(${s.rotX.toFixed(1)}deg)`);
@@ -571,6 +676,13 @@ function draw(F) {
     if (s.s !== 1) t.push(`scale(${Math.max(0, s.s).toFixed(3)})`);
     setS(el, 'transform', t.join(' ') || 'none');
     setS(el, 'opacity', String(clamp(s.op).toFixed(3)));
+  }
+  /* ... the whole text typing in sweeps across */
+  setS(txtEl, 'clipPath', F.wipe !== undefined ? `inset(-40% ${((1 - clamp(F.wipe)) * 100).toFixed(2)}% -40% -10%)` : 'none');
+  /* ... and each letter keeps its own colour and character */
+  const L = F.L, letters = built.letters;
+  for (let i = 0; i < letters.length; i++) {
+    const s = L[i], el = letters[i];
     setS(el, 'filter', s.hue ? `hue-rotate(${s.hue.toFixed(0)}deg)` : 'none');
     const ch = s.ch === null ? el.__ch : s.ch;
     if (el.textContent !== ch) el.textContent = ch;
@@ -587,8 +699,10 @@ function draw(F) {
   /* the typing cursor sits after the last letter showing */
   if (F.cursor) {
     let last = -1;
-    for (let i = 0; i < L.length; i++) if (L[i].op > 0.5) last = i;
-    const p = last >= 0 ? built.pos[last] : [0, 0, 0, built.pos[0] ? built.pos[0][3] : size];
+    for (let i = 0; i < L.length; i++) if (U[built.unitOf[i]].op > 0.5) last = i;
+    let p = last >= 0 ? built.pos[last] : [0, 0, 0, built.pos[0] ? built.pos[0][3] : size];
+    /* sweeping in: the cursor rides the edge, on the last line */
+    if (F.wipe !== undefined) { const lp = built.pos[built.n - 1] || p; p = [built.bw * clamp(F.wipe), lp[1], 0, lp[3]]; }
     cursorEl.textContent = '\u258c';
     cursorEl.style.display = 'block';
     cursorEl.style.left = (p[0] + p[2] + size * 0.04) + 'px';
@@ -645,7 +759,8 @@ function hideNow() { const n = nowMs(); const tl = timeline(n); if (tl.phase !==
 window.addEventListener('spazzTextConfig', (e) => {
   const d = e.detail || {};
   /* only a different animation or text replays it; restyling doesn't */
-  const replay = d.enter !== cfg.enter || d.text !== cfg.text || d.source !== cfg.source || d.cycle !== cfg.cycle;
+  const replay = d.enter !== cfg.enter || d.text !== cfg.text || d.source !== cfg.source || d.cycle !== cfg.cycle ||
+    d.animBy !== cfg.animBy;
   apply(d, replay && !d.__noReplay);
 });
 window.addEventListener('spazzTextValue', (e) => {
@@ -658,6 +773,12 @@ window.addEventListener('spazzTextNow', (e) => {
   const title = String(d.title || '');
   if (title !== song.title) songChanged = true;
   song = { title, pos: +d.pos || 0, dur: +d.dur || 0, state: +d.state || 0 };
+});
+window.addEventListener('spazzTextAudio', (e) => {
+  const d = e.detail || {};
+  auWant = { l: +d.l || 0, b: +d.b || 0, m: +d.m || 0, t: +d.t || 0 };
+  if (d.k) beatEnv = 1;
+  auAt = nowMs();
 });
 window.addEventListener('spazzTextPlay', play);
 window.addEventListener('spazzTextHide', hideNow);
@@ -694,6 +815,7 @@ window.__text = {
   hide: (ms) => { liveNow = ms; hideNow(); },
   song: (d) => window.dispatchEvent(new CustomEvent('spazzTextNow', { detail: d })),
   value: (d) => window.dispatchEvent(new CustomEvent('spazzTextValue', { detail: d })),
+  audio: (ms, d) => { liveNow = ms; window.dispatchEvent(new CustomEvent('spazzTextAudio', { detail: d })); },
   fontsLoad: () => Promise.all(Array.from(document.fonts).map((f) => f.load().catch(() => null))).then(() => layout()),
 };
 boot();
