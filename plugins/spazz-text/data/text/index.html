@@ -631,6 +631,9 @@ function sparkles(t) {
 function apply(c, replay) {
   const prev = cfg;
   cfg = Object.assign({}, DEFAULTS, c || {});
+  /* a reloaded page gets the file's text and SPAZZamp's song with its settings */
+  if (c && c.fileText !== undefined) pushed = String(c.fileText);
+  if (c && c.song && typeof c.song === 'object') song = { title: String(c.song.title || ''), pos: +c.song.pos || 0, dur: +c.song.dur || 0, state: +c.song.state || 0 };
   if (cfg.source === 'countdown' && (prev.source !== 'countdown' || prev.cdMin !== cfg.cdMin || !countdownFrom)) countdownFrom = Date.now();
   build(wantedText());
   if (replay) play();
