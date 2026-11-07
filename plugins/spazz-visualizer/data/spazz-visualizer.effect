@@ -28,7 +28,18 @@ uniform float level;
 uniform float beat;
 uniform float hue;
 uniform float density;
-uniform float bg;
+uniform float bg;        /* how much backdrop: 0 transparent .. 1 solid */
+
+/* the look controls, the same for every style */
+uniform float3 pal_a;    /* colour palette (pal_mix 0 = the prism rainbow) */
+uniform float3 pal_b;
+uniform float3 pal_c;
+uniform float pal_mix;
+uniform float4 grade;    /* x brightness, y saturation, z fade (crossfades), w unused */
+uniform float3 bg_col;   /* flat backdrop colour ... */
+uniform float bg_flat;   /* ... instead of the midnight gradient */
+uniform float4 view;     /* x zoom, y mirror left-right, z mirror top-bottom, w flip upside down */
+uniform float flip_x;
 
 sampler_state band_sampler {
 	Filter   = Linear;
@@ -67,12 +78,35 @@ float hash11(float p)
 	return frac(p);
 }
 
-/* Soft jewel-toned rainbow */
+/* Soft jewel-toned rainbow, or the chosen palette's three colours in a loop */
 float3 prism(float h)
 {
 	float3 c = 0.5 + 0.5 * cos(6.2831853 * (h + float3(0.0, 0.333, 0.667)));
 	c = c * c * (3.0 - 2.0 * c);
-	return lerp(c, float3(1.0, 1.0, 1.0), 0.12);
+	float3 rainbow = lerp(c, float3(1.0, 1.0, 1.0), 0.12);
+
+	float t = frac(h) * 3.0;
+	float3 w = smoothstep(0.0, 1.0, saturate(float3(t, t - 1.0, t - 2.0)));
+	float3 pc = lerp(lerp(lerp(pal_a, pal_b, w.x), pal_c, w.y), pal_a, w.z);
+	return lerp(rainbow, pc, pal_mix);
+}
+
+/* zoom, mirror and flip, applied to every style's coordinates */
+float2 view_uv(float2 uv)
+{
+	uv = (uv - 0.5) / max(view.x, 0.1) + 0.5;
+	uv.x = lerp(uv.x, 1.0 - uv.x, flip_x);
+	uv.y = lerp(uv.y, 1.0 - uv.y, view.w);
+	uv.x = lerp(uv.x, 0.5 - abs(uv.x - 0.5), view.y);
+	uv.y = lerp(uv.y, 0.5 - abs(uv.y - 0.5), view.z);
+	return uv;
+}
+
+/* brightness and saturation */
+float3 graded(float3 c)
+{
+	float l = dot(c, float3(0.299, 0.587, 0.114));
+	return max(lerp(float3(l, l, l), c, grade.y), float3(0.0, 0.0, 0.0)) * grade.x;
 }
 
 float4 band_full(float x)
@@ -91,18 +125,19 @@ float3 midnight(float2 uv)
 	float3 bot = float3(0.030, 0.020, 0.052);
 	float3 c = lerp(top, bot, uv.y);
 	float2 d = uv - 0.5;
-	return c * (1.0 - 0.9 * dot(d, d));
+	return lerp(c * (1.0 - 0.9 * dot(d, d)), bg_col, bg_flat);
 }
 
 /* Tone-map accumulated light and output either transparent or over the
  * midnight backdrop. */
 float4 finish(float3 light, float2 uv)
 {
-	float3 col = 1.0 - exp(-max(light, float3(0.0, 0.0, 0.0)));
+	float3 col = 1.0 - exp(-graded(max(light, float3(0.0, 0.0, 0.0))));
 	float a = saturate(max(col.r, max(col.g, col.b)) * 1.15);
-	float4 clear_out = float4(col / max(a, 0.0001), a);
-	float4 night_out = float4(midnight(uv) + col, 1.0);
-	return lerp(clear_out, night_out, bg);
+	/* light over the backdrop, which is bg see-through */
+	float out_a = saturate(a + bg * (1.0 - a));
+	float3 out_c = (col + midnight(uv) * bg) / max(out_a, 0.0001);
+	return float4(min(out_c, float3(1.0, 1.0, 1.0)), out_a * grade.z);
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,7 +257,7 @@ float3 beat_flare(float2 p, float aspect)
 
 float4 PSPrismRain(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
@@ -243,7 +278,7 @@ float4 PSPrismRain(VertData v_in) : TARGET
 
 float4 PSPrismHalo(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
@@ -296,7 +331,7 @@ float4 PSPrismHalo(VertData v_in) : TARGET
 
 float4 PSSpectrumGlass(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 
@@ -373,8 +408,10 @@ float2 rot2(float2 v, float a)
  * the midnight backdrop */
 float4 finish_paint(float4 c, float2 uv)
 {
-	float4 night_out = float4(lerp(midnight(uv), c.rgb, c.a), 1.0);
-	return lerp(c, night_out, bg);
+	float3 rgb = min(graded(c.rgb), float3(1.0, 1.0, 1.0));
+	float out_a = c.a + bg * (1.0 - c.a);
+	float3 out_c = (rgb * c.a + midnight(uv) * bg * (1.0 - c.a)) / max(out_a, 0.0001);
+	return float4(out_c, out_a * grade.z);
 }
 
 float4 over(float4 under_c, float3 col, float a)
@@ -389,7 +426,7 @@ float4 over(float4 under_c, float3 col, float a)
 
 float4 PSPrismPetals(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
@@ -437,7 +474,7 @@ float4 PSPrismPetals(VertData v_in) : TARGET
 
 float4 PSPrismAurora(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float x = uv.x;
@@ -472,7 +509,7 @@ float4 PSPrismAurora(VertData v_in) : TARGET
 
 float4 PSPrismTunnel(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
 	q = rot2(q, time * 0.05 + bass * 0.08);
@@ -505,7 +542,7 @@ float4 PSPrismTunnel(VertData v_in) : TARGET
 
 float4 PSPrismWaves(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float x = uv.x * aspect;
@@ -535,7 +572,7 @@ float4 PSPrismWaves(VertData v_in) : TARGET
 
 float4 PSBubbles(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
@@ -580,7 +617,7 @@ float4 PSBubbles(VertData v_in) : TARGET
 
 float4 PSConfetti(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
 	float cols = floor(26.0 * max(density, 0.3));
@@ -627,7 +664,7 @@ float4 PSConfetti(VertData v_in) : TARGET
 
 float4 PSBounceBuddies(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
@@ -692,7 +729,7 @@ float4 PSBounceBuddies(VertData v_in) : TARGET
 
 float4 PSDiscoFloor(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
@@ -750,36 +787,524 @@ float4 PSDiscoFloor(VertData v_in) : TARGET
 }
 
 /* ------------------------------------------------------------------ */
-/* lava lamp: soft blobs that merge and drift, faster with the bass    */
+/* lava lamp: wax that warms at the bottom, rises, cools and sinks.    */
+/* The music is the heat: louder makes the wax swell, glow and move.   */
+
+/* the glass's half width at height y (lamp units: 0 top .. 1 bottom) */
+float lamp_glass_w(float y)
+{
+	float t = saturate((y - 0.13) / 0.66);
+	return lerp(0.072, 0.178, smoothstep(0.0, 0.82, t)) - 0.018 * smoothstep(0.86, 1.0, t);
+}
 
 float4 PSLavaLamp(VertData v_in) : TARGET
 {
-	float2 uv = v_in.uv;
+	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
-	float field = 0.0;
-	float hue_acc = 0.0;
 
-	for (int i = 0; i < 7; i++) {
-		float fi = float(i);
-		float h = hash11(fi * 7.3 + 1.0);
-		float e = band_level((fi + 0.5) / 7.0);
-		float2 c = float2(aspect * (0.5 + 0.36 * sin(time * (0.11 + 0.05 * h) + fi * 2.4)),
-				  0.5 + 0.38 * sin(time * (0.12 + 0.08 * h) * (1.0 + level) + fi * 1.7));
-		float rr = 0.07 + 0.04 * h + 0.08 * e;
-		float2 d = p - c;
-		float k = rr * rr / max(dot(d, d), 0.00001);
-		field += k;
-		hue_acc += k * (fi / 7.0);
+	/* one big lamp; turn Amount up for a row of them */
+	float lamps = 2.0 * floor(max((aspect * density - 0.5) * 0.75, 0.0)) + 1.0;
+	float cw = aspect / lamps;
+	float li = clamp(floor(p.x / cw), 0.0, lamps - 1.0);
+	float H = min(0.94, cw * 1.9);
+	float2 l = float2(p.x - (li + 0.5) * cw, p.y - (1.0 - H) * 0.5) / H;
+	float pw = px / H; /* one pixel in lamp units */
+	float seed = hash11(li * 7.77 + 1.3);
+
+	float3 wax = prism(hue + li * 0.29 + 0.02);
+	float3 liquid = lerp(prism(hue + li * 0.29 + 0.78), float3(0.08, 0.06, 0.16), 0.35);
+	float heat_glow = 0.55 + 0.6 * level + 0.35 * bass + 0.25 * beat;
+
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+
+	/* soft light around the glass */
+	float gw = lamp_glass_w(l.y);
+	float in_band = smoothstep(0.05, 0.16, l.y) * (1.0 - smoothstep(0.8, 0.9, l.y));
+	float out_d = max(abs(l.x) - gw, 0.0);
+	col = over(col, wax, saturate(exp(-out_d / (0.05 + 0.04 * level)) * in_band * 0.32 * heat_glow) * step(0.0001, out_d));
+
+	/* ---- the glass: liquid, wax, highlights ---- */
+	float de = gw - abs(l.x); /* distance inside the glass edge */
+	float glass_a = smoothstep(-pw, pw, de) * smoothstep(0.13 - pw, 0.13 + pw, l.y) * (1.0 - smoothstep(0.79 - pw, 0.79 + pw, l.y));
+	BRANCH
+	if (glass_a > 0.0) {
+		float field = 0.0;
+		float hot = 0.0;
+		for (int i = 0; i < 7; i++) {
+			float fi = float(i);
+			float s1 = hash11(fi * 3.71 + li * 13.1 + 0.5);
+			float s2 = hash11(fi * 9.13 + li * 5.3 + 2.0);
+			/* whole turns per 64 of flow, so the flow wrap is seamless */
+			float turns = 3.0 + floor(s1 * 4.0);
+			float ph = 6.2831853 * (turns * flow / 64.0 + s2);
+			float rise = 0.5 - 0.5 * cos(ph);
+			rise = rise * rise * (3.0 - 2.0 * rise); /* lingers at the top and bottom */
+			float by = 0.76 - rise * 0.56;
+			float bx = lamp_glass_w(by) * 0.5 * sin(time * (0.11 + 0.07 * s1) + s2 * 40.0);
+			float e = band_level((fi + 0.5) / 7.0);
+			float r = (0.028 + 0.022 * s1) * (0.85 + 0.5 * e + 0.12 * beat);
+			/* stretched while it moves, round when it rests */
+			float stretch = 1.0 + 0.55 * abs(sin(ph)) * (1.0 - abs(rise - 0.5));
+			float2 d = (l - float2(bx, by)) * float2(sqrt(stretch), 1.0 / stretch);
+			float k = r * r / max(dot(d, d), 0.000001);
+			field += k;
+			hot += k * e;
+		}
+		/* the pool of warm wax on the bottom, and a little stuck at the top */
+		float2 pool = float2(l.x / (lamp_glass_w(0.8) * 1.05), (l.y - 0.815) / (0.028 + 0.02 * bass + 0.008 * beat));
+		field += 1.0 / max(dot(pool, pool), 0.0001);
+		float2 cap = float2(l.x / 0.035, (l.y - 0.126) / 0.012);
+		field += 0.6 / max(dot(cap, cap), 0.0001);
+
+		float heat = saturate((l.y - 0.13) / 0.66);
+		/* the liquid, lit from the bulb below */
+		float3 liq = liquid * (0.35 + 0.55 * heat * heat) * heat_glow + wax * 0.1 * heat * heat;
+		col = over(col, liq, 0.82 * glass_a);
+
+		/* the wax */
+		float fw = 22.0 * pw;
+		float inside = smoothstep(1.0 - fw, 1.0 + fw, field);
+		float core = smoothstep(1.0, 4.0, field);
+		float3 w = wax * (0.62 + 0.38 * heat + 0.35 * core) * heat_glow;
+		w = lerp(w, float3(1.0, 0.95, 0.85), 0.18 * core * core + 0.12 * saturate(hot / max(field, 0.001)));
+		/* a darker skin where the wax is thin */
+		w *= 0.75 + 0.25 * smoothstep(1.0, 1.6, field);
+		col = over(col, w, inside * glass_a);
+		/* a soft glow just around each blob */
+		col = over(col, wax * heat_glow, (1.0 - inside) * smoothstep(0.6, 1.0, field) * 0.22 * glass_a);
+
+		/* the glass catches the light: a bright edge and a long reflection */
+		float edge = exp(-de / (pw * 1.6)) * 0.55;
+		float sx = (l.x / gw + 0.55) / 0.09;
+		float streak = exp(-sx * sx) * 0.22 * smoothstep(0.15, 0.3, l.y);
+		col = over(col, float3(1.0, 1.0, 1.0), saturate(edge + streak) * glass_a);
 	}
 
-	float hmix = hue_acc / max(field, 0.0001);
-	float inside = smoothstep(0.95, 1.05, field);
-	float3 tint = prism(hue + hmix * 0.6 + uv.y * 0.2);
-	float3 light = tint * inside * (0.55 + 0.6 * level + 0.4 * beat);
-	/* glowing edges and a soft halo */
-	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.4) * exp(-abs(field - 1.0) * 6.0) * 0.6;
-	light += tint * smoothstep(0.25, 1.0, field) * (1.0 - inside) * 0.18;
+	/* ---- the metal cap and base ---- */
+	float cap_t = saturate((l.y - 0.035) / 0.095);
+	float cap_w = lerp(0.045, 0.078, cap_t);
+	float in_cap = smoothstep(cap_w + pw, cap_w - pw, abs(l.x)) * smoothstep(0.035 - pw, 0.035 + pw, l.y) *
+		       (1.0 - smoothstep(0.13 - pw, 0.13 + pw, l.y));
+	float base_t = saturate((l.y - 0.79) / 0.19);
+	float base_w = lerp(0.16, 0.22, base_t) - 0.02 * smoothstep(0.85, 1.0, base_t);
+	float in_base = smoothstep(base_w + pw, base_w - pw, abs(l.x)) * smoothstep(0.79 - pw, 0.79 + pw, l.y) *
+			(1.0 - smoothstep(0.98 - pw, 0.98 + pw, l.y));
+	float mw = lerp(cap_w, base_w, step(0.5, l.y));
+	float m = l.x / mw;
+	float m1 = (m + 0.35) / 0.28;
+	float m2 = (m - 0.6) / 0.2;
+	float sheen = 0.22 + 0.55 * exp(-m1 * m1) + 0.18 * exp(-m2 * m2);
+	float3 metal = lerp(float3(0.18, 0.18, 0.22), float3(0.85, 0.85, 0.92), sheen) * lerp(float3(1.0, 1.0, 1.0), wax, 0.2);
+	/* the bulb glows through the top ring of the base */
+	float ring = exp(-abs(l.y - 0.80) / 0.012) * in_base;
+	metal = lerp(metal, wax * 1.3, ring * saturate(0.4 + 0.6 * heat_glow));
+	/* thin lines where the metal parts meet */
+	metal *= 1.0 - 0.35 * exp(-abs(l.y - 0.875) / (pw * 1.5));
+	col = over(col, metal, saturate(in_cap + in_base));
+
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* prism kaleidoscope: mirrored jewel shards, each lit by its band     */
+
+float4 PSPrismKaleido(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
+	float r = length(q);
+
+	float segs = 2.0 * floor(3.0 + 2.0 * max(density, 0.3));
+	float sector = 6.2831853 / segs;
+	float a = atan2(q.y, q.x) + time * 0.04;
+	a = abs(glmod(a, sector) - sector * 0.5);
+	float2 k = float2(cos(a), sin(a)) * r;
+
+	/* the glass pieces drift outward through the mirrors */
+	float2 z = rot2(k, time * 0.07) * (6.0 + 1.5 * bass) - float2(flow * 0.125, 0.0);
+	float2 cell = floor(z);
+	float2 f = frac(z);
+	/* each square splits into two triangles */
+	float tri = step(f.x, f.y);
+	float id = hash21(float2(glmod(cell.x, 64.0), cell.y) + tri * 17.0);
+	float4 bd = band_full(id);
+	float e = bd.r;
+	float edge_d = min(min(f.x, 1.0 - f.x), min(min(f.y, 1.0 - f.y), abs(f.x - f.y) * 0.7071));
+	float w = (6.0 + 1.5 * bass) * px * (1.2 + 2.0 * e);
+	float edge = exp(-edge_d / w);
+
+	float3 tint = prism(hue + id * 0.6 + r * 0.8);
+	float fade = 1.0 - smoothstep(0.3, 0.62, r);
+	float3 light = tint * (0.05 + 0.75 * e * e + 0.5 * bd.b) * fade;
+	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.45) * edge * (0.2 + 1.3 * e + bd.b) * fade;
+	/* the mirror seams */
+	float seam = exp(-a * r / (px * 1.5));
+	light += prism(hue + r) * seam * fade * (0.1 + 0.5 * mid);
+	/* the jewel in the middle, and a flash on beats */
+	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + 0.3), 0.4) * exp(-r / (0.015 + 0.03 * bass)) * (0.7 + beat);
+	light += prism(hue + r * 2.0) * exp(-r / 0.2) * beat * 0.25;
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* star warp: flying through stars, faster and brighter when it's loud */
+
+float4 PSStarWarp(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
+	float r = length(q);
+	float a01 = atan2(q.y, q.x) / 6.2831853 + 0.5;
+	float n = floor(140.0 * max(density, 0.3));
+	float ai = floor(a01 * n);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int o = -1; o <= 1; o++) {
+		for (int s = 0; s < 2; s++) {
+			float bin = glmod(ai + float(o), n);
+			float sf = float(s);
+			float seed = hash21(float2(bin, sf * 7.3 + 1.0));
+			float seed2 = hash21(float2(bin * 1.7 + 3.1, sf * 2.9));
+			float ang = (bin + 0.2 + 0.6 * seed) / n;
+			float spd = floor((0.25 + 0.5 * seed2) * 16.0 + 0.5) / 16.0;
+			float zz = frac(seed * 3.7 + flow * spd * 0.25);
+			/* perspective: slow far away, rushing past up close */
+			float rs = 0.03 / max(1.0 - zz * 0.97, 0.03);
+			float tl = rs * (0.04 + 0.35 * level + 0.25 * beat);
+			float da = abs(frac(a01 - ang + 0.5) - 0.5) * 6.2831853 * r;
+			float along = rs - r;
+			float wid = px * (0.6 + 2.2 * zz);
+			float inside = step(-wid, along) * step(along, tl);
+			float glow = exp(-da * da / (wid * wid)) * inside * (1.0 - along / max(tl, 0.0001) * 0.85);
+			float e = band_level(abs(ang - 0.5) * 2.0);
+			float3 tint = lerp(float3(1.0, 1.0, 1.0), prism(hue + seed + zz * 0.3), 0.55);
+			light += tint * glow * zz * zz * (0.6 + 1.5 * e) * 1.6;
+		}
+	}
+	/* the light at the end of the tunnel */
+	light += prism(hue + time * 0.05) * exp(-r / (0.03 + 0.05 * bass)) * (0.3 + 0.9 * beat);
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* fireflies: little lights wandering and blinking to the music        */
+
+float4 PSFireflies(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float cs = 0.16 / sqrt(max(density, 0.3));
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int layer = 0; layer < 2; layer++) {
+		float lf = float(layer);
+		float c2 = cs * (1.0 + 0.6 * lf);
+		/* they drift slowly upward: 16 cells per flow wrap, and the rows
+		 * repeat every 16, so the wrap is seamless */
+		float2 pp = p + float2(0.0, flow * c2 * 0.25);
+		float2 ci = floor(pp / c2);
+		for (int ox = -1; ox <= 1; ox++) {
+			for (int oy = -1; oy <= 1; oy++) {
+				float2 c = ci + float2(float(ox), float(oy));
+				float2 cc = float2(c.x, glmod(c.y, 16.0));
+				float seed = hash21(cc + lf * 31.0);
+				float seed2 = hash21(cc * 1.3 + 7.7 + lf * 5.0);
+				float2 wander = float2(sin(time * (0.3 + 0.4 * seed) + seed * 30.0), cos(time * (0.25 + 0.35 * seed2) + seed2 * 20.0));
+				float2 pos = (c + 0.5 + 0.38 * wander) * c2;
+				float d = length(pp - pos);
+				BRANCH
+				if (d < 0.08) {
+					float4 bd = band_full(seed);
+					float blink = smoothstep(0.2, 1.0, sin(time * (0.8 + 1.5 * seed2) + seed * 40.0));
+					float glow_amt = 0.15 + blink * (0.4 + 0.6 * level) + 1.6 * bd.b + 0.8 * bd.r * treble;
+					float3 tint = lerp(float3(0.85, 1.0, 0.35), prism(hue + seed * 0.4), 0.55);
+					float size = (1.4 + 1.2 * (1.0 - lf)) * px;
+					light += tint * (exp(-d / size) * 1.4 + exp(-d / (0.018 + 0.012 * bd.r)) * 0.22) * glow_amt *
+						 (1.0 - 0.45 * lf);
+				}
+			}
+		}
+	}
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* synthwave: a striped retro sun over a neon grid; the mountains are  */
+/* the spectrum                                                         */
+
+float4 PSSynthwave(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float horizon = 0.64;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+	float k = 0.25 + 0.75 * pal_mix;
+	float3 sun_top = lerp(float3(1.0, 0.86, 0.32), prism(hue), k);
+	float3 sun_bot = lerp(float3(1.0, 0.18, 0.55), prism(hue + 0.4), k);
+	float3 grid_c = lerp(float3(1.0, 0.25, 0.9), prism(hue + 0.65), 0.3 + 0.7 * pal_mix);
+
+	/* stars */
+	float2 cell = floor(uv * res / 3.0);
+	float st = hash21(cell);
+	float tw = 0.5 + 0.5 * sin(time * 2.0 + st * 60.0);
+	col = over(col, float3(1.0, 0.95, 1.0), smoothstep(0.997, 1.0, st) * tw * step(uv.y, horizon) * (0.5 + 0.5 * treble));
+
+	/* the sun, its glow, and the stripes that slide down it */
+	float2 sc = float2(aspect * 0.5, horizon - 0.2);
+	float R = 0.24 * (1.0 + 0.05 * bass + 0.02 * beat);
+	float sd = length(p - sc);
+	col = over(col, sun_bot, saturate(exp(-max(sd - R, 0.0) / (0.05 + 0.04 * level)) * 0.45) * step(R, sd) * step(uv.y, horizon));
+	float sy = (p.y - (sc.y - R)) / (2.0 * R);
+	float3 sun = lerp(sun_top, sun_bot, smoothstep(0.1, 0.9, sy));
+	float band_y = (p.y - sc.y) / 0.034 - flow * 0.25;
+	float gap = (sy - 0.45) * 0.55;
+	float stripe = step(gap, frac(band_y)) + step(sy, 0.45);
+	float sun_a = (1.0 - smoothstep(R - px, R + px, sd)) * saturate(stripe);
+	col = over(col, sun * (1.0 + 0.3 * beat), sun_a * step(uv.y, horizon));
+
+	/* mountains: the spectrum, mirrored from the middle */
+	float mx = abs(uv.x - 0.5) * 2.0;
+	float mh = 0.03 + 0.16 * (band_level(mx * 0.9) * 0.7 + 0.3 * band_level(mx * 0.9 + 0.04)) * (0.4 + 0.6 * mx);
+	float mtop = horizon - mh;
+	float in_mtn = smoothstep(mtop - px, mtop + px, uv.y) * step(uv.y, horizon);
+	col = over(col, float3(0.07, 0.03, 0.14) + grid_c * 0.05, in_mtn);
+	col = over(col, grid_c, exp(-abs(uv.y - mtop) / (px * 1.2)) * 0.9 * step(uv.y, horizon + px));
+
+	/* the grid floor, rushing toward you */
+	float dy = uv.y - horizon;
+	BRANCH
+	if (dy > 0.0) {
+		float z = 0.18 / max(dy, 0.0005);
+		float wx = (p.x - aspect * 0.5) * z;
+		float wz = z + flow * 0.5;
+		float lx = abs(frac(wx * 1.5) - 0.5) / 1.5;
+		float lz = abs(frac(wz) - 0.5);
+		float wpx = px * z;
+		float e = band_level(saturate(abs(uv.x - 0.5) * 2.0));
+		float line_v = exp(-lx / (wpx * 1.4));
+		float line_h = exp(-lz / (wpx * 1.4 * 1.2));
+		float fog = exp(-z * 0.18);
+		float g = saturate(max(line_v, line_h) * (0.7 + 0.8 * e + 0.6 * beat)) * (0.25 + 0.75 * fog);
+		col = over(col, float3(0.03, 0.01, 0.06), 0.55);
+		col = over(col, lerp(grid_c, float3(1.0, 1.0, 1.0), 0.25 * g), g);
+	}
+	/* the horizon line */
+	col = over(col, lerp(grid_c, float3(1.0, 1.0, 1.0), 0.4), exp(-abs(dy) / (px * 1.5)) * (0.7 + 0.3 * level));
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* candy bars: glossy capsules from the middle out, with bouncing balls */
+
+float4 PSCandyBars(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float n = floor(14.0 * max(density, 0.3));
+	float baseline = 0.84;
+	float max_h = 0.62;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+
+	float side = abs(uv.x - 0.5) * 2.0;    /* 0 middle .. 1 edges */
+	float t = side * n;
+	float i = min(floor(t), n - 1.0);
+	float fx = t - i;
+	float slot = aspect * 0.5 / n;
+	float wbar = slot * 0.36;
+	float cx = (i + 0.5) * slot;
+	float dx = abs(abs(p.x - aspect * 0.5) - cx);
+	float4 bd = band_full((i + 0.5) / n);
+	float h = max(bd.r * max_h, wbar * 2.0);
+	float3 c = prism(hue + i / n * 0.8);
+
+	/* the bar: a capsule standing on the floor */
+	float y0 = baseline - h + wbar;
+	float yy = clamp(p.y, y0, baseline - wbar);
+	float d = length(float2(dx, p.y - yy)) - wbar;
+	float a = 1.0 - smoothstep(-px, px, d);
+	float u = dx / wbar;
+	float3 body = c * (0.7 + 0.45 * (1.0 - u * u)) * (0.9 + 0.4 * bd.b);
+	body = lerp(body, c * 0.45, smoothstep(-px * 2.5, 0.0, d)); /* outline */
+	/* the candy shine */
+	float shine = exp(-(u + 0.4) * (u + 0.4) / 0.03) * step(y0, p.y);
+	body = lerp(body, float3(1.0, 1.0, 1.0), shine * 0.55);
+	col = over(col, body, a);
+
+	/* the ball that bounces on top (the falling peak) */
+	float pk = baseline - max(bd.g * max_h, wbar * 2.0) - wbar * 1.25;
+	float bdist = length(float2(dx, p.y - pk)) - wbar * 0.9;
+	float ba = 1.0 - smoothstep(-px, px, bdist);
+	float3 ball = lerp(prism(hue + i / n * 0.8 + 0.5), float3(1.0, 1.0, 1.0), 0.3);
+	float2 hl = float2(dx + wbar * 0.3, p.y - pk + wbar * 0.3);
+	ball = lerp(ball, float3(1.0, 1.0, 1.0), exp(-dot(hl, hl) / (wbar * wbar * 0.08)) * 0.8);
+	col = over(col, ball, ba * step(0.02, bd.g));
+
+	/* a soft reflection on the floor */
+	float below = p.y - baseline;
+	float refl = step(0.0, below) * exp(-below / 0.03) * step(dx, wbar) * 0.25 * step(below, h * 0.4);
+	col = over(col, c, refl);
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* groovy swirl: a hypnotic candy spiral that breathes with the bass   */
+
+float4 PSGroovySwirl(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
+	float r = length(q);
+	float ang = atan2(q.y, q.x);
+	float R = 0.36 * (1.0 + 0.08 * bass + 0.04 * beat);
+
+	/* the edge ripples with the spectrum */
+	float a01 = ang / 6.2831853 + 0.5;
+	float m = abs(frac(a01 * 2.0) - 0.5) * 2.0;
+	float e = band_level(m);
+	float rim = R * (1.0 + 0.12 * e);
+
+	float arms = 2.0 + floor(2.0 * max(density, 0.3));
+	float twist = 9.0 + 4.0 * mid;
+	/* whole turns per flow wrap */
+	float sp = ang * arms + r * twist * 6.2831853 / 6.0 - flow * 0.7853982;
+	float stripes = 0.5 + 0.5 * sin(sp);
+	float ring = 0.5 + 0.5 * sin(r * 40.0 - flow * 1.5707963);
+	float v = stripes * 0.75 + ring * 0.25;
+	float3 c1 = prism(hue + r * 0.8);
+	float3 c2 = prism(hue + 0.5 + r * 0.8);
+	float3 swirl = lerp(c2, c1, smoothstep(0.35, 0.65, v));
+	swirl *= 0.75 + 0.35 * level + 0.25 * beat;
+	/* a little shading toward the middle and edge */
+	swirl *= 0.8 + 0.2 * smoothstep(0.0, 0.12, r);
+	float a = 1.0 - smoothstep(rim - px, rim + px, r);
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+	/* the aura */
+	col = over(col, c1, saturate(exp(-max(r - rim, 0.0) / (0.03 + 0.05 * level)) * 0.5) * step(rim, r));
+	col = over(col, swirl, a);
+	/* a glossy highlight */
+	float2 hq = q - float2(-0.35, -0.4) * R;
+	col = over(col, float3(1.0, 1.0, 1.0), exp(-dot(hq, hq) / (R * R * 0.04)) * 0.35 * a);
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* fireworks: rockets and bursts, bigger and brighter with the music   */
+
+float4 PSFireworks(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float3 light = float3(0.0, 0.0, 0.0);
+	float shells = floor(4.0 + 3.0 * max(density, 0.3));
+
+	for (int s = 0; s < 10; s++) {
+		float sf = float(s);
+		BRANCH
+		if (sf < shells) {
+			float period = 2.6 + 1.4 * hash11(sf * 3.3);
+			float tt = time + hash11(sf * 9.1) * period;
+			float round_n = floor(tt / period);
+			float lt = tt - round_n * period;
+			float seed = hash21(float2(sf, round_n));
+			float seed2 = hash21(float2(sf + 11.0, round_n * 1.3));
+			float2 c = float2(aspect * (0.12 + 0.76 * seed), 0.18 + 0.3 * seed2);
+			float e = band_level(seed);
+			float3 tint = prism(hue + seed * 2.0 + seed2);
+			float launch = 0.7;
+			if (lt < launch) {
+				/* the rocket going up */
+				float k = lt / launch;
+				float2 rp = float2(c.x + (1.0 - k) * 0.03 * (seed2 - 0.5), 1.05 - (1.05 - c.y) * (1.0 - (1.0 - k) * (1.0 - k)));
+				float dxr = abs(p.x - rp.x);
+				float tail = p.y - rp.y;
+				light += lerp(tint, float3(1.0, 0.9, 0.7), 0.6) * exp(-dxr / (px * 1.2)) * step(0.0, tail) *
+					 exp(-tail / 0.06) * 0.8;
+				light += float3(1.0, 0.95, 0.85) * exp(-length(p - rp) / (px * 2.0));
+			} else {
+				/* the burst: sparks fly out, slow down, fall and fade */
+				float bt = lt - launch;
+				float size = (0.12 + 0.14 * e + 0.05 * beat) * (0.8 + 0.4 * seed2);
+				float spread = size * (1.0 - exp(-bt * 3.0));
+				float2 cc = c + float2(0.0, 0.06 * bt * bt);
+				float2 d = p - cc;
+				float r = length(d);
+				float sparks = 28.0;
+				float a01 = atan2(d.y, d.x) / 6.2831853 + 0.5;
+				float ai = floor(a01 * sparks);
+				float fade = exp(-bt * 1.3);
+				for (int o = 0; o <= 1; o++) {
+					float bin = glmod(ai + float(o), sparks);
+					float ang = (bin + 0.5) / sparks;
+					float jit = hash21(float2(bin, sf + round_n * 7.0));
+					float sr = spread * (0.75 + 0.25 * jit);
+					float da = abs(frac(a01 - ang + 0.5) - 0.5) * 6.2831853 * r;
+					float along = sr - r;
+					float trail = step(0.0, along) * exp(-along / (0.02 + 0.03 * fade));
+					float twinkle = 0.6 + 0.4 * sin(time * 30.0 + jit * 50.0);
+					float spark = exp(-da / (px * 1.3)) * trail * step(0.0, sr - r + px * 3.0);
+					light += lerp(tint, float3(1.0, 1.0, 1.0), 0.35 * fade) * spark * fade * twinkle * (1.2 + 1.5 * e);
+				}
+				/* the flash */
+				light += tint * exp(-r / (0.04 + 0.06 * e)) * exp(-bt * 6.0) * 1.2;
+			}
+		}
+	}
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* spiral galaxy: arms of stars turning around a core that beats       */
+
+float4 PSGalaxy(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
+	/* tilted toward you */
+	q = rot2(q, 0.35);
+	q.y /= 0.62;
+	float r = length(q);
+	float ang = atan2(q.y, q.x) - time * 0.12;
+	float lr = log(max(r, 0.002));
+
+	float arms = 2.0 + floor(max(density, 0.3) * 1.5);
+	float spiral = sin(ang * arms - lr * 4.5);
+	float arm = pow(0.5 + 0.5 * spiral, 3.0);
+	float a01 = frac(ang / 6.2831853);
+	float e = band_level(saturate(r * 2.2));
+	float disc = exp(-r / (0.17 + 0.05 * mid));
+	float3 light = prism(hue + r * 1.5 + 0.1) * arm * disc * (0.35 + 1.4 * e);
+	/* dust between the arms */
+	light += prism(hue + 0.55 + r) * (1.0 - arm) * disc * 0.08;
+
+	/* stars, thicker along the arms */
+	float2 sp = float2(a01 * 220.0, lr * 18.0);
+	float2 cell = floor(sp);
+	float h = hash21(float2(glmod(cell.x, 220.0), cell.y));
+	float2 f = frac(sp) - 0.5;
+	float star = smoothstep(0.88 - 0.25 * arm, 1.0, h) * exp(-dot(f, f) * 10.0);
+	float tw = 0.6 + 0.4 * sin(time * 4.0 + h * 80.0);
+	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + h), 0.3) * star * tw * (0.5 + 1.5 * treble) * exp(-r / 0.4);
+
+	/* the core */
+	light += lerp(float3(1.0, 0.92, 0.75), prism(hue), 0.2) * exp(-r / (0.03 + 0.03 * bass)) * (1.0 + 1.2 * beat);
 	return finish(light, uv);
 }
 
@@ -890,5 +1415,77 @@ technique LavaLamp
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSLavaLamp(v_in);
+	}
+}
+
+technique PrismKaleido
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPrismKaleido(v_in);
+	}
+}
+
+technique StarWarp
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSStarWarp(v_in);
+	}
+}
+
+technique Fireflies
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFireflies(v_in);
+	}
+}
+
+technique Synthwave
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSSynthwave(v_in);
+	}
+}
+
+technique CandyBars
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSCandyBars(v_in);
+	}
+}
+
+technique GroovySwirl
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGroovySwirl(v_in);
+	}
+}
+
+technique Fireworks
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFireworks(v_in);
+	}
+}
+
+technique Galaxy
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSGalaxy(v_in);
 	}
 }
