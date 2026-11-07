@@ -197,8 +197,11 @@ void SpazzUpdater::StartUpdate()
 	STARTUPINFOW si = {};
 	si.cb = sizeof(si);
 	PROCESS_INFORMATION pi = {};
-	if (!CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si,
-			    &pi)) {
+	/* started in the temp folder: a process sitting in bin\64bit would stop
+	 * the update from swapping that folder */
+	const std::wstring workDir = QDir::toNativeSeparators(QDir::tempPath()).toStdWString();
+	if (!CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, workDir.c_str(),
+			    &si, &pi)) {
 		blog(LOG_WARNING, "[SPAZZbs update] could not start the updater (%lu)", GetLastError());
 		OBSMessageBox::warning(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.Failed"));
 		return;

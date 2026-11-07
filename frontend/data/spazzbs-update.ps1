@@ -26,6 +26,13 @@ function Say([string]$Text, [string]$Color = 'Gray') { Write-Host $Text -Foregro
 
 try { $Host.UI.RawUI.WindowTitle = 'Updating SPAZZbs' } catch {}
 
+# Windows won't rename a folder that's any program's "current folder", and
+# older SPAZZbs builds started this updater from inside bin\64bit. Step out.
+try {
+	Set-Location -LiteralPath $env:TEMP
+	[IO.Directory]::SetCurrentDirectory($env:TEMP)
+} catch {}
+
 try {
 	$AppDir = [IO.Path]::GetFullPath($AppDir.Trim('"').TrimEnd('\', '.'))
 	$Exe = Join-Path $AppDir 'bin\64bit\SPAZZbs.exe'
@@ -114,26 +121,44 @@ try {
 	}
 
 	Say 'Installing...'
+	# anything left of SPAZZbs's browser helper would hold files open
+	Get-Process -Name 'obs-browser-page' -ErrorAction SilentlyContinue |
+		Where-Object { $_.Path -and $_.Path.StartsWith($AppDir, [StringComparison]::OrdinalIgnoreCase) } |
+		Stop-Process -Force -ErrorAction SilentlyContinue
+
+	# set the old folders aside; antivirus or Windows Search can hold a file
+	# for a moment, so try a few times
 	$SetAside = @()
-	try {
-		foreach ($Rel in $Owned) {
-			$Cur = Join-Path $AppDir $Rel
-			if (Test-Path $Cur) {
+	$Swapped = $true
+	foreach ($Rel in $Owned) {
+		$Cur = Join-Path $AppDir $Rel
+		if (-not (Test-Path $Cur)) { continue }
+		$Done = $false
+		for ($Try = 0; $Try -lt 10 -and -not $Done; $Try++) {
+			try {
 				Rename-Item -Path $Cur -NewName ((Split-Path $Rel -Leaf) + ".$Tag") -ErrorAction Stop
-				$SetAside += $Rel
-			}
+				$Done = $true
+			} catch { Start-Sleep -Milliseconds 700 }
 		}
-	} catch {
+		if (-not $Done) { $Swapped = $false; break }
+		$SetAside += $Rel
+	}
+
+	if (-not $Swapped) {
+		# a folder is still busy (an Explorer window open in it, say): put
+		# everything back and copy over the files instead, like before
 		Restore-Old $SetAside
-		throw ('Some SPAZZbs files are still in use: by SPAZZbs, its browser helper, or an app using ' +
-			'the SPAZZbs virtual camera (Zoom, Discord...). Close those and run the update again.')
+		$SetAside = @()
+		Say 'A SPAZZbs folder is busy (an Explorer window open in it?); copying over it instead...' Yellow
 	}
 
 	& robocopy.exe $Stage $AppDir /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 	if ($LASTEXITCODE -ge 8) {
 		$Code = $LASTEXITCODE
 		Restore-Old $SetAside
-		throw "Copying the new files failed (robocopy code $Code)."
+		if ($Swapped) { throw "Copying the new files failed (robocopy code $Code)." }
+		throw ("Some files couldn't be replaced (robocopy code $Code). Close anything using SPAZZbs " +
+			'(including an app using its virtual camera) and run the update again.')
 	}
 	foreach ($Rel in $SetAside) {
 		Remove-Item (Join-Path $AppDir "$Rel.$Tag") -Recurse -Force -ErrorAction SilentlyContinue
