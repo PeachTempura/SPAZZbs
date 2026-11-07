@@ -1315,6 +1315,543 @@ float4 PSGalaxy(VertData v_in) : TARGET
 }
 
 /* ------------------------------------------------------------------ */
+/* rainbow ripples: raindrops on a pond, harder rain when it's loud    */
+
+float4 PSRainbowRipples(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float cs = 0.24 / sqrt(max(density, 0.3));
+	float2 ci = floor(p / cs);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* the pond's slow shimmer */
+	float sheen = sin(p.x * 13.0 + sin(p.y * 9.0 + time * 0.7) * 1.5 + time * 0.4) *
+		      sin(p.y * 17.0 - time * 0.5 + sin(p.x * 7.0) * 1.2);
+	light += prism(hue + 0.55 + uv.x * 0.3) * (0.03 + 0.05 * level) * (0.5 + 0.5 * sheen);
+
+	for (int ox = -1; ox <= 1; ox++) {
+		for (int oy = -1; oy <= 1; oy++) {
+			float2 c = ci + float2(float(ox), float(oy));
+			float seed = hash21(c);
+			float seed2 = hash21(c * 1.7 + 3.1);
+			float period = 1.4 + 1.8 * seed2;
+			float tt = time + seed * period;
+			float n = floor(tt / period);
+			float lt = tt - n * period;
+			float s3 = hash21(c + n * 0.37);
+			float s4 = hash21(c * 2.3 + n * 1.13);
+			float2 pos = (c + 0.2 + 0.6 * float2(s3, s4)) * cs;
+			float d = length(p - pos);
+			BRANCH
+			if (d < cs * 1.3) {
+				float4 bd = band_full(s3);
+				/* rings spread out and slow down, never past the next cell */
+				float grow = 1.0 - exp(-lt * 1.4);
+				float rr = cs * 1.15 * grow;
+				float fade = (1.0 - grow) * (0.15 + 1.6 * bd.r + 1.4 * bd.b + 0.5 * beat);
+				float w = px * (1.0 + 4.0 * grow);
+				float ring = exp(-abs(d - rr) / w) + 0.55 * exp(-abs(d - rr * 0.64) / w) +
+					     0.3 * exp(-abs(d - rr * 0.36) / w);
+				float splash = exp(-d / (px * 2.5)) * exp(-lt * 7.0) * 2.5;
+				float3 tint = prism(hue + seed * 0.7 + d * 3.0);
+				light += tint * (ring * fade + splash * (0.3 + bd.r));
+			}
+		}
+	}
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* neon heartbeat: a heart monitor line, spikes with the music, and a  */
+/* neon heart that thumps on the beat                                   */
+
+float heart_dist(float2 q)
+{
+	/* a heart about 1 unit tall, point down, y up */
+	q.x = abs(q.x);
+	q.y += 0.55;
+	if (q.y + q.x > 1.0) {
+		float2 a = q - float2(0.25, 0.75);
+		return sqrt(dot(a, a)) - 0.35355339;
+	}
+	float2 b = q - float2(0.0, 1.0);
+	float2 m = q - 0.5 * max(q.x + q.y, 0.0);
+	return sqrt(min(dot(b, b), dot(m, m))) * sign(q.x - q.y);
+}
+
+float bump(float t, float c, float w)
+{
+	float u = (t - c) / w;
+	return exp(-u * u);
+}
+
+float ecg_shape(float t)
+{
+	/* one heartbeat: a little bump, the big spike, and a soft wave after */
+	return 0.12 * bump(t, 0.18, 0.045) - 0.22 * bump(t, 0.37, 0.014) + bump(t, 0.41, 0.018) -
+	       0.35 * bump(t, 0.45, 0.016) + 0.22 * bump(t, 0.66, 0.06);
+}
+
+float ecg_y(float x)
+{
+	/* 32 beats in 16 units of scroll, so the flow wrap at 64 is seamless */
+	float cell = 0.5;
+	float xs = x + flow * 0.25;
+	float ci = floor(xs / cell);
+	float t = xs / cell - ci;
+	float seed = hash11(glmod(ci, 32.0) * 1.37 + 0.5);
+	float e = band_level(seed * 0.6);
+	float amp = 0.07 + 0.2 * e + 0.08 * beat;
+	return 0.62 - amp * ecg_shape(t) - 0.004 * sin(x * 40.0 + time * 3.0) * treble;
+}
+
+float4 PSNeonHeartbeat(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float3 light = float3(0.0, 0.0, 0.0);
+	float3 tint = prism(hue + 0.33);
+
+	/* faint monitor grid */
+	float2 g = abs(frac(p / 0.05) - 0.5) * 0.05;
+	float grid = exp(-min(g.x, g.y) / (px * 0.6));
+	light += tint * grid * 0.05;
+
+	/* the trace: brightest at the pen on the right, fading to the left */
+	float head_x = aspect * 0.86;
+	/* distance to the trace, from short pieces of it either side */
+	float dist = 1.0;
+	float step_x = px * 2.5;
+	float2 prev = float2(p.x - 8.0 * step_x, ecg_y(p.x - 8.0 * step_x));
+	for (int k = -7; k <= 8; k++) {
+		float xk = p.x + float(k) * step_x;
+		float2 cur = float2(xk, ecg_y(xk));
+		float2 ab = cur - prev;
+		float h = saturate(dot(p - prev, ab) / max(dot(ab, ab), 0.0000001));
+		dist = min(dist, length(p - prev - ab * h));
+		prev = cur;
+	}
+	float behind = head_x - p.x;
+	float trail = step(0.0, behind) * exp(-behind / (0.45 + 0.4 * level));
+	float glow = exp(-dist / (px * 1.4)) * 2.0 + exp(-dist / 0.012) * 0.35;
+	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.25) * glow * trail * (0.7 + 0.6 * level);
+
+	/* the pen */
+	float2 hp = float2(head_x, ecg_y(head_x));
+	float hd = length(p - hp);
+	light += float3(1.0, 1.0, 1.0) * exp(-hd / (px * 2.5)) * 2.0 + tint * exp(-hd / 0.03) * (0.4 + 0.8 * beat);
+
+	/* the heart */
+	float hs = 0.12 * (1.0 + 0.12 * bass + 0.18 * beat);
+	float2 hq = (p - float2(aspect * 0.5, 0.27)) / hs;
+	hq.y = -hq.y;
+	float hdist = heart_dist(hq) * hs;
+	float3 hc = prism(hue);
+	light += hc * exp(-abs(hdist) / (px * 1.6)) * (1.4 + 1.5 * beat);
+	light += hc * exp(-max(hdist, 0.0) / (0.02 + 0.03 * bass)) * (0.25 + 0.6 * beat);
+	light += hc * step(hdist, 0.0) * (0.08 + 0.25 * beat);
+	return finish(light, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* flower garden: a row of flowers, each one a band, blooming as it    */
+/* gets louder and swaying in the breeze                                */
+
+float4 PSFlowerGarden(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float n = floor(7.0 * max(density, 0.3));
+	n = max(n, 3.0);
+	float slot = aspect / n;
+	float ground = 0.9;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+
+	float ci = floor(p.x / slot);
+	for (int o = -1; o <= 1; o++) {
+		float i = ci + float(o);
+		BRANCH
+		if (i >= 0.0 && i < n) {
+			float seed = hash11(i * 3.7 + 1.0);
+			float side = abs((i + 0.5) / n - 0.5) * 2.0;
+			float4 bd = band_full(side * 0.85 + seed * 0.1);
+			float e = bd.r;
+			float bx = (i + 0.5) * slot + (seed - 0.5) * slot * 0.3;
+			float h = (0.32 + 0.18 * seed) * (0.85 + 0.25 * e);
+			float sway = (0.025 + 0.03 * bass) * sin(time * (0.9 + 0.3 * seed) + i * 1.7);
+			float2 hc = float2(bx + sway, ground - h);
+
+			/* the stem bends toward the head */
+			float k = saturate((ground - p.y) / h);
+			float sx = bx + sway * k * k;
+			float stem = 1.0 - smoothstep(px * 1.5, px * 3.0, abs(p.x - sx));
+			stem *= step(hc.y, p.y) * step(p.y, ground);
+			float3 green = lerp(float3(0.25, 0.75, 0.3), prism(hue + 0.4), 0.25 * pal_mix);
+			col = over(col, green * (0.75 + 0.25 * k), stem);
+
+			/* one leaf */
+			float2 lq = p - float2(bx + sway * 0.25 + 0.03 * (seed > 0.5 ? 1.0 : -1.0), ground - h * 0.35);
+			lq = rot2(lq, seed > 0.5 ? -0.6 : 0.6);
+			float leaf = length(lq / float2(0.034, 0.012)) - 1.0;
+			col = over(col, green * 0.9, 1.0 - smoothstep(-0.1, 0.1, leaf));
+
+			/* the head: petals open with the band */
+			float2 q = p - hc;
+			float r = length(q);
+			float spin = time * (0.15 + 0.1 * seed) + seed * 6.0;
+			float ang = atan2(q.y, q.x) + spin;
+			float petals = 5.0 + floor(seed * 3.0);
+			float bloom = 0.034 + 0.06 * e + 0.014 * bd.b + 0.008 * beat;
+			float shape = 0.45 + 0.55 * abs(cos(ang * petals * 0.5));
+			float pr = bloom * shape;
+			float pa = 1.0 - smoothstep(pr - px, pr + px, r);
+			float3 pc = prism(hue + i / n * 0.9 + seed * 0.2);
+			float3 petal = lerp(pc * 0.75, lerp(pc, float3(1.0, 1.0, 1.0), 0.35), smoothstep(0.0, pr, r));
+			col = over(col, petal, pa);
+
+			/* the middle, with seeds */
+			float cr = bloom * 0.38;
+			float ca = 1.0 - smoothstep(cr - px, cr + px, r);
+			float dots = 0.5 + 0.5 * sin(q.x * 300.0) * sin(q.y * 300.0);
+			float3 mid_c = lerp(float3(1.0, 0.8, 0.25), float3(0.65, 0.38, 0.12), dots * 0.5);
+			col = over(col, mid_c * (0.9 + 0.3 * bd.b), ca);
+		}
+	}
+
+	/* a grassy hill */
+	float hill = ground - 0.012 * sin(p.x * 3.0 + 1.0) - 0.006 * sin(p.x * 11.0);
+	float blades = 0.008 * abs(sin(p.x * 160.0 + sin(time * 1.3 + p.x * 4.0) * 0.6)) * (1.0 + level);
+	float ga = smoothstep(hill - blades - px, hill - blades + px, p.y);
+	float3 grass = lerp(float3(0.16, 0.5, 0.22), prism(hue + 0.38), 0.2 * pal_mix) * (0.7 + 0.3 * (1.0 - (p.y - hill) * 8.0));
+	col = over(col, grass, ga);
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* disco ball: a mirror ball throwing spinning beams and spots         */
+
+float4 PSDiscoBall(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float R = 0.13 * (1.0 + 0.04 * bass);
+	float2 bc = float2(aspect * 0.5, 0.24);
+	float2 q = p - bc;
+	float r = length(q);
+	float ang = atan2(q.y, q.x);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* beams */
+	float beams = 6.0 + floor(4.0 * max(density, 0.3));
+	float a01 = frac(ang / 6.2831853 + time * 0.04);
+	float bi = floor(a01 * beams);
+	float bf = a01 * beams - bi;
+	float bseed = hash11(bi + 3.0);
+	float4 bd = band_full(bseed);
+	float aw = abs(bf - 0.5) / beams * 6.2831853 * max(r, 0.001);
+	float bw = 0.006 + 0.04 * r;
+	float beam = exp(-aw / bw) * step(R, r) * exp(-r / (0.6 + 0.5 * level));
+	light += prism(hue + bseed + bi / beams) * beam * (0.25 + 1.4 * bd.r + 0.8 * beat);
+
+	/* spots swirling around the room */
+	float2 sp = float2(frac(ang / 6.2831853 + time * 0.04) * 40.0, r * 22.0);
+	float2 cell = floor(sp);
+	float h = hash21(float2(glmod(cell.x, 40.0), cell.y));
+	float2 f = frac(sp) - 0.5;
+	float spot = smoothstep(0.8, 1.0, h) * exp(-dot(f, f) * 9.0) * step(R * 1.2, r);
+	light += prism(hue + h * 2.0) * spot * (0.3 + 1.6 * band_level(h) + 0.8 * beat) * 0.9;
+
+	/* glare */
+	light += prism(hue + 0.1) * exp(-r / (0.06 + 0.05 * level)) * (0.25 + 0.7 * beat);
+
+	float4 col = finish(light, uv);
+
+	/* the string */
+	float sa = (1.0 - smoothstep(px * 0.5, px * 1.5, abs(p.x - bc.x))) * step(p.y, bc.y - R);
+	col = over(col, float3(0.55, 0.55, 0.6), sa * grade.z);
+
+	/* the ball: mirror tiles on a sphere that turns */
+	BRANCH
+	if (r < R + px * 2.0) {
+		float2 nq = q / R;
+		float z = sqrt(saturate(1.0 - dot(nq, nq)));
+		float lat = asin(clamp(nq.y, -1.0, 1.0));
+		float lon = atan2(nq.x, z) + time * 0.6;
+		float rows = 12.0;
+		float2 tp = float2(lon / 6.2831853 * rows * 2.0, lat / 3.1415927 * rows);
+		float2 tc = floor(tp);
+		float2 tf = frac(tp) - 0.5;
+		float th = hash21(float2(glmod(tc.x, rows * 2.0), tc.y));
+		float edge = smoothstep(0.42, 0.5, max(abs(tf.x), abs(tf.y)));
+		float glint = smoothstep(0.82, 1.0, th) * (0.5 + 0.5 * sin(time * 6.0 + th * 50.0));
+		float shade = 0.35 + 0.65 * z;
+		float3 tile = lerp(float3(0.55, 0.57, 0.65), prism(hue + th), 0.35) * shade * (0.75 + 0.5 * th);
+		tile = lerp(tile, float3(1.0, 1.0, 1.0), saturate(glint * (0.6 + 1.2 * treble + 0.8 * beat)));
+		tile *= 1.0 - 0.6 * edge;
+		/* highlight */
+		float2 hl = nq - float2(-0.35, -0.4);
+		tile += float3(1.0, 1.0, 1.0) * exp(-dot(hl, hl) * 18.0) * 0.5;
+		float ba = 1.0 - smoothstep(R - px, R + px, r);
+		col = over(col, min(graded(tile), float3(1.0, 1.0, 1.0)), ba * grade.z);
+	}
+	return col;
+}
+
+/* ------------------------------------------------------------------ */
+/* pixel EQ: a chunky 8-bit equalizer                                  */
+
+float4 PSPixelEQ(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float cols = max(floor(16.0 * max(density, 0.3)), 6.0);
+	float rows = 14.0;
+	float left = aspect * 0.08;
+	float width = aspect * 0.84;
+	float top = 0.1;
+	float bottom = 0.86;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+
+	float cw = width / cols;
+	float rh = (bottom - top) / rows;
+	float cx = (p.x - left) / cw;
+	float ry = (bottom - p.y) / rh;
+	float i = floor(cx);
+	float j = floor(ry);
+	float2 f = float2(cx - i, ry - j);
+
+	BRANCH
+	if (i >= 0.0 && i < cols && j >= 0.0 && j < rows) {
+		float side = abs((i + 0.5) / cols - 0.5) * 2.0;
+		float4 bd = band_full(side * 0.95);
+		float lvl = bd.r * rows;
+		float pk = floor(bd.g * rows);
+		float fr = j / rows;
+		float3 retro = fr < 0.6 ? float3(0.25, 1.0, 0.35) : (fr < 0.82 ? float3(1.0, 0.86, 0.2) : float3(1.0, 0.28, 0.25));
+		float3 c = lerp(retro, prism(hue + fr * 0.5 + side * 0.15), 0.12 + 0.88 * pal_mix);
+		/* the block, its gap, and a pixel-art bevel */
+		float gap = 0.14;
+		float inside = step(gap, f.x) * step(f.x, 1.0 - gap) * step(gap, f.y) * step(f.y, 1.0 - gap);
+		float bevel = step(f.y, 1.0 - gap) * step(1.0 - gap - 0.16, f.y) + step(gap, f.x) * step(f.x, gap + 0.12);
+		float lit = step(j + 0.5, lvl);
+		float peak = step(abs(j - pk), 0.5) * step(1.0, pk);
+		float3 block = c * (1.0 + 0.3 * bd.b);
+		block = lerp(block, float3(1.0, 1.0, 1.0), saturate(bevel) * 0.2 + peak * (1.0 - lit) * 0.45);
+		col = over(col, c * 0.1, inside * 0.5);
+		col = over(col, block, inside * max(lit, peak));
+	}
+
+	/* scanlines and a floor glow */
+	col.rgb *= 0.88 + 0.12 * step(0.5, frac(p.y * res.y / 3.0));
+	float below = p.y - bottom;
+	float fl = step(0.0, below) * exp(-below / 0.04) * (0.15 + 0.5 * level);
+	col = over(col, prism(hue + 0.2), fl * step(left, p.x) * step(p.x, left + width) * 0.6);
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
+/* DNA helix: two strands of beads twisting, the rungs light up with   */
+/* their band                                                           */
+
+float4 PSDNAHelix(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float spacing = 0.045 / max(density, 0.3);
+	float A = 0.15 + 0.03 * bass + 0.02 * beat;
+	float k = 6.2831853 / 0.9;
+	/* 2 turns per flow wrap */
+	float phase = flow * 0.19634954;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+	float3 glowl = float3(0.0, 0.0, 0.0);
+
+	float ci = floor(p.x / spacing + 0.5);
+	/* back beads, rungs, then front beads */
+	for (int pass_i = 0; pass_i < 3; pass_i++) {
+		for (int o = -1; o <= 1; o++) {
+			float i = ci + float(o);
+			float x = i * spacing;
+			float th = x * k - phase;
+			float e = band_level(saturate(abs(x / aspect - 0.5) * 2.0));
+			float3 c1 = prism(hue + x / aspect * 0.6);
+			float3 c2 = prism(hue + 0.5 + x / aspect * 0.6);
+			float ya = 0.5 + A * sin(th);
+			float yb = 0.5 - A * sin(th);
+			float za = cos(th);
+			if (pass_i == 1) {
+				/* the rung */
+				float ra = (1.0 - smoothstep(px * 1.2, px * 2.4, abs(p.x - x))) * step(min(ya, yb), p.y) *
+					   step(p.y, max(ya, yb));
+				float3 rc = p.y < 0.5 ? (ya < yb ? c1 : c2) : (ya < yb ? c2 : c1);
+				col = over(col, rc * (0.35 + 0.9 * e), ra * (0.35 + 0.6 * e));
+				glowl += rc * exp(-abs(p.x - x) / (px * 3.0)) * step(min(ya, yb), p.y) * step(p.y, max(ya, yb)) * e * 0.5;
+			} else {
+				for (int s = 0; s < 2; s++) {
+					float z = s == 0 ? za : -za;
+					float front = z > 0.0 ? 1.0 : 0.0;
+					if ((pass_i == 2) == (front > 0.5)) {
+						float y = s == 0 ? ya : yb;
+						float br = spacing * (0.26 + 0.1 * z) * (1.0 + 0.5 * e);
+						float d = length(p - float2(x, y));
+						float a = 1.0 - smoothstep(br - px, br + px, d);
+						float3 c = s == 0 ? c1 : c2;
+						float shade = 0.7 + 0.3 * z;
+						float2 hl = (p - float2(x, y)) / br + float2(0.35, 0.35);
+						float3 bead = lerp(c * shade, float3(1.0, 1.0, 1.0), exp(-dot(hl, hl) * 4.0) * 0.6 * (0.5 + 0.5 * z));
+						col = over(col, bead * (0.85 + 0.4 * e), a);
+						glowl += c * exp(-d / (br * 1.8)) * (0.15 + 0.6 * e + 0.3 * beat) * (0.6 + 0.4 * z);
+					}
+				}
+			}
+		}
+	}
+	/* a soft glow around it all, then the solid helix on top */
+	float4 base = finish(glowl, uv);
+	float3 rgb = min(graded(col.rgb), float3(1.0, 1.0, 1.0));
+	return over(base, rgb, col.a * grade.z);
+}
+
+/* ------------------------------------------------------------------ */
+/* plasma globe: lightning reaching out to the glass                   */
+
+float4 PSPlasmaGlobe(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float R = 0.3;
+	float2 gc = float2(aspect * 0.5, 0.46);
+	float2 q = p - gc;
+	float r = length(q);
+	float ang = atan2(q.y, q.x);
+	float3 light = float3(0.0, 0.0, 0.0);
+	float n = floor(6.0 + 4.0 * max(density, 0.3));
+
+	BRANCH
+	if (r < R * 1.08) {
+		for (int t = 0; t < 14; t++) {
+			float tf = float(t);
+			if (tf < n) {
+				float seed = hash11(tf * 7.3 + 0.4);
+				float4 bd = band_full(seed);
+				/* each tendril drifts around slowly, and wriggles */
+				float base_a = tf / n * 6.2831853 + sin(time * (0.2 + 0.25 * seed) + seed * 20.0) * 0.9;
+				float wig = (0.12 * sin(r * 16.0 + time * (4.0 + 3.0 * seed) + seed * 30.0) +
+					     0.06 * sin(r * 37.0 - time * 7.0 + seed * 11.0)) *
+					    (0.4 + 1.6 * r / R) * (0.6 + 0.8 * treble);
+				float da = abs(frac((ang - base_a - wig) / 6.2831853 + 0.5) - 0.5) * 6.2831853 * r;
+				float reach = R * (0.55 + 0.45 * saturate(bd.r * 1.6 + beat * 0.5));
+				float along = step(r, reach) * smoothstep(0.0, 0.03, r);
+				float energy = 0.3 + 1.6 * bd.r + 1.0 * bd.b + 0.6 * beat;
+				float3 tint = lerp(prism(hue + seed * 0.3), float3(1.0, 0.9, 1.0), 0.35);
+				light += tint * (exp(-da / (px * 1.2)) * 1.6 + exp(-da / (0.012 + 0.01 * bd.r)) * 0.3) * along * energy;
+				/* where it touches the glass */
+				float2 tip = float2(cos(base_a + wig), sin(base_a + wig)) * reach;
+				light += tint * exp(-length(q - tip) / (0.012 + 0.02 * bd.r)) * energy * 0.6 * step(R * 0.9, reach);
+			}
+		}
+	}
+	/* the electrode in the middle */
+	float3 core_c = lerp(prism(hue), float3(1.0, 0.85, 1.0), 0.4);
+	light += core_c * (exp(-r / 0.012) * 2.0 + exp(-r / (0.05 + 0.04 * bass)) * (0.4 + 0.8 * beat));
+	/* the glass: a thin rim, a faint fill and a highlight */
+	light += prism(hue + 0.6) * exp(-abs(r - R) / (px * 1.4)) * 0.5;
+	light += prism(hue + 0.6) * step(r, R) * 0.05 * (0.6 + level);
+	float2 hl = q - float2(-0.13, -0.16);
+	light += float3(1.0, 1.0, 1.0) * exp(-dot(hl, hl) / 0.0006) * 0.3;
+
+	float4 col = finish(light, uv);
+	/* the stand */
+	float sy = p.y - (gc.y + R * 0.92);
+	float sw = 0.1 + sy * 0.6;
+	float sa = step(0.0, sy) * step(sy, 0.11) * (1.0 - smoothstep(sw - px, sw + px, abs(q.x)));
+	float3 stand = float3(0.12, 0.11, 0.15) + prism(hue + 0.6) * 0.06 * exp(-sy / 0.02);
+	stand *= 1.0 - 0.4 * abs(q.x) / max(sw, 0.001);
+	col = over(col, min(graded(stand), float3(1.0, 1.0, 1.0)), sa * grade.z);
+	return col;
+}
+
+/* ------------------------------------------------------------------ */
+/* ocean sunset: waves rolling in to the music under a setting sun     */
+
+float wave_y(float x, float layer, float e)
+{
+	float base = 0.6 + layer * 0.075;
+	float amp = (0.006 + 0.01 * layer) * (1.0 + 2.5 * e);
+	/* 1 wave per 8 units of flow per layer: seamless at the wrap */
+	float t = flow * 0.78539816;
+	return base + amp * sin(x * (9.0 - layer) + t + layer * 1.7) + amp * 0.5 * sin(x * (17.0 - layer) - t + layer);
+}
+
+float4 PSOceanSunset(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float horizon = 0.58;
+	float4 col = float4(0.0, 0.0, 0.0, 0.0);
+	float k = 0.3 + 0.7 * pal_mix;
+	float3 sun_c = lerp(float3(1.0, 0.72, 0.3), prism(hue), k);
+	float3 sea_c = lerp(float3(0.2, 0.32, 0.6), prism(hue + 0.55), 0.4 * pal_mix);
+
+	/* a warm sky near the horizon */
+	col = over(col, sun_c * 0.8, exp(-max(horizon - p.y, 0.0) / (0.12 + 0.05 * level)) * 0.35 * step(p.y, horizon));
+
+	/* the sun and its glow, sinking into the sea */
+	float2 sc = float2(aspect * 0.5, horizon - 0.06);
+	float R = 0.12 * (1.0 + 0.05 * bass + 0.03 * beat);
+	float sd = length(p - sc);
+	col = over(col, sun_c, saturate(exp(-max(sd - R, 0.0) / (0.08 + 0.06 * level)) * 0.5) * step(p.y, horizon));
+	col = over(col, lerp(sun_c, float3(1.0, 1.0, 0.9), 0.3), (1.0 - smoothstep(R - px, R + px, sd)) * step(p.y, horizon));
+
+	/* birds */
+	for (int b = 0; b < 2; b++) {
+		float bf = float(b);
+		float bx = frac(time * 0.03 * (1.0 + bf * 0.4) + bf * 0.5) * (aspect + 0.2) - 0.1;
+		float2 bq = p - float2(bx, 0.2 + bf * 0.08 + 0.01 * sin(time * 1.5 + bf));
+		float flap = 0.4 + 0.5 * sin(time * 8.0 + bf * 2.0);
+		float wing = abs(bq.y + abs(bq.x) * flap);
+		float ba = (1.0 - smoothstep(px * 0.8, px * 1.8, wing)) * step(abs(bq.x), 0.018);
+		col = over(col, lerp(float3(0.95, 0.9, 0.95), sun_c, 0.3), ba * 0.85);
+	}
+
+	/* the sea, back to front */
+	for (int l = 0; l < 5; l++) {
+		float lf = float(l);
+		float e = band_level(lf / 5.0 * 0.8 + 0.05);
+		float y = wave_y(p.x, lf, e);
+		float a = smoothstep(y - px, y + px, p.y);
+		float depth = lf / 4.0;
+		float3 water = lerp(sea_c * 0.55, sea_c * (0.9 + 0.3 * e), depth);
+		water = lerp(water, sun_c, 0.12 * (1.0 - depth));
+		/* the sun's path on the water */
+		float path = exp(-abs(p.x - sc.x) / (0.05 + 0.1 * (p.y - horizon))) *
+			     (0.5 + 0.5 * sin(p.y * 220.0 + flow * 3.1415927 + p.x * 30.0));
+		water += sun_c * path * 0.5 * (1.0 - depth * 0.6) * (0.6 + level);
+		col = over(col, water, a);
+		/* foam on the crest */
+		float foam = exp(-abs(p.y - y) / (px * (0.8 + 0.4 * lf))) * (0.12 + 0.6 * e + 0.3 * beat);
+		col = over(col, float3(1.0, 1.0, 1.0), saturate(foam) * step(y - px * 4.0, p.y));
+	}
+	return finish_paint(col, uv);
+}
+
+/* ------------------------------------------------------------------ */
 
 technique PrismRain
 {
@@ -1493,5 +2030,77 @@ technique Galaxy
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSGalaxy(v_in);
+	}
+}
+
+technique RainbowRipples
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRainbowRipples(v_in);
+	}
+}
+
+technique NeonHeartbeat
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSNeonHeartbeat(v_in);
+	}
+}
+
+technique FlowerGarden
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSFlowerGarden(v_in);
+	}
+}
+
+technique DiscoBall
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDiscoBall(v_in);
+	}
+}
+
+technique PixelEQ
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPixelEQ(v_in);
+	}
+}
+
+technique DNAHelix
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSDNAHelix(v_in);
+	}
+}
+
+technique PlasmaGlobe
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlasmaGlobe(v_in);
+	}
+}
+
+technique OceanSunset
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSOceanSunset(v_in);
 	}
 }

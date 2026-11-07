@@ -1576,6 +1576,11 @@ EXPORT bool obs_source_audio_pending(const obs_source_t *source);
  * tick (e.g. a source in both scenes of a transition); its audio is then
  * mixed in on its own, so parents shouldn't add it again */
 EXPORT bool obs_source_audio_is_duplicated(const obs_source_t *source);
+
+/* SPAZZbs: the next audio this source outputs starts fresh at the current
+ * time, whatever its timestamp says. For media sources starting a new file or
+ * resuming, so the new audio can't land "late" and be dropped. */
+EXPORT void obs_source_audio_resync(obs_source_t *source);
 EXPORT uint64_t obs_source_get_audio_timestamp(const obs_source_t *source);
 EXPORT void obs_source_get_audio_mix(const obs_source_t *source, struct obs_source_audio_mix *audio);
 

@@ -1609,7 +1609,12 @@ void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
 	/* what's live right now, so you see the sponsor where it will sit, but
 	 * without the live Sponsors source: otherwise its sponsor and the one
 	 * you're editing show on top of each other */
-	OBSSourceAutoRelease program = obs_get_output_source(0);
+	/* the scene itself, the way projectors draw one (drawing the transition
+	 * outside the main render leaves its shaders half set up) */
+	OBSSourceAutoRelease transition = obs_get_output_source(0);
+	OBSSourceAutoRelease program = transition && obs_source_get_type(transition) == OBS_SOURCE_TYPE_TRANSITION
+					       ? obs_transition_get_active_source(transition)
+					       : obs_source_get_ref(transition);
 	if (program) {
 		StudioDraw(true);
 		obs_source_video_render(program);

@@ -192,6 +192,7 @@ void SpazzMusicPlayer::Bind()
 		obs_data_set_bool(settings, "clear_on_media_end", true);
 		obs_data_set_bool(settings, "hw_decode", false);
 		obs_data_set_int(settings, "speed_percent", 100);
+		obs_data_set_bool(settings, "resync_audio", true);
 
 		src = obs_source_create("ffmpeg_source", QT_TO_UTF8(name), settings, nullptr);
 		if (!src) {
@@ -264,6 +265,10 @@ void SpazzMusicPlayer::ApplySafeSettings(obs_source_t *src, const char *localFil
 	obs_data_set_bool(settings, "restart_on_activate", false);
 	obs_data_set_bool(settings, "close_when_inactive", false);
 	obs_data_set_int(settings, "speed_percent", 100);
+	/* every new song / resume starts its sound at "now"; otherwise a song
+	 * could line up with the last one's timing, arrive late, and be dropped
+	 * by the mixer (playing, but silent) */
+	obs_data_set_bool(settings, "resync_audio", true);
 	obs_source_update(src, settings);
 }
 

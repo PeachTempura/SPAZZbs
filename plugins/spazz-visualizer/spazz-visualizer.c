@@ -41,10 +41,11 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define RETRY_SECONDS 1.0f
 #define SILENCE_NS 250000000ULL
 
-static const char *style_techniques[] = {"PrismRain",  "PrismHalo",     "PrismPetals",   "PrismAurora", "PrismTunnel",
-					 "PrismWaves", "PrismKaleido",  "SpectrumGlass", "CandyBars",   "Bubbles",
-					 "Confetti",   "BounceBuddies", "DiscoFloor",    "LavaLamp",    "GroovySwirl",
-					 "StarWarp",   "Fireflies",     "Fireworks",     "Galaxy",      "Synthwave"};
+static const char *style_techniques[] = {
+	"PrismRain",     "PrismHalo",    "PrismPetals", "PrismAurora", "PrismTunnel",   "PrismWaves",  "PrismKaleido",
+	"SpectrumGlass", "CandyBars",    "Bubbles",     "Confetti",    "BounceBuddies", "DiscoFloor",  "LavaLamp",
+	"GroovySwirl",   "StarWarp",     "Fireflies",   "Fireworks",   "Galaxy",        "Synthwave",   "RainbowRipples",
+	"NeonHeartbeat", "FlowerGarden", "DiscoBall",   "PixelEQ",     "DNAHelix",      "PlasmaGlobe", "OceanSunset"};
 #define NUM_STYLES (sizeof(style_techniques) / sizeof(style_techniques[0]))
 
 /* colour palettes: three colours the styles loop through ("prism" is the

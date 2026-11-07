@@ -1624,6 +1624,16 @@ static void source_output_audio_data(obs_source_t *source, const struct audio_da
 		using_direct_ts = true;
 	}
 
+	/* SPAZZbs: a new song started; its timestamps say nothing about how
+	 * the previous one's lined up, so start from now */
+	if (os_atomic_set_bool(&source->audio_resync, false)) {
+		pthread_mutex_lock(&source->audio_buf_mutex);
+		reset_audio_timing(source, in.timestamp, os_time);
+		reset_audio_data(source, os_time);
+		pthread_mutex_unlock(&source->audio_buf_mutex);
+		source->next_audio_ts_min = 0;
+	}
+
 	if (!source->timing_set) {
 		reset_audio_timing(source, in.timestamp, os_time);
 
@@ -5515,6 +5525,12 @@ void obs_source_audio_render(obs_source_t *source, uint32_t mixers, size_t chann
 	}
 
 	process_audio_source_tick(source, mixers, channels, sample_rate, size);
+}
+
+void obs_source_audio_resync(obs_source_t *source)
+{
+	if (obs_source_valid(source, "obs_source_audio_resync"))
+		os_atomic_set_bool(&source->audio_resync, true);
 }
 
 bool obs_source_audio_is_duplicated(const obs_source_t *source)

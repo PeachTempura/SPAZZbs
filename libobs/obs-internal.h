@@ -893,6 +893,8 @@ struct obs_source {
 	float balance;
 	/* audio_is_duplicated: tracks whether a source appears multiple times in the audio tree during this tick */
 	bool audio_is_duplicated;
+	/* SPAZZbs: anchor the next audio packet to "now" (a new song started) */
+	volatile bool audio_resync;
 
 	/* async video data */
 	gs_texture_t *async_textures[MAX_AV_PLANES];

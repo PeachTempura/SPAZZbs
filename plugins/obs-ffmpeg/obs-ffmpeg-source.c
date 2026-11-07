@@ -48,6 +48,7 @@ struct ffmpeg_source {
 	bool full_decode;
 	bool is_clear_on_media_end;
 	bool restart_on_activate;
+	bool resync_audio; /* SPAZZbs: each start lines the audio up afresh */
 	bool close_when_inactive;
 	bool seekable;
 	bool is_stinger;
@@ -323,6 +324,8 @@ static void ffmpeg_source_start(struct ffmpeg_source *s)
 	if (!s->media)
 		return;
 
+	if (s->resync_audio)
+		obs_source_audio_resync(s->source);
 	media_playback_play(s->media, s->is_looping, s->reconnecting);
 	if (s->is_local_file && media_playback_has_video(s->media) && (s->is_clear_on_media_end || s->is_looping))
 		obs_source_show_preloaded_video(s->source);
@@ -471,6 +474,7 @@ static void ffmpeg_source_update(void *data, obs_data_t *settings)
 	s->is_stinger = is_stinger;
 	s->is_track_matte = is_track_matte;
 	s->log_changes = obs_data_get_bool(settings, "log_changes");
+	s->resync_audio = obs_data_get_bool(settings, "resync_audio");
 
 	if (s->speed_percent < 1 || s->speed_percent > 200)
 		s->speed_percent = 100;
@@ -683,6 +687,8 @@ static void ffmpeg_source_play_pause(void *data, bool pause)
 	if (!s->media)
 		return;
 
+	if (!pause && s->resync_audio)
+		obs_source_audio_resync(s->source);
 	media_playback_play_pause(s->media, pause);
 
 	if (pause) {
@@ -741,6 +747,8 @@ static void ffmpeg_source_set_time(void *data, int64_t ms)
 	if (!s->media)
 		return;
 
+	if (s->resync_audio)
+		obs_source_audio_resync(s->source);
 	media_playback_seek(s->media, ms);
 }
 
