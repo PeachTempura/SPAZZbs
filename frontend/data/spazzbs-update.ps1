@@ -121,6 +121,9 @@ try {
 	}
 
 	Say 'Installing...'
+	# old copies of files that were in use during an earlier update
+	Get-ChildItem -Path $AppDir -Recurse -Filter '*.spazzbs-old-*' -ErrorAction SilentlyContinue |
+		Remove-Item -Force -ErrorAction SilentlyContinue
 	# anything left of SPAZZbs's browser helper would hold files open
 	Get-Process -Name 'obs-browser-page' -ErrorAction SilentlyContinue |
 		Where-Object { $_.Path -and $_.Path.StartsWith($AppDir, [StringComparison]::OrdinalIgnoreCase) } |
@@ -149,16 +152,42 @@ try {
 		# everything back and copy over the files instead, like before
 		Restore-Old $SetAside
 		$SetAside = @()
-		Say 'A SPAZZbs folder is busy (an Explorer window open in it?); copying over it instead...' Yellow
+		Say 'A SPAZZbs folder is in use (an Explorer window, or an app using the virtual camera?); copying over it instead...' Yellow
 	}
 
-	& robocopy.exe $Stage $AppDir /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+	& robocopy.exe $Stage $AppDir /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
 	if ($LASTEXITCODE -ge 8) {
-		$Code = $LASTEXITCODE
-		Restore-Old $SetAside
-		if ($Swapped) { throw "Copying the new files failed (robocopy code $Code)." }
-		throw ("Some files couldn't be replaced (robocopy code $Code). Close anything using SPAZZbs " +
-			'(including an app using its virtual camera) and run the update again.')
+		if ($Swapped) {
+			$Code = $LASTEXITCODE
+			Restore-Old $SetAside
+			throw "Copying the new files failed (robocopy code $Code)."
+		}
+		# Some files are open in another program. A file that's in use can
+		# still be renamed, so move each of those aside and put the new one
+		# in its place; the old copies are cleared up next time.
+		Say 'Some files are in use; replacing them one by one...' Yellow
+		$Busy = @()
+		$StageFull = (Resolve-Path $Stage).Path.TrimEnd('\')
+		foreach ($File in Get-ChildItem -Path $Stage -Recurse -File) {
+			$Rel = $File.FullName.Substring($StageFull.Length + 1)
+			$Dest = Join-Path $AppDir $Rel
+			New-Item -ItemType Directory -Force -Path (Split-Path $Dest) | Out-Null
+			try {
+				Copy-Item -LiteralPath $File.FullName -Destination $Dest -Force -ErrorAction Stop
+			} catch {
+				try {
+					Rename-Item -LiteralPath $Dest -NewName ((Split-Path $Dest -Leaf) + '.spazzbs-old-' +
+						[Guid]::NewGuid().ToString('N').Substring(0, 6)) -ErrorAction Stop
+					Copy-Item -LiteralPath $File.FullName -Destination $Dest -Force -ErrorAction Stop
+				} catch {
+					$Busy += $Rel
+				}
+			}
+		}
+		if ($Busy.Count -gt 0) {
+			throw ("These files couldn't be replaced because another program has them open:`n    " +
+				($Busy -join "`n    ") + "`n  Close that program (or restart Windows) and run the update again.")
+		}
 	}
 	foreach ($Rel in $SetAside) {
 		Remove-Item (Join-Path $AppDir "$Rel.$Tag") -Recurse -Force -ErrorAction SilentlyContinue
