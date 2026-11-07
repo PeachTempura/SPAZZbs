@@ -137,6 +137,7 @@ struct spazz_viz {
 	int shown, prev_shown;
 	float fade, auto_timer;
 	bool style_changed;
+	volatile long want_style; /* 1 + a style asked for by button / hotkey */
 	uint32_t rng;
 
 	/* audio input. "mutex" guards the analyzer and is taken by the audio
@@ -310,7 +311,8 @@ static void attach_target(struct spazz_viz *v)
 
 	/* a deleted source can still be found by name while something holds
 	 * it: listening to it would detach and re-attach every second */
-	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) != 0 && src != v->source && !obs_source_removed(src)) {
+	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) != 0 && src != v->source &&
+	    !obs_source_removed(src)) {
 		v->target = obs_source_get_weak_source(src);
 		obs_source_add_audio_capture_callback(src, audio_capture, v);
 	}
@@ -548,10 +550,14 @@ static void step_style(struct spazz_viz *v, int dir)
 	if (!v) {
 		return;
 	}
-	obs_data_t *s = obs_source_get_settings(v->source);
-	const int cur = style_index(obs_data_get_string(s, "style"));
-	obs_data_release(s);
-	set_style(v, dir == 0 ? random_other_style(v, cur) : cur + dir);
+	/* step from what's on screen: with the auto switch on that isn't the
+	 * style in the settings */
+	const int cur = v->shown;
+	int idx = dir == 0 ? random_other_style(v, cur) : cur + dir;
+	idx = (idx % (int)NUM_STYLES + (int)NUM_STYLES) % (int)NUM_STYLES;
+	set_style(v, idx);
+	/* and show it even when the settings already name it */
+	os_atomic_set_long(&v->want_style, idx + 1);
 }
 
 static bool next_clicked(obs_properties_t *props, obs_property_t *prop, void *data)
@@ -627,9 +633,9 @@ static bool background_modified(obs_properties_t *props, obs_property_t *prop, o
 
 /* styles whose shader never reads "density" (Amount) or "time"/"flow"
  * (Speed); keep in step with spazz-visualizer.effect */
-static const char *const styles_no_density[] = {"PrismPetals",   "PrismAurora", "PrismTunnel", "PrismWaves",
+static const char *const styles_no_density[] = {"PrismPetals",   "PrismAurora",   "PrismTunnel", "PrismWaves",
 						"SpectrumGlass", "BounceBuddies", "DiscoFloor",  "Synthwave",
-						"OceanSunset",   "VHSTape",     NULL};
+						"OceanSunset",   "VHSTape",       NULL};
 static const char *const styles_no_speed[] = {"SpectrumGlass", "CandyBars", "PixelEQ", NULL};
 
 static bool in_list(const char *name, const char *const *list)
@@ -1190,6 +1196,10 @@ static void viz_tick(void *data, float seconds)
 	if (v->style_changed) {
 		v->style_changed = false;
 		show_style(v, v->style);
+	}
+	const long want = os_atomic_set_long(&v->want_style, 0);
+	if (want > 0 && want <= (long)NUM_STYLES) {
+		show_style(v, (int)want - 1);
 	}
 	if (v->auto_secs > 0.0f) {
 		v->auto_timer += seconds;

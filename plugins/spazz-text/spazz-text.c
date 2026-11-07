@@ -80,6 +80,8 @@ struct spazz_text {
 	char kind[16];
 	char *file_path;
 	char *file_text;
+	bool file_too_big; /* warned about it already */
+	bool no_page;      /* the page or the browser isn't there: don't retry */
 	float file_wait;
 	float song_wait;
 	char *song_json; /* last SPAZZamp song sent */
@@ -94,6 +96,8 @@ struct spazz_text {
 	struct band_sums sums;
 	float lp_bass1, lp_bass2, lp_mid; /* filter state */
 	float k_bass, k_mid;              /* filter coefficients */
+
+	obs_hotkey_id play_key, hide_key;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -245,7 +249,8 @@ static char *song_json(void)
 	return json;
 }
 
-static char *read_text_file(const char *path)
+/* read every second: a file that's too big is reported once, not each time */
+static char *read_text_file(const char *path, bool *too_big)
 {
 	if (!path || !*path) {
 		return bstrdup("");
@@ -255,9 +260,13 @@ static char *read_text_file(const char *path)
 		return bstrdup("");
 	}
 	if (size > FILE_MAX_BYTES) {
-		blog(LOG_WARNING, "[SPAZZ Text] '%s' is over 64 KB; showing nothing", path);
+		if (!*too_big) {
+			blog(LOG_WARNING, "[SPAZZ Text] '%s' is over 64 KB; showing nothing", path);
+		}
+		*too_big = true;
 		return bstrdup("");
 	}
+	*too_big = false;
 	char *text = os_quick_read_utf8_file(path);
 	return text ? text : bstrdup("");
 }
@@ -516,6 +525,7 @@ static void make_browser(struct spazz_text *st, uint32_t w, uint32_t h)
 	char *page = obs_module_file("text/index.html");
 	if (!page) {
 		blog(LOG_ERROR, "[SPAZZ Text] text/index.html is missing");
+		st->no_page = true;
 		return;
 	}
 
@@ -541,6 +551,7 @@ static void make_browser(struct spazz_text *st, uint32_t w, uint32_t h)
 	st->browser = obs_source_create_private("browser_source", "SPAZZ Text page", bs);
 	if (!st->browser) {
 		blog(LOG_WARNING, "[SPAZZ Text] the browser source isn't available");
+		st->no_page = true;
 	} else {
 		obs_source_add_active_child(st->source, st->browser);
 	}
@@ -585,7 +596,8 @@ static void stx_update(void *data, obs_data_t *settings)
 			bfree(st->file_path);
 			st->file_path = bstrdup(path);
 			bfree(st->file_text);
-			st->file_text = read_text_file(path);
+			st->file_too_big = false;
+			st->file_text = read_text_file(path, &st->file_too_big);
 			st->file_wait = 1.0f;
 		}
 	} else {
@@ -602,7 +614,9 @@ static void stx_update(void *data, obs_data_t *settings)
 	}
 
 	if (!st->browser) {
-		make_browser(st, (uint32_t)w, (uint32_t)h);
+		if (!st->no_page) {
+			make_browser(st, (uint32_t)w, (uint32_t)h);
+		}
 	} else {
 		if (resized) {
 			obs_data_t *bs = obs_source_get_settings(st->browser);
@@ -643,7 +657,7 @@ static void stx_tick(void *data, float seconds)
 		st->file_wait -= seconds;
 		if (st->file_wait <= 0.0f) {
 			st->file_wait = 1.0f;
-			char *text = read_text_file(st->file_path);
+			char *text = read_text_file(st->file_path, &st->file_too_big);
 			if (!st->file_text || strcmp(text, st->file_text) != 0) {
 				obs_data_t *d = obs_data_create();
 				obs_data_set_string(d, "text", text);
@@ -757,9 +771,15 @@ static bool refresh_visible(obs_properties_t *props, obs_property_t *prop, obs_d
 	show(props, "bg_color", box);
 	show(props, "bg_opacity", box);
 	show(props, "bg_padding", box);
-	show(props, "bg_radius", box);
-	show(props, "bg_border", box);
-	show(props, "bg_border_width", box);
+	/* the shapes the page gives rounded corners or a border (a pill is
+	 * always round; a window, a tape label and a burst draw their own edge) */
+	const bool corners = is(s, "bg_shape", "box") || is(s, "bg_shape", "slant") || is(s, "bg_shape", "terminal") ||
+			     is(s, "bg_shape", "tape") || is(s, "bg_shape", "bubble");
+	const bool border = is(s, "bg_shape", "box") || is(s, "bg_shape", "pill") || is(s, "bg_shape", "bar") ||
+			    is(s, "bg_shape", "slant") || is(s, "bg_shape", "terminal") || is(s, "bg_shape", "bubble");
+	show(props, "bg_radius", corners);
+	show(props, "bg_border", border);
+	show(props, "bg_border_width", border);
 
 	show(props, "glitch_every", is(s, "idle", "glitch"));
 
@@ -1023,8 +1043,8 @@ static void *stx_create(obs_data_t *settings, obs_source_t *source)
 		obs_data_set_string(settings, "preset_applied", stx_presets[0].name);
 	}
 
-	obs_hotkey_register_source(source, "SpazzText.Play", T_("Hotkey.Play"), hk_play, st);
-	obs_hotkey_register_source(source, "SpazzText.Hide", T_("Hotkey.Hide"), hk_hide, st);
+	st->play_key = obs_hotkey_register_source(source, "SpazzText.Play", T_("Hotkey.Play"), hk_play, st);
+	st->hide_key = obs_hotkey_register_source(source, "SpazzText.Hide", T_("Hotkey.Hide"), hk_hide, st);
 
 	proc_handler_t *ph = obs_source_get_proc_handler(source);
 	proc_handler_add(ph, "void play()", proc_play, st);
@@ -1037,7 +1057,12 @@ static void *stx_create(obs_data_t *settings, obs_source_t *source)
 static void stx_destroy(void *data)
 {
 	struct spazz_text *st = data;
-	/* first: after this the audio thread never calls us again */
+	/* libobs drops the hotkeys only after this returns; a key pressed in
+	 * between would reach freed memory (unregistering waits for a running
+	 * hotkey callback, which holds the same lock) */
+	obs_hotkey_unregister(st->play_key);
+	obs_hotkey_unregister(st->hide_key);
+	/* after this the audio thread never calls us again */
 	stop_hearing(st);
 	if (st->browser) {
 		obs_source_remove_active_child(st->source, st->browser);

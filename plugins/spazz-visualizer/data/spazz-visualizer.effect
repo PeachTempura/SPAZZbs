@@ -1660,12 +1660,12 @@ float4 PSPixelEQ(VertData v_in) : TARGET
 		float gap = 0.14;
 		float inside = step(gap, f.x) * step(f.x, 1.0 - gap) * step(gap, f.y) * step(f.y, 1.0 - gap);
 		float bevel = step(f.y, 1.0 - gap) * step(1.0 - gap - 0.16, f.y) + step(gap, f.x) * step(f.x, gap + 0.12);
-		float lit = step(j + 0.5, lvl);
+		float lit_on = step(j + 0.5, lvl); /* lit is an HLSL intrinsic */
 		float peak = step(abs(j - pk), 0.5) * step(1.0, pk);
 		float3 block = c * (1.0 + 0.3 * bd.b);
-		block = lerp(block, float3(1.0, 1.0, 1.0), saturate(bevel) * 0.2 + peak * (1.0 - lit) * 0.45);
+		block = lerp(block, float3(1.0, 1.0, 1.0), saturate(bevel) * 0.2 + peak * (1.0 - lit_on) * 0.45);
 		col = over(col, c * 0.1, inside * 0.5);
-		col = over(col, block, inside * max(lit, peak));
+		col = over(col, block, inside * max(lit_on, peak));
 	}
 
 	/* scanlines and a floor glow */
