@@ -266,6 +266,9 @@ static bool target_alive(struct spazz_viz *v)
 static bool find_music_player(void *param, obs_source_t *src)
 {
 	obs_source_t **found = param;
+	if (obs_source_removed(src)) {
+		return true;
+	}
 	obs_data_t *priv = obs_source_get_private_settings(src);
 	bool is_player = obs_data_get_bool(priv, "spazz_music");
 	obs_data_release(priv);
@@ -305,7 +308,9 @@ static void attach_target(struct spazz_viz *v)
 		return;
 	}
 
-	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) != 0 && src != v->source) {
+	/* a deleted source can still be found by name while something holds
+	 * it: listening to it would detach and re-attach every second */
+	if ((obs_source_get_output_flags(src) & OBS_SOURCE_AUDIO) != 0 && src != v->source && !obs_source_removed(src)) {
 		v->target = obs_source_get_weak_source(src);
 		obs_source_add_audio_capture_callback(src, audio_capture, v);
 	}
@@ -620,30 +625,61 @@ static bool background_modified(obs_properties_t *props, obs_property_t *prop, o
 	return true;
 }
 
+/* styles whose shader never reads "density" (Amount) or "time"/"flow"
+ * (Speed); keep in step with spazz-visualizer.effect */
+static const char *const styles_no_density[] = {"PrismPetals",   "PrismAurora", "PrismTunnel", "PrismWaves",
+						"SpectrumGlass", "BounceBuddies", "DiscoFloor",  "Synthwave",
+						"OceanSunset",   "VHSTape",     NULL};
+static const char *const styles_no_speed[] = {"SpectrumGlass", "CandyBars", "PixelEQ", NULL};
+
+static bool in_list(const char *name, const char *const *list)
+{
+	for (size_t i = 0; name && list[i]; i++) {
+		if (strcmp(name, list[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Amount and Speed only where the style uses them. With the auto switch on
+ * every style takes a turn, so then they always show. */
+static void style_controls(obs_properties_t *props, obs_data_t *settings)
+{
+	const char *style = obs_data_get_string(settings, "style");
+	const bool all = obs_data_get_double(settings, "auto_switch") > 0.0;
+	obs_property_set_visible(obs_properties_get(props, "density"), all || !in_list(style, styles_no_density));
+	obs_property_set_visible(obs_properties_get(props, "speed"), all || !in_list(style, styles_no_speed));
+}
+
 static bool auto_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
 {
 	UNUSED_PARAMETER(prop);
 	const bool on = obs_data_get_double(settings, "auto_switch") > 0.0;
 	obs_property_set_visible(obs_properties_get(props, "auto_shuffle"), on);
-	return true;
-}
-
-static bool style_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
-{
-	UNUSED_PARAMETER(prop);
-	const bool player = player_skin(style_index(obs_data_get_string(settings, "style"))) >= 0;
-	obs_property_set_visible(obs_properties_get(props, "grp_player"), player);
+	style_controls(props, settings);
 	return true;
 }
 
 static bool player_color_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
 {
 	UNUSED_PARAMETER(prop);
-	obs_property_set_visible(obs_properties_get(props, "player_accent"),
-				 is(obs_data_get_string(settings, "player_color"), "custom"));
-	obs_property_set_visible(obs_properties_get(props, "player_rgb_speed"),
-				 obs_data_get_bool(settings, "player_rgb") ||
-					 is(obs_data_get_string(settings, "player_color"), "skin"));
+	const bool rgb = obs_data_get_bool(settings, "player_rgb");
+	const char *color = obs_data_get_string(settings, "player_color");
+	/* "the skin's own" only cycles on the SPAZZamp skin; the others have a
+	 * fixed colour. RGB cycle overrides the colour choice. */
+	const bool skin_cycles = is(color, "skin") && is(obs_data_get_string(settings, "style"), "PlayerSpazz");
+	obs_property_set_visible(obs_properties_get(props, "player_accent"), !rgb && is(color, "custom"));
+	obs_property_set_visible(obs_properties_get(props, "player_rgb_speed"), rgb || skin_cycles);
+	return true;
+}
+
+static bool style_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
+{
+	const bool player = player_skin(style_index(obs_data_get_string(settings, "style"))) >= 0;
+	obs_property_set_visible(obs_properties_get(props, "grp_player"), player);
+	style_controls(props, settings);
+	player_color_modified(props, prop, settings);
 	return true;
 }
 
@@ -799,6 +835,12 @@ static void viz_destroy(void *data)
 {
 	struct spazz_viz *v = data;
 
+	/* the context frees its hotkeys only after this returns: a press in
+	 * between would reach a freed struct */
+	obs_hotkey_unregister(v->hk_next);
+	obs_hotkey_unregister(v->hk_prev);
+	obs_hotkey_unregister(v->hk_random);
+
 	detach_target(v);
 
 	obs_enter_graphics();
@@ -952,9 +994,14 @@ static size_t to_ascii(char *out, size_t cap, const char *in)
 		} else if ((*s & 0xF0) == 0xE0) {
 			cp = 0xFFFF;
 			len = 3;
-		} else {
+		} else if ((*s & 0xF8) == 0xF0) {
 			cp = 0xFFFF;
 			len = 4;
+		} else {
+			/* a stray continuation byte (bad UTF-8): skip just it, so the
+			 * letters after it aren't swallowed */
+			cp = 0xFFFF;
+			len = 1;
 		}
 		for (int i = 1; i < len; i++) {
 			if (!s[i]) {
@@ -1305,11 +1352,13 @@ static void viz_render(void *data, gs_effect_t *unused)
 	const bool going = playing || paused;
 	const float progress = going && v->now_dur_ms > 0.0 ? (float)(v->now_pos_ms / v->now_dur_ms) : 0.0f;
 	struct vec4 pstate;
+	/* SPAZZamp hands out "" when nothing is loaded: that's idle, not stopped */
+	const bool loaded = v->now_title && *v->now_title;
 	vec4_set(&pstate, fminf(fmaxf(progress, 0.0f), 1.0f),
-		 playing        ? 1.0f
-		 : paused       ? 2.0f
-		 : v->now_title ? 3.0f
-				: 0.0f,
+		 playing  ? 1.0f
+		 : paused ? 2.0f
+		 : loaded ? 3.0f
+			  : 0.0f,
 		 v->marquee_pos, v->marquee_len > MARQUEE_CELLS ? (float)v->marquee_len : 0.0f);
 	gs_effect_set_vec4(v->p_pl_state, &pstate);
 	const bool minus = v->player_remaining && going && v->now_dur_ms > 0.0;
@@ -1331,9 +1380,12 @@ static void viz_render(void *data, gs_effect_t *unused)
 	gs_effect_set_vec4(v->p_pl_show, &show);
 	/* pl_look and pl_accent depend on the skin: draw_style sets them */
 
-	/* crossfading: the old style fades out under the new one */
+	/* crossfading: the old style fades out under the new one. Over a solid
+	 * backdrop the old one stays fully drawn underneath, or the two half
+	 * see-through layers would let the scene show through mid-fade. */
 	if (v->fade < 1.0f && v->prev_shown != v->shown) {
-		draw_style(v, v->prev_shown, 1.0f - v->fade);
+		const float bg_keep = fminf(fmaxf(v->bg_opacity, 0.0f), 1.0f);
+		draw_style(v, v->prev_shown, 1.0f - v->fade * (1.0f - bg_keep));
 		draw_style(v, v->shown, v->fade);
 	} else {
 		draw_style(v, v->shown, 1.0f);

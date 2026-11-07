@@ -18,6 +18,7 @@
 #include <QPointer>
 
 #include <functional>
+#include <mutex>
 #include <vector>
 
 class OBSDock;
@@ -60,12 +61,17 @@ protected:
 private:
 	explicit SpazzSponsorCenter(QWidget *parent);
 
-	/* a private copy you edit and preview; Save puts it on stream */
+	/* a private copy you edit and preview; Save puts it on stream. Draw
+	 * reads it on the graphics thread, so it's only swapped under
+	 * previewMutex (reads on the UI thread don't need it). */
 	OBSSourceAutoRelease preview;
+	std::mutex previewMutex;
 	bool previewShowing = false;
+	bool exiting = false; /* SPAZZbs is closing: make nothing new */
 	QTabWidget *lookTabs = nullptr;
 	void Start();
 	void MakePreview(obs_data_t *from);
+	void SetPreview(obs_source_t *src);
 	OBSPropertiesView *view = nullptr;
 	OBSQTDisplay *display = nullptr;
 

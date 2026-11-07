@@ -470,7 +470,7 @@ void SpazzMusicPlayer::VolumeSignal(void *param, calldata_t *data)
 	QMetaObject::invokeMethod(self, [self, volume]() { emit self->VolumeChanged(volume); }, Qt::QueuedConnection);
 }
 
-void SpazzMusicPlayer::AudioCapture(void *param, obs_source_t *, const struct audio_data *audio, bool muted)
+void SpazzMusicPlayer::AudioCapture(void *param, obs_source_t *src, const struct audio_data *audio, bool muted)
 {
 	auto *self = static_cast<SpazzMusicPlayer *>(param);
 	if (!audio->frames) {
@@ -484,7 +484,9 @@ void SpazzMusicPlayer::AudioCapture(void *param, obs_source_t *, const struct au
 
 	std::lock_guard<std::mutex> lock(self->analyzerMutex);
 
-	if (muted || self->State() != OBS_MEDIA_STATE_PLAYING) {
+	/* audio thread: ask the source we were called for, not self->source
+	 * (a UI-thread member) */
+	if (muted || obs_source_media_get_state(src) != OBS_MEDIA_STATE_PLAYING) {
 		spazz_analyzer_push_silence(self->analyzer.get(), audio->frames);
 	} else {
 		if (self->monoScratch.size() < audio->frames) {

@@ -200,7 +200,9 @@ static inline void mo_motion(int m, double t, double amount, double w, double h,
 		break;
 	case 12: { /* coin flip, every few seconds */
 		const double ph = mo_wrap(t, 3.0);
-		o->sx = ph < 1.0 ? cos(MO_TAU * (0.5 - 0.5 * cos(M_PI * ph))) : 1.0;
+		const double flip = ph < 1.0 ? cos(MO_TAU * (0.5 - 0.5 * cos(M_PI * ph))) : 1.0;
+		/* Amount: 0 = still, up to 1 = a full flip */
+		o->sx = 1.0 - (1.0 - flip) * fmin(fmax(A, 0.0), 1.0);
 		break;
 	}
 	case 13: { /* wobble: a jiggle that settles, every 3 s */

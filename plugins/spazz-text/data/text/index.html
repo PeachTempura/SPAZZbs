@@ -89,7 +89,8 @@ const DEFAULTS = {
 /* enters (and exits) that move each piece on its own: these take the stagger.
  * A "piece" (unit) is a letter, a word or the whole text: cfg.animBy. */
 const LETTER_FX = new Set(['typewriter', 'flicker', 'scramble', 'drop', 'wave', 'pop', 'spin', 'unfold', 'split', 'glitch', 'pixel']);
-const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@*+=<>/\\|?!';
+const MAX_CHARS = 4000;
+const GLYPHS ='ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%&@*+=<>/\\|?!';
 
 let cfg = Object.assign({}, DEFAULTS);
 let shown = '';               /* the text on screen */
@@ -98,6 +99,7 @@ let song = { title: '', pos: 0, dur: 0, state: 0 };
 let built = null;             /* letters and layout */
 let playAt = 0, exitAt = -1;  /* timeline (ms) */
 let liveNow = 0;
+let npGone = false;           /* SPAZZamp stopped: the title is on its way out */
 let running = true;           /* page visible */
 let lastSeed = 0;
 
@@ -162,7 +164,8 @@ function countdownText() {
 }
 function songText() {
   if (!song.title || (cfg.npHide && song.state !== 1)) return '';
-  return String(cfg.npFormat || '{title}').replace(/\{title\}/g, song.title)
+  /* a function, so a "$&" or "$$" in a title stays as it is */
+  return String(cfg.npFormat || '{title}').replace(/\{title\}/g, () => song.title)
     .replace(/\{time\}/g, mmss(song.pos)).replace(/\{length\}/g, song.dur > 0 ? mmss(song.dur) : '');
 }
 function wantedText() {
@@ -179,7 +182,10 @@ function wantedText() {
 
 function build(text) {
   shown = text;
-  const s = cfg.upper ? text.toUpperCase() : text;
+  /* a page of text is more than fits on screen, and every letter costs each
+   * frame: the first MAX_CHARS are shown */
+  const cut = text.length > MAX_CHARS ? Array.from(text).slice(0, MAX_CHARS).join('') : text;
+  const s = cfg.upper ? cut.toUpperCase() : cut;
   txtEl.textContent = '';
   fxEl.querySelectorAll('.spark').forEach((e) => e.remove());
   const letters = [], pieces = [];
@@ -547,12 +553,17 @@ function render(now) {
   liveNow = now;
   /* dynamic text: clock, countdown, SPAZZamp */
   const want = wantedText();
-  if (want !== shown) {
-    const wasEmpty = !shown;
+  const np = cfg.source === 'nowplaying';
+  if (np && !want && built && built.n) {
+    /* the song stopped: its title plays the exit, then goes */
+    if (!npGone) { npGone = true; if (exitAt < 0) exitAt = now; }
+    if (timeline(now).phase === 'hidden') build('');
+  } else if (want !== shown || (np && npGone)) {
+    const wasEmpty = !shown || npGone;
+    npGone = false;
     build(want);
-    if (cfg.source === 'nowplaying') {
-      if (!want) { if (exitAt < 0) exitAt = now; }
-      else if (wasEmpty || songChanged) { playAt = now; exitAt = -1; }
+    if (np) {
+      if (want && (wasEmpty || songChanged)) { playAt = now; exitAt = -1; }
       songChanged = false;
     }
   }
@@ -748,7 +759,8 @@ function apply(c, replay) {
   /* a reloaded page gets the file's text and SPAZZamp's song with its settings */
   if (c && c.fileText !== undefined) pushed = String(c.fileText);
   if (c && c.song && typeof c.song === 'object') song = { title: String(c.song.title || ''), pos: +c.song.pos || 0, dur: +c.song.dur || 0, state: +c.song.state || 0 };
-  if (cfg.source === 'countdown' && (prev.source !== 'countdown' || prev.cdMin !== cfg.cdMin || !countdownFrom)) countdownFrom = Date.now();
+  if (cfg.source === 'countdown' && (prev.source !== 'countdown' || prev.cdKind !== cfg.cdKind || prev.cdMin !== cfg.cdMin || !countdownFrom)) countdownFrom = Date.now();
+  npGone = false;
   build(wantedText());
   if (replay) play();
 }
@@ -756,8 +768,10 @@ function apply(c, replay) {
 function play() { playAt = nowMs(); exitAt = -1; if (cfg.source === 'countdown' && cfg.cdKind === 'minutes') countdownFrom = Date.now(); }
 function hideNow() { const n = nowMs(); const tl = timeline(n); if (tl.phase !== 'hidden' && exitAt < 0) exitAt = n; }
 
+let liveCfg = false;
 window.addEventListener('spazzTextConfig', (e) => {
   const d = e.detail || {};
+  liveCfg = true;
   /* only a different animation or text replays it; restyling doesn't */
   const replay = d.enter !== cfg.enter || d.text !== cfg.text || d.source !== cfg.source || d.cycle !== cfg.cycle ||
     d.animBy !== cfg.animBy;
@@ -784,13 +798,17 @@ window.addEventListener('spazzTextPlay', play);
 window.addEventListener('spazzTextHide', hideNow);
 window.addEventListener('obsSourceVisibleChanged', (e) => {
   const vis = !!(e.detail && e.detail.visible);
-  if (vis && !running) { running = true; if (cfg.replayOnShow) play(); if (!TEST) requestAnimationFrame(tick); }
+  if (vis && !running) { running = true; if (cfg.replayOnShow) play(); loop(); }
   else if (!vis) running = false;
 });
 window.addEventListener('resize', () => layout());
 if (document.fonts) document.fonts.addEventListener('loadingdone', () => layout());
 
-function tick() { if (!running) return; render(performance.now()); requestAnimationFrame(tick); }
+/* one frame loop at most: hidden and shown again within a frame, the frame
+ * already asked for carries on instead of a second loop starting */
+let frameAsked = 0;
+function loop() { if (!TEST && !frameAsked) frameAsked = requestAnimationFrame(tick); }
+function tick() { frameAsked = 0; if (!running) return; render(performance.now()); loop(); }
 
 async function boot() {
   const q = new URLSearchParams(location.search);
@@ -803,9 +821,10 @@ async function boot() {
       if (r.ok) loaded = await r.json();
     } catch (_) { /* the source sends its settings right after anyway */ }
   }
-  apply(loaded, true);
+  /* settings that came live while the file loaded are newer than it */
+  if (!liveCfg) apply(loaded, true);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => layout());
-  if (!TEST) requestAnimationFrame(tick);
+  loop();
 }
 
 window.__text = {

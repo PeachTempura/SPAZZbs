@@ -153,6 +153,29 @@ static const struct mo_preset mo_presets[] = {
 #define MO_PRESETS (sizeof(mo_presets) / sizeof(mo_presets[0]))
 #define MO_DEFAULT_PRESET 0
 
+/* the "RGB colour cycle" look's speed when Cycle is 0 (turns per second) */
+#define MO_RGB_DEFAULT_CYCLE 0.25
+
+/* which controls each choice actually uses (the rest are hidden). Keep in
+ * step with spazz-motion.effect. */
+static const char *const looks_col_a[] = {"neon",    "neonflicker", "outline", "shadow",
+					  "duotone", "hologram",    "tint",    NULL};
+static const char *const looks_col_b[] = {"duotone", NULL};
+static const char *const looks_glow[] = {"neon",  "neonflicker", "outline",  "rainbow",   "shadow",
+					 "bloom", "synthwave",   "hologram", "scanlines", NULL};
+static const char *const distorts_no_size[] = {"vhs", "chroma", "bulge", NULL};
+static const char *const distorts_no_speed[] = {"crt", "pixel", NULL};
+
+static bool id_in(const char *id, const char *const *ids)
+{
+	for (size_t i = 0; id && ids[i]; i++) {
+		if (strcmp(id, ids[i]) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /* ------------------------------------------------------------------------ */
 
 enum phase { PH_SHOWN, PH_ENTER, PH_EXIT, PH_GONE };
@@ -165,6 +188,7 @@ struct spazz_motion {
 
 	/* settings */
 	int motion, distort, look, enter, exit, pivot;
+	bool look_rgb;
 	double m_speed, m_amount, m_phase;
 	double d_amount, d_size, d_speed;
 	double l_amount, glow, cycle;
@@ -254,6 +278,7 @@ static void mo_update(void *data, obs_data_t *s)
 	mo->motion = list_index(s, "motion", mo_motions, MO_MOTIONS);
 	mo->distort = list_index(s, "distort", mo_distorts, MO_DISTORTS);
 	mo->look = list_index(s, "look", mo_looks, MO_LOOKS);
+	mo->look_rgb = strcmp(obs_data_get_string(s, "look"), "rgb") == 0;
 	mo->enter = list_index(s, "enter", mo_enters, MO_ENTERS);
 	mo->exit = list_index(s, "exit", mo_enters, MO_ENTERS);
 	mo->pivot = list_index(s, "pivot", mo_pivots, MO_PIVOTS);
@@ -275,13 +300,15 @@ static void mo_update(void *data, obs_data_t *s)
 		mo->anim_sec = 0.05;
 	}
 	mo->enter_on_live = strcmp(obs_data_get_string(s, "enter_when"), "live") == 0;
+	const bool was_loop = mo->loop;
 	mo->loop = obs_data_get_bool(s, "loop");
 	mo->stay_sec = obs_data_get_double(s, "stay_sec");
 	mo->gap_sec = obs_data_get_double(s, "gap_sec");
 	mo->room_pct = (int)obs_data_get_int(s, "room");
 
-	/* switched the loop off while it was away: bring it back */
-	if (!mo->loop && mo->phase == PH_GONE) {
+	/* switched the loop off while it was away: bring it back. Only on that
+	 * switch: any other change (a slider) must not undo a "Play exit". */
+	if (was_loop && !mo->loop && mo->phase == PH_GONE) {
 		mo->phase = PH_SHOWN;
 	}
 }
@@ -547,6 +574,9 @@ static void mo_render(void *data, gs_effect_t *unused)
 		hue_rotate(&ca, hue);
 		hue_rotate(&cb, hue);
 	}
+	/* the "RGB colour cycle" look is the cycle: with Cycle at 0 it would do
+	 * nothing at all, so it rolls at a gentle default instead */
+	const double look_hue = mo->look_rgb && mo->cycle <= 0.0 ? MO_TAU * MO_RGB_DEFAULT_CYCLE * mo->clock : hue;
 
 	vec2_set(&v2, (float)ow, (float)oh);
 	gs_effect_set_vec2(mo->p_out_size, &v2);
@@ -560,7 +590,7 @@ static void mo_render(void *data, gs_effect_t *unused)
 	gs_effect_set_float(mo->p_opacity, (float)fx.opacity);
 	vec4_set(&v4, (float)mo->distort, (float)mo->d_amount, (float)mo->d_size, (float)mo->dclock);
 	gs_effect_set_vec4(mo->p_dist, &v4);
-	vec4_set(&v4, (float)mo->look, (float)mo->l_amount, (float)mo->glow, (float)fmod(hue, MO_TAU * 64.0));
+	vec4_set(&v4, (float)mo->look, (float)mo->l_amount, (float)mo->glow, (float)fmod(look_hue, MO_TAU));
 	gs_effect_set_vec4(mo->p_look, &v4);
 	gs_effect_set_vec3(mo->p_col_a, &ca);
 	gs_effect_set_vec3(mo->p_col_b, &cb);
@@ -569,19 +599,26 @@ static void mo_render(void *data, gs_effect_t *unused)
 	vec4_set(&v4, (float)fx.vhs, (float)fmod(mo->seed, 97.0), 0.0f, 0.0f);
 	gs_effect_set_vec4(mo->p_fx2, &v4);
 
+	/* the shader writes premultiplied colour (like the stock colour
+	 * correction filter): without this the default blend multiplies by
+	 * alpha again and soft edges, glows and fades come out too dark */
+	gs_blend_state_push();
+	gs_blend_function(GS_BLEND_ONE, GS_BLEND_INVSRCALPHA);
 	obs_source_process_filter_end(mo->source, mo->effect, ow, oh);
+	gs_blend_state_pop();
 }
 
 /* ------------------------------------------------------------------------ */
 /* properties                                                                */
 
-static void add_list(obs_properties_t *props, const char *key, const char *label, const struct mo_item *list,
-		     size_t count)
+static obs_property_t *add_list(obs_properties_t *props, const char *key, const char *label, const struct mo_item *list,
+				size_t count)
 {
 	obs_property_t *p = obs_properties_add_list(props, key, label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	for (size_t i = 0; i < count; i++) {
 		obs_property_list_add_string(p, T_(list[i].label), list[i].id);
 	}
+	return p;
 }
 
 static bool preset_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *s)
@@ -597,6 +634,39 @@ static bool preset_modified(obs_properties_t *props, obs_property_t *prop, obs_d
 		return false;
 	}
 	apply_preset(s, p);
+	return true;
+}
+
+static void set_visible(obs_properties_t *props, const char *key, bool on)
+{
+	obs_property_set_visible(obs_properties_get(props, key), on);
+}
+
+/* show only the sliders the chosen motion / distort / look uses */
+static bool layers_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *s)
+{
+	UNUSED_PARAMETER(prop);
+	const char *motion = obs_data_get_string(s, "motion");
+	const bool moving = motion && *motion && strcmp(motion, "none") != 0;
+	set_visible(props, "m_speed", moving);
+	set_visible(props, "m_amount", moving);
+	set_visible(props, "m_phase", moving);
+	set_visible(props, "pivot", moving);
+
+	const char *distort = obs_data_get_string(s, "distort");
+	const bool bending = distort && *distort && strcmp(distort, "none") != 0;
+	set_visible(props, "d_amount", bending);
+	set_visible(props, "d_size", bending && !id_in(distort, distorts_no_size));
+	set_visible(props, "d_speed", bending && !id_in(distort, distorts_no_speed));
+
+	const char *look = obs_data_get_string(s, "look");
+	const bool styled = look && *look && strcmp(look, "none") != 0;
+	const bool col_a = id_in(look, looks_col_a);
+	set_visible(props, "l_amount", styled);
+	set_visible(props, "col_a", col_a);
+	set_visible(props, "col_b", id_in(look, looks_col_b));
+	set_visible(props, "glow", id_in(look, looks_glow));
+	set_visible(props, "cycle", col_a || strcmp(look, "rgb") == 0);
 	return true;
 }
 
@@ -639,7 +709,8 @@ static obs_properties_t *mo_properties(void *data)
 
 	/* motion */
 	obs_properties_t *mg = obs_properties_create();
-	add_list(mg, "motion", T_("Motion"), mo_motions, MO_MOTIONS);
+	p = add_list(mg, "motion", T_("Motion"), mo_motions, MO_MOTIONS);
+	obs_property_set_modified_callback(p, layers_modified);
 	p = obs_properties_add_float_slider(mg, "m_speed", T_("Speed"), 0.1, 4.0, 0.05);
 	obs_property_float_set_suffix(p, "x");
 	obs_properties_add_float_slider(mg, "m_amount", T_("Amount"), 0.0, 4.0, 0.05);
@@ -650,7 +721,8 @@ static obs_properties_t *mo_properties(void *data)
 
 	/* distort */
 	obs_properties_t *dg = obs_properties_create();
-	add_list(dg, "distort", T_("Distort"), mo_distorts, MO_DISTORTS);
+	p = add_list(dg, "distort", T_("Distort"), mo_distorts, MO_DISTORTS);
+	obs_property_set_modified_callback(p, layers_modified);
 	obs_properties_add_float_slider(dg, "d_amount", T_("Amount"), 0.0, 3.0, 0.05);
 	obs_properties_add_float_slider(dg, "d_size", T_("Size"), 0.2, 4.0, 0.05);
 	p = obs_properties_add_float_slider(dg, "d_speed", T_("Speed"), 0.0, 5.0, 0.05);
@@ -659,7 +731,8 @@ static obs_properties_t *mo_properties(void *data)
 
 	/* look */
 	obs_properties_t *lg = obs_properties_create();
-	add_list(lg, "look", T_("Look"), mo_looks, MO_LOOKS);
+	p = add_list(lg, "look", T_("Look"), mo_looks, MO_LOOKS);
+	obs_property_set_modified_callback(p, layers_modified);
 	obs_properties_add_float_slider(lg, "l_amount", T_("Amount"), 0.0, 2.0, 0.05);
 	obs_properties_add_color(lg, "col_a", T_("ColorA"));
 	obs_properties_add_color(lg, "col_b", T_("ColorB"));

@@ -890,6 +890,11 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 	sp->config_path = config_path_for(source);
 
 	const bool fresh = !obs_data_has_user_value(settings, "preset_applied");
+	/* a spot saved by an older SPONSORCENTER: v1 lists, per-sponsor
+	 * times, or the old "gap" between runs. Spots saved since simply keep
+	 * the defaults (every_min etc. aren't stored until changed), so those
+	 * mustn't be "migrated" each time they load. */
+	bool legacy = obs_data_has_user_value(settings, "gap_sec");
 	obs_data_array_t *items = obs_data_get_array(settings, "items");
 	if (!items) {
 		if (fresh) {
@@ -909,29 +914,33 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 			dstr_free(&sub);
 		} else {
 			migrate_items(settings);
+			legacy = true;
 		}
 	}
 	obs_data_array_release(items);
 
 	/* spots from before the shared "on screen" time kept one per sponsor:
 	 * the longest becomes everyone's */
-	if (!fresh && !obs_data_has_user_value(settings, "show_sec")) {
+	if (!fresh) {
 		double longest = 0.0;
 		obs_data_array_t *all = obs_data_get_array(settings, "items");
 		for (size_t i = 0; i < obs_data_array_count(all); i++) {
 			obs_data_t *it = obs_data_array_item(all, i);
-			const double t = obs_data_get_double(it, "show_sec");
-			longest = t > longest ? t : longest;
+			if (obs_data_has_user_value(it, "show_sec")) {
+				legacy = true;
+				const double t = obs_data_get_double(it, "show_sec");
+				longest = t > longest ? t : longest;
+			}
 			obs_data_release(it);
 		}
 		obs_data_array_release(all);
-		if (longest >= 0.5) {
+		if (longest >= 0.5 && !obs_data_has_user_value(settings, "show_sec")) {
 			obs_data_set_double(settings, "show_sec", longest);
 		}
 	}
 
 	/* spots from before "every X minutes": keep roughly the same rhythm */
-	if (!fresh && !obs_data_has_user_value(settings, "every_min")) {
+	if (!fresh && legacy && !obs_data_has_user_value(settings, "every_min")) {
 		double run = 0.0;
 		obs_data_array_t *all = obs_data_get_array(settings, "items");
 		const double move =

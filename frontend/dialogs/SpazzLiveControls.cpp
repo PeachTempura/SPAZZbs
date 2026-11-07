@@ -113,6 +113,8 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 			  this),
 	  filterRemoveSignal(obs_source_get_signal_handler(source_), "filter_remove", SpazzLiveControls::FiltersChanged,
 			     this),
+	  filterReorderSignal(obs_source_get_signal_handler(source_), "reorder_filters",
+			      SpazzLiveControls::FiltersChanged, this),
 	  oldSettings(obs_data_create())
 {
 	setAttribute(Qt::WA_DeleteOnClose);
@@ -200,13 +202,22 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 	hint->setObjectName("spazzLiveHint");
 	fl->addWidget(hint, 1);
 	/* some sources (browser, media...) only take changes when told to,
-	 * so a page doesn't reload on every key: give those an Apply button */
-	if (view->DeferUpdate()) {
-		QPushButton *apply = new QPushButton(QTStr("Apply"), footer);
-		apply->setToolTip(QTStr("SpazzLive.ApplyTip"));
-		fl->addWidget(apply);
-		connect(apply, &QPushButton::clicked, view, [this]() { view->UpdateSettings(); });
-	}
+	 * so a page doesn't reload on every key: give those an Apply button.
+	 * A view only knows that once its properties have loaded (queued), so
+	 * the button follows the tab on screen as it loads and changes. */
+	applyButton = new QPushButton(QTStr("Apply"), footer);
+	applyButton->setToolTip(QTStr("SpazzLive.ApplyTip"));
+	applyButton->setVisible(false);
+	fl->addWidget(applyButton);
+	connect(applyButton, &QPushButton::clicked, this, [this]() {
+		if (OBSPropertiesView *v = qobject_cast<OBSPropertiesView *>(tabs->currentWidget())) {
+			if (Loaded(v) && v->DeferUpdate()) {
+				v->UpdateSettings();
+			}
+		}
+	});
+	WatchLoaded(view);
+	connect(tabs, &QTabWidget::currentChanged, this, &SpazzLiveControls::UpdateApply);
 	fl->addWidget(new QSizeGrip(footer), 0, Qt::AlignBottom | Qt::AlignRight);
 	layout->addWidget(footer);
 
@@ -276,7 +287,7 @@ void SpazzLiveControls::RecordUndo()
 		return;
 	}
 
-	if (view->DeferUpdate()) {
+	if (Loaded(view) && view->DeferUpdate()) {
 		view->UpdateSettings();
 	}
 
@@ -304,6 +315,32 @@ void SpazzLiveControls::RecordUndo()
 
 	main->undo_s.add_action(QTStr("Undo.Properties").arg(obs_source_get_name(source)), undo_redo, undo_redo,
 				undo_data, redo_data);
+}
+
+/* OBSPropertiesView loads its properties queued; until then DeferUpdate()
+ * isn't known (not even initialised) */
+static constexpr const char *kLoaded = "spazzLiveLoaded";
+
+bool SpazzLiveControls::Loaded(QWidget *v)
+{
+	return v && v->property(kLoaded).toBool();
+}
+
+void SpazzLiveControls::WatchLoaded(OBSPropertiesView *v)
+{
+	connect(v, &OBSPropertiesView::PropertiesRefreshed, this, [this, v]() {
+		v->setProperty(kLoaded, true);
+		UpdateApply();
+	});
+}
+
+void SpazzLiveControls::UpdateApply()
+{
+	if (!applyButton) {
+		return;
+	}
+	OBSPropertiesView *v = qobject_cast<OBSPropertiesView *>(tabs->currentWidget());
+	applyButton->setVisible(Loaded(v) && v->DeferUpdate());
 }
 
 void SpazzLiveControls::closeEvent(QCloseEvent *e)
@@ -432,6 +469,7 @@ void SpazzLiveControls::RebuildFilterTabs()
 							      (PropertiesUpdateCallback) nullptr,
 							      (PropertiesVisualUpdateCb)obs_source_update);
 		fv->setMinimumHeight(120);
+		WatchLoaded(fv);
 		t->page = fv;
 		const int idx = tabs->addTab(fv, QT_UTF8(obs_source_get_name(f)));
 		t->renamed.Connect(

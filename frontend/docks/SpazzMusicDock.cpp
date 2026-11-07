@@ -608,8 +608,15 @@ void AmpSlider::mouseReleaseEvent(QMouseEvent *e)
 
 void AmpSlider::wheelEvent(QWheelEvent *e)
 {
+	/* sideways scrolling isn't "down", and touchpads send many small
+	 * steps: move by how far the wheel really turned */
+	const int dy = e->angleDelta().y();
+	if (dy == 0) {
+		e->ignore();
+		return;
+	}
 	float step = kind == Kind::Seek ? 0.02f : 0.03f;
-	float v = std::clamp(value + (e->angleDelta().y() > 0 ? step : -step), 0.0f, 1.0f);
+	float v = std::clamp(value + step * (float)dy / 120.0f, 0.0f, 1.0f);
 	value = v;
 	update();
 	emit Moved(value);
@@ -1336,6 +1343,9 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	connect(folderList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
 		if (player) {
 			player->RenameFolder(folderList->row(item), item->text());
+			/* an empty name isn't taken: put the old one back once
+			 * the editor has closed */
+			QTimer::singleShot(0, this, &SpazzMusicDock::RebuildFolders);
 		}
 	});
 	connect(folderList, &AmpFolderList::FilesDropped, this, [this](const QStringList &paths, int row) {

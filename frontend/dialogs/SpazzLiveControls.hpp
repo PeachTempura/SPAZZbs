@@ -50,6 +50,7 @@ private:
 	OBSSignal updatePropertiesSignal;
 	OBSSignal filterAddSignal;
 	OBSSignal filterRemoveSignal;
+	OBSSignal filterReorderSignal;
 	OBSData oldSettings;
 	bool removed = false;
 
@@ -67,6 +68,11 @@ private:
 	std::vector<std::unique_ptr<FilterTab>> filterTabs;
 	void RebuildFilterTabs();
 	void AddEffects();
+	/* Apply, for whichever tab's source only takes changes when told to */
+	class QPushButton *applyButton = nullptr;
+	void UpdateApply();
+	void WatchLoaded(OBSPropertiesView *v);
+	static bool Loaded(QWidget *v);
 	QPoint dragOffset;
 	bool dragging = false;
 

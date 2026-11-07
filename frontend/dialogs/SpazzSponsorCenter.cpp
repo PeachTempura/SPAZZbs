@@ -752,12 +752,14 @@ static void ReplaceInScenes(obs_source_t *extra, obs_source_t *main)
 		std::vector<Hit> hits;
 	} ctx{extra, {}};
 
+	/* groups too: obs_enum_scenes lists them, and a spot inside a group
+	 * would otherwise just vanish when the extra source is removed */
 	obs_enum_scenes(
 		[](void *param, obs_source_t *src) {
-			if (obs_source_is_group(src)) {
+			obs_scene_t *scene = obs_group_or_scene_from_source(src);
+			if (!scene) {
 				return true;
 			}
-			obs_scene_t *scene = obs_scene_from_source(src);
 			obs_scene_enum_items(
 				scene,
 				[](obs_scene_t *sc, obs_sceneitem_t *item, void *p) {
@@ -1082,8 +1084,11 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 	QVBoxLayout *main = new QVBoxLayout(this);
 	main->addWidget(split);
 
-	connect(display, &OBSQTDisplay::DisplayCreated, this,
-		[this]() { obs_display_add_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this); });
+	connect(display, &OBSQTDisplay::DisplayCreated, this, [this]() {
+		if (!exiting) {
+			obs_display_add_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this);
+		}
+	});
 	connect(replay, &QPushButton::clicked, this, &SpazzSponsorCenter::Replay);
 	connect(saveButton, &QPushButton::clicked, this, &SpazzSponsorCenter::Save);
 	connect(revertButton, &QPushButton::clicked, this, [this]() {
@@ -1136,15 +1141,27 @@ void SpazzSponsorCenter::FrontendEvent(enum obs_frontend_event event, void *data
 	SpazzSponsorCenter *self = static_cast<SpazzSponsorCenter *>(data);
 	switch (event) {
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
-	case OBS_FRONTEND_EVENT_EXIT:
 		self->loading = true;
 		self->tidyTimer->stop();
+		break;
+	case OBS_FRONTEND_EVENT_EXIT:
+		/* everything OBS holds is being let go before shutdown: the
+		 * preview (a browser) goes now too, not whenever the dock is
+		 * deleted, and nothing new gets made after this */
+		self->loading = true;
+		self->exiting = true;
+		self->tidyTimer->stop();
+		self->pushTimer->stop();
+		if (self->display && self->display->GetDisplay()) {
+			obs_display_remove_draw_callback(self->display->GetDisplay(), SpazzSponsorCenter::Draw, self);
+		}
+		self->SetPreview(nullptr);
 		break;
 	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
 	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
 		self->loading = false;
 		/* a different collection: its own sponsors, nothing pending */
-		self->dirty = false;
+		self->SetDirty(false);
 		self->tidyTimer->start();
 		break;
 	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
@@ -1163,11 +1180,25 @@ void SpazzSponsorCenter::Start()
 	LoadFromLive(true);
 }
 
-void SpazzSponsorCenter::MakePreview(obs_data_t *from)
+/* swap the preview (null lets it go); the old one is released outside the
+ * lock, after the draw callback can no longer pick it up */
+void SpazzSponsorCenter::SetPreview(obs_source_t *src)
 {
 	if (preview && previewShowing) {
 		obs_source_dec_showing(preview);
-		previewShowing = false;
+	}
+	previewShowing = false;
+	OBSSource old = preview.Get();
+	{
+		std::lock_guard<std::mutex> lock(previewMutex);
+		preview = src;
+	}
+}
+
+void SpazzSponsorCenter::MakePreview(obs_data_t *from)
+{
+	if (exiting) {
+		return;
 	}
 	if (view) {
 		delete view;
@@ -1186,7 +1217,7 @@ void SpazzSponsorCenter::MakePreview(obs_data_t *from)
 	}
 	obs_data_set_bool(init, "studio_preview", true);
 	obs_data_set_int(init, "studio_focus", -1);
-	preview = obs_source_create_private(kSponsorId, "SPONSORCENTER preview", init);
+	SetPreview(obs_source_create_private(kSponsorId, "SPONSORCENTER preview", init));
 	if (!preview) {
 		return;
 	}
@@ -1212,7 +1243,7 @@ void SpazzSponsorCenter::MakePreview(obs_data_t *from)
  * editor keeps what it has unless `fresh` asks for a clean start. */
 void SpazzSponsorCenter::LoadFromLive(bool fresh)
 {
-	if (!isVisible() && !preview) {
+	if (exiting || (!isVisible() && !preview)) {
 		return; /* built the first time the tab opens */
 	}
 	OBSSource live = loading ? nullptr : Sponsors();
@@ -1262,7 +1293,7 @@ void SpazzSponsorCenter::UpdateWhere()
 	OBSSource live;
 	obs_enum_sources(
 		[](void *param, obs_source_t *src) {
-			if (strcmp(obs_source_get_unversioned_id(src), kSponsorId) == 0) {
+			if (strcmp(obs_source_get_unversioned_id(src), kSponsorId) == 0 && !obs_source_removed(src)) {
 				*static_cast<OBSSource *>(param) = src;
 				return false;
 			}
@@ -1328,6 +1359,15 @@ void SpazzSponsorCenter::hideEvent(QHideEvent *e)
 
 /* ---- the sponsor cards ---- */
 
+/* a card on its way out: off screen and quiet now (deleteLater, as it may be
+ * the one whose button is being handled), so it can't edit the list again */
+static void DropCard(SponsorCard *card)
+{
+	card->changed = nullptr;
+	card->hide();
+	card->deleteLater();
+}
+
 int SpazzSponsorCenter::IndexOf(const SponsorCard *card) const
 {
 	for (size_t i = 0; i < cards.size(); i++) {
@@ -1357,7 +1397,7 @@ void SpazzSponsorCenter::LoadCards()
 		return;
 	}
 	for (SponsorCard *c : cards) {
-		c->deleteLater();
+		DropCard(c);
 	}
 	cards.clear();
 
@@ -1444,13 +1484,14 @@ void SpazzSponsorCenter::Push()
 void SpazzSponsorCenter::CardChanged(SponsorCard *card)
 {
 	const int idx = IndexOf(card);
-	if (idx >= 0) {
-		lastTouched = idx;
-		if (focusCard != idx) {
-			focusCard = idx;
-			for (size_t i = 0; i < cards.size(); i++) {
-				cards[i]->SetFocused(int(i) == focusCard);
-			}
+	if (idx < 0) {
+		return; /* a card already taken out of the list */
+	}
+	lastTouched = idx;
+	if (focusCard != idx) {
+		focusCard = idx;
+		for (size_t i = 0; i < cards.size(); i++) {
+			cards[i]->SetFocused(int(i) == focusCard);
 		}
 	}
 	WriteItems();
@@ -1507,7 +1548,7 @@ void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 	}
 	case 3: /* delete */
 		cards.erase(cards.begin() + idx);
-		card->deleteLater();
+		DropCard(card);
 		focusCard = -1;
 		if (lastTouched >= int(cards.size()) || lastTouched == idx) {
 			lastTouched = -1;
@@ -1552,9 +1593,11 @@ void SpazzSponsorCenter::AddSponsor()
 	WriteItems();
 	Push();
 
-	QTimer::singleShot(0, this, [this, card]() {
-		cardScroll->ensureWidgetVisible(card, 0, 20);
-		card->FocusHeadline();
+	QTimer::singleShot(0, this, [this, card = QPointer<SponsorCard>(card)]() {
+		if (card) {
+			cardScroll->ensureWidgetVisible(card, 0, 20);
+			card->FocusHeadline();
+		}
 	});
 }
 
@@ -1583,7 +1626,13 @@ static void StudioDraw(bool on)
 void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
 {
 	SpazzSponsorCenter *w = static_cast<SpazzSponsorCenter *>(data);
-	obs_source_t *sp = w->preview.Get();
+	/* graphics thread: hold our own reference, the UI thread may swap the
+	 * preview at any moment */
+	OBSSourceAutoRelease sp;
+	{
+		std::lock_guard<std::mutex> lock(w->previewMutex);
+		sp = obs_source_get_ref(w->preview.Get());
+	}
 	if (!sp) {
 		return;
 	}
