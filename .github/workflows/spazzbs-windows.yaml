@@ -11,7 +11,7 @@ concurrency:
   group: spazzbs-windows-${{ github.ref }}
   cancel-in-progress: true
 env:
-  SPAZZBS_BASE_VERSION: '33.0.0'
+  SPAZZBS_BASE_VERSION: '33.0.1'
 jobs:
   # Turn the visualizer shader into the exact HLSL OBS will compile, using
   # OBS's own effect parser. OBS's stock default.effect goes through the same
