@@ -17,8 +17,12 @@
 #include <QPointer>
 #include <QWidget>
 
+#include <memory>
+#include <vector>
+
 class OBSPropertiesView;
 class QLabel;
+class QTabWidget;
 class QToolButton;
 
 class SpazzLiveControls : public QWidget {
@@ -27,6 +31,8 @@ class SpazzLiveControls : public QWidget {
 public:
 	/* one floater per source: opening it again brings it to the front */
 	static void Open(obs_source_t *source, QWidget *parent);
+	/* has settings, or can take Effects+ */
+	static bool CanOpen(obs_source_t *source);
 	~SpazzLiveControls();
 
 protected:
@@ -42,13 +48,25 @@ private:
 	OBSSignal removedSignal;
 	OBSSignal renamedSignal;
 	OBSSignal updatePropertiesSignal;
+	OBSSignal filterAddSignal;
+	OBSSignal filterRemoveSignal;
 	OBSData oldSettings;
 	bool removed = false;
 
 	QWidget *header = nullptr;
 	QLabel *title = nullptr;
 	QToolButton *pinButton = nullptr;
-	OBSPropertiesView *view = nullptr;
+	OBSPropertiesView *view = nullptr; /* the source's own settings */
+	QTabWidget *tabs = nullptr;
+	/* its Effects+ filters, one tab each: the same controls as in Filters */
+	struct FilterTab {
+		OBSWeakSource filter;
+		QWidget *page = nullptr;
+		OBSSignal renamed;
+	};
+	std::vector<std::unique_ptr<FilterTab>> filterTabs;
+	void RebuildFilterTabs();
+	void AddEffects();
 	QPoint dragOffset;
 	bool dragging = false;
 
@@ -59,6 +77,7 @@ private:
 	static void SourceRemoved(void *data, calldata_t *params);
 	static void SourceRenamed(void *data, calldata_t *params);
 	static void UpdateProperties(void *data, calldata_t *params);
+	static void FiltersChanged(void *data, calldata_t *params);
 
 	static QHash<QString, QPointer<SpazzLiveControls>> openWindows;
 };

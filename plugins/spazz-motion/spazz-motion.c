@@ -47,7 +47,7 @@ OBS_MODULE_USE_DEFAULT_LOCALE("spazz-motion", "en-US")
 
 MODULE_EXPORT const char *obs_module_description(void)
 {
-	return "SPAZZbs Movement filter";
+	return "SPAZZbs Effects+ filter";
 }
 
 #define T_(s) obs_module_text(s)
@@ -730,7 +730,7 @@ static void *mo_create(obs_data_t *settings, obs_source_t *source)
 		mo->p_fx = gs_effect_get_param_by_name(mo->effect, "fx");
 		mo->p_fx2 = gs_effect_get_param_by_name(mo->effect, "fx2");
 	} else {
-		blog(LOG_WARNING, "[Movement] couldn't load spazz-motion.effect");
+		blog(LOG_WARNING, "[Effects+] couldn't load spazz-motion.effect");
 	}
 
 	mo->hk_enter = obs_hotkey_register_source(source, "SpazzMotion.Enter", T_("Hotkey.Enter"), hotkey_enter, mo);

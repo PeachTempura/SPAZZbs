@@ -23,6 +23,7 @@
 #include <QScreen>
 #include <QPushButton>
 #include <QSizeGrip>
+#include <QTabWidget>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWindow>
@@ -80,7 +81,7 @@ static const char *kStyle = R"(
 
 void SpazzLiveControls::Open(obs_source_t *source, QWidget *parent)
 {
-	if (!source || !obs_source_configurable(source)) {
+	if (!source || !SpazzLiveControls::CanOpen(source)) {
 		return;
 	}
 
@@ -108,6 +109,10 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 	  renamedSignal(obs_source_get_signal_handler(source_), "rename", SpazzLiveControls::SourceRenamed, this),
 	  updatePropertiesSignal(obs_source_get_signal_handler(source_), "update_properties",
 				 SpazzLiveControls::UpdateProperties, this),
+	  filterAddSignal(obs_source_get_signal_handler(source_), "filter_add", SpazzLiveControls::FiltersChanged,
+			  this),
+	  filterRemoveSignal(obs_source_get_signal_handler(source_), "filter_remove", SpazzLiveControls::FiltersChanged,
+			     this),
 	  oldSettings(obs_data_create())
 {
 	setAttribute(Qt::WA_DeleteOnClose);
@@ -164,11 +169,28 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 
 	layout->addWidget(header);
 
-	/* the source's own settings, applied the moment they change */
+	/* the source's own settings, applied the moment they change, then a tab
+	 * per Effects+ filter on it: the same controls as Properties and
+	 * Filters, just closer to hand */
+	tabs = new QTabWidget(frame);
+	tabs->setDocumentMode(true);
 	view = new OBSPropertiesView(settings.Get(), source, (PropertiesReloadCallback)obs_source_properties,
 				     (PropertiesUpdateCallback) nullptr, (PropertiesVisualUpdateCb)obs_source_update);
 	view->setMinimumHeight(120);
-	layout->addWidget(view, 1);
+	tabs->addTab(view, QTStr("SpazzLive.Tab.Settings"));
+	if (!obs_source_configurable(source)) {
+		tabs->setTabVisible(0, false);
+	}
+	if (obs_source_get_display_name("spazz_motion") && (obs_source_get_output_flags(source) & OBS_SOURCE_VIDEO)) {
+		QToolButton *addFx = new QToolButton(tabs);
+		addFx->setText(QTStr("SpazzLive.AddEffects"));
+		addFx->setToolTip(QTStr("SpazzLive.AddEffectsTip"));
+		addFx->setCursor(Qt::ArrowCursor);
+		tabs->setCornerWidget(addFx, Qt::TopRightCorner);
+		connect(addFx, &QToolButton::clicked, this, &SpazzLiveControls::AddEffects);
+	}
+	layout->addWidget(tabs, 1);
+	RebuildFilterTabs();
 
 	/* footer: hint + resize grip */
 	QWidget *footer = new QWidget(frame);
@@ -357,6 +379,117 @@ void SpazzLiveControls::SourceRenamed(void *data, calldata_t *)
 {
 	SpazzLiveControls *w = static_cast<SpazzLiveControls *>(data);
 	QMetaObject::invokeMethod(w, [w]() { w->UpdateTitle(); }, Qt::QueuedConnection);
+}
+
+bool SpazzLiveControls::CanOpen(obs_source_t *source)
+{
+	if (!source) {
+		return false;
+	}
+	if (obs_source_configurable(source)) {
+		return true;
+	}
+	/* nothing of its own to set, but it can take Effects+ */
+	return obs_source_get_display_name("spazz_motion") && (obs_source_get_output_flags(source) & OBS_SOURCE_VIDEO);
+}
+
+void SpazzLiveControls::RebuildFilterTabs()
+{
+	/* remember which tab was open */
+	OBSWeakSource current;
+	for (auto &t : filterTabs) {
+		if (tabs->currentWidget() == t->page) {
+			current = t->filter;
+		}
+	}
+	const bool onSettings = tabs->currentIndex() == 0;
+
+	for (auto &t : filterTabs) {
+		const int i = tabs->indexOf(t->page);
+		if (i >= 0) {
+			tabs->removeTab(i);
+		}
+		t->page->deleteLater();
+	}
+	filterTabs.clear();
+
+	std::vector<OBSSource> found;
+	obs_source_enum_filters(
+		source,
+		[](obs_source_t *, obs_source_t *filter, void *param) {
+			if (strcmp(obs_source_get_unversioned_id(filter), "spazz_motion") == 0) {
+				static_cast<std::vector<OBSSource> *>(param)->emplace_back(filter);
+			}
+		},
+		&found);
+
+	for (const OBSSource &f : found) {
+		auto t = std::make_unique<FilterTab>();
+		t->filter = OBSGetWeakRef(f);
+		OBSDataAutoRelease fs = obs_source_get_settings(f);
+		OBSPropertiesView *fv = new OBSPropertiesView(fs.Get(), f.Get(),
+							      (PropertiesReloadCallback)obs_source_properties,
+							      (PropertiesUpdateCallback) nullptr,
+							      (PropertiesVisualUpdateCb)obs_source_update);
+		fv->setMinimumHeight(120);
+		t->page = fv;
+		const int idx = tabs->addTab(fv, QT_UTF8(obs_source_get_name(f)));
+		t->renamed.Connect(
+			obs_source_get_signal_handler(f), "rename",
+			[](void *data, calldata_t *) {
+				SpazzLiveControls *w = static_cast<SpazzLiveControls *>(data);
+				QMetaObject::invokeMethod(w, [w]() { w->RebuildFilterTabs(); }, Qt::QueuedConnection);
+			},
+			this);
+		if (current && OBSGetWeakRef(f) == current) {
+			tabs->setCurrentIndex(idx);
+		}
+		filterTabs.push_back(std::move(t));
+	}
+	if (onSettings && obs_source_configurable(source)) {
+		tabs->setCurrentIndex(0);
+	} else if (!obs_source_configurable(source) && !filterTabs.empty() && tabs->currentIndex() == 0) {
+		tabs->setCurrentIndex(1);
+	}
+}
+
+void SpazzLiveControls::AddEffects()
+{
+	if (!source || removed) {
+		return;
+	}
+	QString base = QTStr("SpazzLive.EffectsName");
+	QString name = base;
+	for (int i = 2;; i++) {
+		OBSSourceAutoRelease taken = obs_source_get_filter_by_name(source, QT_TO_UTF8(name));
+		if (!taken) {
+			break;
+		}
+		name = QString("%1 %2").arg(base).arg(i);
+	}
+	OBSSourceAutoRelease filter = obs_source_create("spazz_motion", QT_TO_UTF8(name), nullptr, nullptr);
+	if (!filter) {
+		return;
+	}
+	obs_source_filter_add(source, filter);
+	/* the filter_add signal rebuilds the tabs; open the new one */
+	OBSWeakSourceAutoRelease weak = obs_source_get_weak_source(filter);
+	QMetaObject::invokeMethod(
+		this,
+		[this, w = OBSWeakSource(weak.Get())]() {
+			for (auto &t : filterTabs) {
+				if (t->filter == w) {
+					tabs->setCurrentWidget(t->page);
+				}
+			}
+		},
+		Qt::QueuedConnection);
+}
+
+void SpazzLiveControls::FiltersChanged(void *data, calldata_t *)
+{
+	SpazzLiveControls *w = static_cast<SpazzLiveControls *>(data);
+	QMetaObject::invokeMethod(w, [w]() { w->RebuildFilterTabs(); }, Qt::QueuedConnection);
 }
 
 void SpazzLiveControls::UpdateProperties(void *data, calldata_t *)

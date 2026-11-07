@@ -762,7 +762,7 @@ void OBSBasic::CreateSourcePopupMenu(int idx, bool preview)
 		OBSSource liveSource = source;
 		QAction *live = popup.addAction(QTStr("SpazzLive.Menu"), this,
 						[this, liveSource]() { SpazzLiveControls::Open(liveSource, this); });
-		live->setEnabled(obs_source_configurable(source));
+		live->setEnabled(SpazzLiveControls::CanOpen(source));
 	} else {
 		popup.addAction(ui->actionPasteRef);
 		popup.addAction(ui->actionPasteDup);
