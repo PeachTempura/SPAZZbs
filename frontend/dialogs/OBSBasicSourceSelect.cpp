@@ -18,6 +18,7 @@
 
 #include "OBSApp.hpp"
 #include "OBSBasicSourceSelect.hpp"
+#include "SpazzSponsorCenter.hpp"
 #include "NameDialog.hpp"
 
 #include <utility/ResizeSignaler.hpp>
@@ -745,6 +746,14 @@ void OBSBasicSourceSelect::createNew()
 		return;
 	}
 
+	/* SPAZZbs: there's one Sponsors source; "new" puts that one in the scene */
+	if (selectedTypeId.compare("spazz_sponsor") == 0) {
+		SpazzSponsorCenter::AddToCurrentScene(this);
+		SpazzSponsorCenter::Open(this);
+		close();
+		return;
+	}
+
 	std::string sourceType = selectedTypeId.toStdString();
 	const char *id = sourceType.c_str();
 	QString placeholder = getDisplayNameForSourceType(selectedTypeId);
@@ -966,6 +975,9 @@ void OBSBasicSourceSelect::sourceTypeSelected(QListWidgetItem *current, QListWid
 
 	ui->createNewSource->setText(
 		QTStr("Basic.SourceSelect.NewSource").arg(getDisplayNameForSourceType(selectedTypeId)));
+	if (type == "spazz_sponsor") {
+		ui->createNewSource->setText(QTStr("Sponsorcenter.AddToScene"));
+	}
 	ui->sourceSelectTitle->setText(QString("%1").arg(getDisplayNameForSourceType(selectedTypeId)));
 
 	updateExistingSources();

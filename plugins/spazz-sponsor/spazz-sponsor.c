@@ -63,6 +63,17 @@ struct spazz_sponsor {
 	volatile long running;
 };
 
+/* SPONSORCENTER draws what's live under its preview; while it does, the live
+ * Sponsors source sits that frame out so it isn't drawn under the preview's
+ * copy (sponsor over sponsor). Graphics thread only. */
+static bool studio_drawing = false;
+
+static void proc_studio_draw(void *data, calldata_t *cd)
+{
+	UNUSED_PARAMETER(data);
+	studio_drawing = calldata_bool(cd, "on");
+}
+
 static bool compute_run(struct spazz_sponsor *sp)
 {
 	if (!os_atomic_load_long(&sp->st_switch)) {
@@ -189,22 +200,10 @@ static void apply_preset(obs_data_t *s, int idx)
 			break;
 		}
 	}
-
-	/* ... and each sponsor's own motion follows the preset */
-	static const char *per_item[] = {"enter", "exit", "text_anim", "logo_anim"};
-	obs_data_array_t *items = obs_data_get_array(s, "items");
-	for (size_t i = 0; i < obs_data_array_count(items); i++) {
-		obs_data_t *it = obs_data_array_item(items, i);
-		for (size_t k = 0; k < sizeof(per_item) / sizeof(per_item[0]); k++) {
-			obs_data_set_string(it, per_item[k], obs_data_get_string(s, per_item[k]));
-		}
-		obs_data_release(it);
-	}
-	obs_data_array_release(items);
 }
 
 /* a new sponsor, moving the way the preset says */
-static obs_data_t *new_item(obs_data_t *s, const char *head, const char *sub, const char *image)
+static obs_data_t *new_item(const char *head, const char *sub, const char *image)
 {
 	obs_data_t *it = obs_data_create();
 	obs_data_set_string(it, "image", image ? image : "");
@@ -213,11 +212,6 @@ static obs_data_t *new_item(obs_data_t *s, const char *head, const char *sub, co
 	obs_data_set_string(it, "head", head ? head : "");
 	obs_data_set_string(it, "sub", sub ? sub : "");
 	obs_data_set_string(it, "badge", "");
-	obs_data_set_string(it, "text_anim", obs_data_get_string(s, "text_anim"));
-	obs_data_set_string(it, "logo_anim", obs_data_get_string(s, "logo_anim"));
-	obs_data_set_string(it, "enter", obs_data_get_string(s, "enter"));
-	obs_data_set_string(it, "exit", obs_data_get_string(s, "exit"));
-	obs_data_set_double(it, "show_sec", 8.0);
 	obs_data_set_bool(it, "off", false);
 	obs_data_set_string(it, "mask", "frame");
 	obs_data_set_string(it, "aspect", "square");
@@ -281,13 +275,13 @@ static void migrate_items(obs_data_t *s)
 
 	const size_t n = heads.num > files.num ? heads.num : files.num;
 	const double each = heads.num > 1 ? obs_data_get_double(s, "message_sec") : obs_data_get_double(s, "show_sec");
+	obs_data_set_double(s, "show_sec", each > 0.5 ? each : 8.0);
 	obs_data_array_t *items = obs_data_array_create();
 	for (size_t i = 0; i < n; i++) {
-		obs_data_t *it = new_item(s, heads.num ? heads.array[i % heads.num] : "",
+		obs_data_t *it = new_item(heads.num ? heads.array[i % heads.num] : "",
 					  heads.num ? subs.array[i % heads.num] : "",
 					  files.num ? files.array[i % files.num] : "");
 		obs_data_set_string(it, "badge", obs_data_get_string(s, "badge"));
-		obs_data_set_double(it, "show_sec", each > 0.5 ? each : 8.0);
 		obs_data_array_push_back(items, it);
 		obs_data_release(it);
 	}
@@ -358,10 +352,19 @@ static char *build_config(struct spazz_sponsor *sp, obs_data_t *s, bool preview)
 	}
 
 	/* the sponsors, in order. Images become addresses the page can load */
-	static const char *item_strs[][2] = {
-		{"layout", "layout"},      {"head", "head"},          {"sub", "sub"},     {"badge", "badge"},
-		{"text_anim", "textAnim"}, {"logo_anim", "logoAnim"}, {"enter", "enter"}, {"exit", "exit"},
-		{"mask", "mask"},          {"aspect", "aspect"},      {"fit", "fit"}};
+	/* each sponsor brings its picture, its shape and its text ... */
+	static const char *item_strs[][2] = {{"layout", "layout"}, {"head", "head"}, {"sub", "sub"},
+					     {"badge", "badge"},   {"mask", "mask"}, {"aspect", "aspect"},
+					     {"fit", "fit"}};
+	/* ... and the Look decides how all of them move and how long they stay */
+	static const char *motion[][2] = {{"enter", "enter"},
+					  {"exit", "exit"},
+					  {"text_anim", "textAnim"},
+					  {"logo_anim", "logoAnim"}};
+	double show_sec = obs_data_get_double(s, "show_sec");
+	if (show_sec < 0.5) {
+		show_sec = 0.5;
+	}
 	obs_data_array_t *out = obs_data_array_create();
 	obs_data_array_t *items = obs_data_get_array(s, "items");
 	for (size_t i = 0; i < obs_data_array_count(items); i++) {
@@ -379,7 +382,10 @@ static char *build_config(struct spazz_sponsor *sp, obs_data_t *s, bool preview)
 				obs_data_set_string(o, item_strs[k][1], obs_data_get_string(it, item_strs[k][0]));
 			}
 			obs_data_set_double(o, "imageSize", obs_data_get_double(it, "image_size"));
-			obs_data_set_double(o, "showSec", obs_data_get_double(it, "show_sec"));
+			for (size_t k = 0; k < sizeof(motion) / sizeof(motion[0]); k++) {
+				obs_data_set_string(o, motion[k][1], obs_data_get_string(s, motion[k][0]));
+			}
+			obs_data_set_double(o, "showSec", show_sec);
 			obs_data_set_string(o, "maskPath", mask_path(obs_data_get_string(it, "mask")));
 			obs_data_set_double(o, "zoom", obs_data_get_double(it, "zoom"));
 			obs_data_set_double(o, "panX", obs_data_get_double(it, "pan_x"));
@@ -617,7 +623,7 @@ static void spn_defaults(obs_data_t *s)
 	obs_data_set_default_int(s, "margin_x", 60);
 	obs_data_set_default_int(s, "margin_y", 60);
 	obs_data_set_default_bool(s, "upper", false);
-	obs_data_set_default_double(s, "show_sec", 12.0);
+	obs_data_set_default_double(s, "show_sec", 8.0);
 	obs_data_set_default_double(s, "gap_sec", 45.0);
 	obs_data_set_default_double(s, "every_min", 5.0);
 	obs_data_set_default_int(s, "cycles", 1);
@@ -781,14 +787,22 @@ static obs_properties_t *spn_properties(void *data)
 	add_list(look, "image_shape", T_("ImageShape"), spn_imageShape);
 	add_list(look, "image_fit", T_("ImageFit"), spn_imageFit);
 	obs_properties_add_text(look, "window_title", T_("WindowTitle"), OBS_TEXT_DEFAULT);
-	add_list(look, "idle", T_("Idle"), spn_idle);
-	p = obs_properties_add_int_slider(look, "enter_ms", T_("EnterMs"), 100, 3000, 50);
-	obs_property_int_set_suffix(p, " ms");
-	p = obs_properties_add_int_slider(look, "exit_ms", T_("ExitMs"), 100, 3000, 50);
-	obs_property_int_set_suffix(p, " ms");
 	p = obs_properties_add_bool(look, "hear_video", T_("HearVideo"));
 	obs_property_set_long_description(p, T_("HearVideo.Tip"));
 	obs_properties_add_group(props, "grp_look", T_("Look"), OBS_GROUP_NORMAL, look);
+
+	/* how every sponsor moves: the preset sets these, and you can change them */
+	obs_properties_t *motion = obs_properties_create();
+	add_list(motion, "enter", T_("Enter"), spn_enter);
+	add_list(motion, "exit", T_("Exit"), spn_enter);
+	add_list(motion, "text_anim", T_("TextAnim"), spn_textAnim);
+	add_list(motion, "logo_anim", T_("LogoAnim"), spn_logoAnim);
+	add_list(motion, "idle", T_("Idle"), spn_idle);
+	p = obs_properties_add_int_slider(motion, "enter_ms", T_("EnterMs"), 100, 3000, 50);
+	obs_property_int_set_suffix(p, " ms");
+	p = obs_properties_add_int_slider(motion, "exit_ms", T_("ExitMs"), 100, 3000, 50);
+	obs_property_int_set_suffix(p, " ms");
+	obs_properties_add_group(props, "grp_motion", T_("Motion"), OBS_GROUP_NORMAL, motion);
 
 	/* when it shows */
 	obs_properties_t *timing = obs_properties_create();
@@ -801,6 +815,9 @@ static obs_properties_t *spn_properties(void *data)
 	obs_property_set_long_description(p, T_("EveryMin.Tip"));
 	p = obs_properties_add_int(timing, "cycles", T_("Cycles"), 1, 50, 1);
 	obs_property_set_long_description(p, T_("Cycles.Tip"));
+	p = obs_properties_add_float(timing, "show_sec", T_("ShowSec"), 0.5, 600.0, 0.5);
+	obs_property_float_set_suffix(p, " s");
+	obs_property_set_long_description(p, T_("ShowSec.Tip"));
 	p = obs_properties_add_float_slider(timing, "between_sec", T_("BetweenSec"), 0.0, 10.0, 0.1);
 	obs_property_float_set_suffix(p, " s");
 	p = obs_properties_add_int(timing, "loops", T_("Loops"), 0, 1000, 1);
@@ -883,7 +900,7 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 			struct dstr head = {0}, sub = {0};
 			split_line(T_("SampleMessage"), &head, &sub);
 			obs_data_array_t *one = obs_data_array_create();
-			obs_data_t *it = new_item(settings, head.array, sub.array, "");
+			obs_data_t *it = new_item(head.array, sub.array, "");
 			obs_data_array_push_back(one, it);
 			obs_data_release(it);
 			obs_data_set_array(settings, "items", one);
@@ -896,6 +913,23 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 	}
 	obs_data_array_release(items);
 
+	/* spots from before the shared "on screen" time kept one per sponsor:
+	 * the longest becomes everyone's */
+	if (!fresh && !obs_data_has_user_value(settings, "show_sec")) {
+		double longest = 0.0;
+		obs_data_array_t *all = obs_data_get_array(settings, "items");
+		for (size_t i = 0; i < obs_data_array_count(all); i++) {
+			obs_data_t *it = obs_data_array_item(all, i);
+			const double t = obs_data_get_double(it, "show_sec");
+			longest = t > longest ? t : longest;
+			obs_data_release(it);
+		}
+		obs_data_array_release(all);
+		if (longest >= 0.5) {
+			obs_data_set_double(settings, "show_sec", longest);
+		}
+	}
+
 	/* spots from before "every X minutes": keep roughly the same rhythm */
 	if (!fresh && !obs_data_has_user_value(settings, "every_min")) {
 		double run = 0.0;
@@ -905,7 +939,7 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 			1000.0;
 		for (size_t i = 0; i < obs_data_array_count(all); i++) {
 			obs_data_t *it = obs_data_array_item(all, i);
-			run += obs_data_get_double(it, "show_sec") + move +
+			run += obs_data_get_double(settings, "show_sec") + move +
 			       obs_data_get_double(settings, "between_sec");
 			obs_data_release(it);
 		}
@@ -967,7 +1001,7 @@ static void spn_render(void *data, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
 	struct spazz_sponsor *sp = data;
-	if (sp->browser) {
+	if (sp->browser && (sp->preview || !studio_drawing)) {
 		obs_source_video_render(sp->browser);
 	}
 }
@@ -1026,5 +1060,6 @@ static struct obs_source_info spazz_sponsor_info = {
 bool obs_module_load(void)
 {
 	obs_register_source(&spazz_sponsor_info);
+	proc_handler_add(obs_get_proc_handler(), "void spazz_sponsor_studio_draw(in bool on)", proc_studio_draw, NULL);
 	return true;
 }

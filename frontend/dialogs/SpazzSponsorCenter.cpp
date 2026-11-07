@@ -391,7 +391,8 @@ private:
 };
 
 /* ------------------------------------------------------------------------ */
-/* one sponsor: logo, how it sits, its text, its little animations          */
+/* one sponsor: its picture and how it's cut, and its two lines of text.     */
+/* How it moves comes from the Look & motion tab, the same for every one.   */
 
 class SponsorCard : public QFrame {
 public:
@@ -521,40 +522,6 @@ public:
 		mid->addLayout(form, 1);
 		v->addLayout(mid);
 
-		/* its animations */
-		QGridLayout *grid = new QGridLayout();
-		grid->setHorizontalSpacing(8);
-		auto combo = [this](const spn_option *opts) {
-			QComboBox *c = new QComboBox(this);
-			FillCombo(c, opts);
-			return c;
-		};
-		textAnim = combo(spn_textAnim);
-		logoAnim = combo(spn_logoAnim);
-		enter = combo(spn_enter);
-		leave = combo(spn_enter);
-		showSec = new QDoubleSpinBox(this);
-		showSec->setRange(0.5, 600.0);
-		showSec->setSingleStep(0.5);
-		showSec->setDecimals(1);
-		showSec->setSuffix(" s");
-		auto label = [this](const char *key) {
-			return new QLabel(QTStr(key), this);
-		};
-		grid->addWidget(label("Sponsorcenter.Card.In"), 0, 0);
-		grid->addWidget(enter, 0, 1);
-		grid->addWidget(label("Sponsorcenter.Card.Out"), 0, 2);
-		grid->addWidget(leave, 0, 3);
-		grid->addWidget(label("Sponsorcenter.Card.TextAnim"), 1, 0);
-		grid->addWidget(textAnim, 1, 1);
-		grid->addWidget(label("Sponsorcenter.Card.LogoAnim"), 1, 2);
-		grid->addWidget(logoAnim, 1, 3);
-		grid->addWidget(label("Sponsorcenter.Card.ShowSec"), 2, 0);
-		grid->addWidget(showSec, 2, 1);
-		grid->setColumnStretch(1, 1);
-		grid->setColumnStretch(3, 1);
-		v->addLayout(grid);
-
 		logo->picked = [this](const QString &file) {
 			image = file;
 			logo->Show(image);
@@ -595,7 +562,7 @@ public:
 		auto onChange = [this]() {
 			Changed();
 		};
-		for (QComboBox *c : {layoutBox, textAnim, logoAnim, enter, leave}) {
+		for (QComboBox *c : {layoutBox}) {
 			connect(c, &QComboBox::currentIndexChanged, this, onChange);
 		}
 		for (QLineEdit *e : {head, sub, badge}) {
@@ -605,7 +572,6 @@ public:
 			sizeLabel->setText(QString("%1%").arg(size->value()));
 			Changed();
 		});
-		connect(showSec, &QDoubleSpinBox::valueChanged, this, onChange);
 		connect(showBox, &QCheckBox::toggled, this, onChange);
 	}
 
@@ -636,12 +602,6 @@ public:
 		head->setText(QT_UTF8(obs_data_get_string(it, "head")));
 		sub->setText(QT_UTF8(obs_data_get_string(it, "sub")));
 		badge->setText(QT_UTF8(obs_data_get_string(it, "badge")));
-		SetCombo(textAnim, obs_data_get_string(it, "text_anim"));
-		SetCombo(logoAnim, obs_data_get_string(it, "logo_anim"));
-		SetCombo(enter, obs_data_get_string(it, "enter"));
-		SetCombo(leave, obs_data_get_string(it, "exit"));
-		double secs = obs_data_get_double(it, "show_sec");
-		showSec->setValue(secs > 0.0 ? secs : 8.0);
 		showBox->setChecked(!obs_data_get_bool(it, "off"));
 		loading = false;
 		UpdateTitle();
@@ -657,11 +617,6 @@ public:
 		obs_data_set_string(it, "head", QT_TO_UTF8(head->text()));
 		obs_data_set_string(it, "sub", QT_TO_UTF8(sub->text()));
 		obs_data_set_string(it, "badge", QT_TO_UTF8(badge->text()));
-		obs_data_set_string(it, "text_anim", QT_TO_UTF8(textAnim->currentData().toString()));
-		obs_data_set_string(it, "logo_anim", QT_TO_UTF8(logoAnim->currentData().toString()));
-		obs_data_set_string(it, "enter", QT_TO_UTF8(enter->currentData().toString()));
-		obs_data_set_string(it, "exit", QT_TO_UTF8(leave->currentData().toString()));
-		obs_data_set_double(it, "show_sec", showSec->value());
 		obs_data_set_bool(it, "off", !showBox->isChecked());
 		obs_data_set_string(it, "mask", QT_TO_UTF8(maskBox->currentData().toString()));
 		obs_data_set_string(it, "aspect", QT_TO_UTF8(aspectBox->currentData().toString()));
@@ -696,11 +651,10 @@ private:
 	QToolButton *up = nullptr, *down = nullptr;
 	LogoDrop *logo = nullptr;
 	QPushButton *clearLogo = nullptr;
-	QComboBox *layoutBox = nullptr, *textAnim = nullptr, *logoAnim = nullptr, *enter = nullptr, *leave = nullptr;
+	QComboBox *layoutBox = nullptr;
 	QSlider *size = nullptr;
 	QLabel *sizeLabel = nullptr;
 	QLineEdit *head = nullptr, *sub = nullptr, *badge = nullptr;
-	QDoubleSpinBox *showSec = nullptr;
 	QComboBox *maskBox = nullptr, *aspectBox = nullptr, *fitBox = nullptr;
 	QSlider *zoom = nullptr, *panX = nullptr, *panY = nullptr, *volume = nullptr;
 	QLabel *volumeLabel = nullptr, *soundLabel = nullptr;
@@ -759,6 +713,225 @@ private:
 };
 
 /* ------------------------------------------------------------------------ */
+/* the one Sponsors source                                                   */
+
+static constexpr const char *kMarker = "spazz_sponsorcenter";
+
+static QString UniqueName(const QString &base)
+{
+	QString name = base;
+	for (int i = 2;; i++) {
+		OBSSourceAutoRelease taken = obs_get_source_by_name(QT_TO_UTF8(name));
+		if (!taken) {
+			return name;
+		}
+		name = QString("%1 %2").arg(base).arg(i);
+	}
+}
+
+static std::string ItemKey(obs_data_t *it)
+{
+	std::string k = obs_data_get_string(it, "image");
+	k += '\n';
+	k += obs_data_get_string(it, "head");
+	k += '\n';
+	k += obs_data_get_string(it, "sub");
+	return k;
+}
+
+/* every scene `extra` sits in gets `main` in its place (same spot, size and
+ * order), unless that scene has `main` already */
+static void ReplaceInScenes(obs_source_t *extra, obs_source_t *main)
+{
+	struct Hit {
+		OBSScene scene;
+		OBSSceneItem item;
+	};
+	struct Ctx {
+		obs_source_t *extra;
+		std::vector<Hit> hits;
+	} ctx{extra, {}};
+
+	obs_enum_scenes(
+		[](void *param, obs_source_t *src) {
+			if (obs_source_is_group(src)) {
+				return true;
+			}
+			obs_scene_t *scene = obs_scene_from_source(src);
+			obs_scene_enum_items(
+				scene,
+				[](obs_scene_t *sc, obs_sceneitem_t *item, void *p) {
+					Ctx *c = static_cast<Ctx *>(p);
+					if (obs_sceneitem_get_source(item) == c->extra) {
+						c->hits.push_back({OBSScene(sc), OBSSceneItem(item)});
+					}
+					return true;
+				},
+				param);
+			return true;
+		},
+		&ctx);
+
+	for (const Hit &h : ctx.hits) {
+		if (!obs_scene_find_source(h.scene, obs_source_get_name(main))) {
+			struct obs_transform_info info;
+			struct obs_sceneitem_crop crop;
+			obs_sceneitem_get_info2(h.item, &info);
+			obs_sceneitem_get_crop(h.item, &crop);
+			const int order = obs_sceneitem_get_order_position(h.item);
+			obs_sceneitem_t *added = obs_scene_add(h.scene, main);
+			if (added) {
+				obs_sceneitem_set_info2(added, &info);
+				obs_sceneitem_set_crop(added, &crop);
+				obs_sceneitem_set_visible(added, obs_sceneitem_visible(h.item));
+				obs_sceneitem_set_order_position(added, order);
+			}
+		}
+		obs_sceneitem_remove(h.item);
+	}
+}
+
+OBSSource SpazzSponsorCenter::Sponsors()
+{
+	std::vector<OBSSource> spots;
+	obs_enum_sources(
+		[](void *param, obs_source_t *src) {
+			if (strcmp(obs_source_get_unversioned_id(src), kSponsorId) == 0 && !obs_source_removed(src)) {
+				static_cast<std::vector<OBSSource> *>(param)->emplace_back(src);
+			}
+			return true;
+		},
+		&spots);
+	if (spots.empty()) {
+		return nullptr;
+	}
+
+	size_t pick = 0;
+	for (size_t i = 0; i < spots.size(); i++) {
+		OBSDataAutoRelease priv = obs_source_get_private_settings(spots[i]);
+		if (obs_data_get_bool(priv, kMarker)) {
+			pick = i;
+			break;
+		}
+	}
+	OBSSource main = spots[pick];
+	{
+		OBSDataAutoRelease priv = obs_source_get_private_settings(main);
+		obs_data_set_bool(priv, kMarker, true);
+	}
+	if (spots.size() == 1) {
+		return main;
+	}
+
+	/* more than one sponsor spot (from before SPONSORCENTER was one tool, or
+	 * a pasted copy): their sponsors join the one list, and the one source
+	 * takes their place in the scenes, so sponsors never stack */
+	OBSDataAutoRelease mainSettings = obs_source_get_settings(main);
+	OBSDataArrayAutoRelease mine = obs_data_get_array(mainSettings, "items");
+	OBSDataArrayAutoRelease merged = mine ? CloneArray(mine) : obs_data_array_create();
+	std::vector<std::string> have;
+	for (size_t i = 0; i < obs_data_array_count(merged); i++) {
+		OBSDataAutoRelease it = obs_data_array_item(merged, i);
+		have.push_back(ItemKey(it));
+	}
+	bool grew = false;
+	for (size_t i = 0; i < spots.size(); i++) {
+		if (i == pick) {
+			continue;
+		}
+		OBSDataAutoRelease theirs = obs_source_get_settings(spots[i]);
+		OBSDataArrayAutoRelease items = obs_data_get_array(theirs, "items");
+		for (size_t k = 0; k < obs_data_array_count(items); k++) {
+			OBSDataAutoRelease it = obs_data_array_item(items, k);
+			const std::string key = ItemKey(it);
+			if (std::find(have.begin(), have.end(), key) != have.end()) {
+				continue;
+			}
+			have.push_back(key);
+			OBSDataAutoRelease copy = obs_data_create_from_json(obs_data_get_json(it));
+			obs_data_array_push_back(merged, copy);
+			grew = true;
+		}
+		blog(LOG_INFO, "[SPONSORCENTER] folding sponsor spot '%s' into '%s'", obs_source_get_name(spots[i]),
+		     obs_source_get_name(main));
+		ReplaceInScenes(spots[i], main);
+		obs_source_remove(spots[i]);
+	}
+	if (grew) {
+		OBSDataAutoRelease update = obs_data_create();
+		obs_data_set_array(update, "items", merged);
+		obs_source_update(main, update);
+	}
+	return main;
+}
+
+static OBSSource CreateSponsors(obs_data_t *settings)
+{
+	OBSDataAutoRelease s = obs_data_create();
+	if (settings) {
+		obs_data_apply(s, settings);
+		CloneItems(s);
+	}
+	obs_data_erase(s, "studio_preview");
+	obs_data_erase(s, "studio_focus");
+	/* full canvas, top left: Position decides where it shows */
+	struct obs_video_info ovi;
+	if (obs_get_video_info(&ovi)) {
+		obs_data_set_int(s, "width", ovi.base_width);
+		obs_data_set_int(s, "height", ovi.base_height);
+	}
+	OBSSourceAutoRelease created =
+		obs_source_create(kSponsorId, QT_TO_UTF8(UniqueName(QTStr("Sponsorcenter.DefaultName"))), s, nullptr);
+	if (created) {
+		OBSDataAutoRelease priv = obs_source_get_private_settings(created);
+		obs_data_set_bool(priv, kMarker, true);
+	}
+	return created.Get();
+}
+
+void SpazzSponsorCenter::AddToCurrentScene(QWidget *parent)
+{
+	if (!obs_source_get_display_name(kSponsorId)) {
+		OBSMessageBox::warning(parent, QTStr("Sponsorcenter.Title"), QTStr("Sponsorcenter.Missing"));
+		return;
+	}
+	OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
+	obs_scene_t *scene = obs_scene_from_source(sceneSource);
+	QString msg;
+	if (!scene) {
+		msg = QTStr("Sponsorcenter.NoScene");
+	} else {
+		OBSSource sp = Sponsors();
+		if (!sp) {
+			/* the first time: what's in SPONSORCENTER right now */
+			OBSDataAutoRelease from;
+			if (instance && instance->preview) {
+				from = obs_source_get_settings(instance->preview);
+			}
+			sp = CreateSponsors(from);
+			if (instance && sp) {
+				instance->SetDirty(false);
+			}
+		}
+		if (!sp) {
+			msg = QTStr("Sponsorcenter.Failed");
+		} else if (obs_scene_find_source(scene, obs_source_get_name(sp))) {
+			msg = QTStr("Sponsorcenter.AlreadyIn").arg(QT_UTF8(obs_source_get_name(sceneSource)));
+		} else {
+			obs_scene_add(scene, sp);
+			msg = QTStr("Sponsorcenter.Added").arg(QT_UTF8(obs_source_get_name(sceneSource)));
+			if (OBSBasic *main = OBSBasic::Get()) {
+				main->SaveProject();
+			}
+		}
+	}
+	if (instance) {
+		instance->status->setText(msg);
+		instance->UpdateWhere();
+	}
+}
+
+/* ------------------------------------------------------------------------ */
 
 QPointer<OBSDock> SpazzSponsorCenter::dock;
 std::function<void(QDockWidget *)> SpazzSponsorCenter::showDock;
@@ -773,7 +946,7 @@ OBSDock *SpazzSponsorCenter::CreateDock(QWidget *mainWindow)
 	return dock;
 }
 
-void SpazzSponsorCenter::Open(QWidget *parent, const QString &uuid)
+void SpazzSponsorCenter::Open(QWidget *parent)
 {
 	if (!obs_source_get_display_name(kSponsorId)) {
 		OBSMessageBox::warning(parent, QTStr("Sponsorcenter.Title"), QTStr("Sponsorcenter.Missing"));
@@ -788,36 +961,18 @@ void SpazzSponsorCenter::Open(QWidget *parent, const QString &uuid)
 		dock->show();
 		dock->raise();
 	}
-
-	if (uuid.isEmpty()) {
-		return;
-	}
-	if (!instance->preview) {
-		instance->pendingUuid = uuid; /* picked up when it first shows */
-		return;
-	}
-	/* opening another spot while this one has unsaved edits: ask first */
-	if (uuid != instance->editing->currentData().toString()) {
-		bool go = !instance->dirty ||
-			  OBSMessageBox::question(instance, QTStr("Sponsorcenter.Title"),
-						  QTStr("Sponsorcenter.Discard")) == QMessageBox::Yes;
-		if (go) {
-			instance->RefreshEditing(uuid);
-		}
-	}
 }
 
 void SpazzSponsorCenter::RegisterOpenProc(QWidget *mainWindow)
 {
 	static QPointer<QWidget> owner;
 	owner = mainWindow;
-	auto open = [](void *, calldata_t *cd) {
-		const QString uuid = QT_UTF8(calldata_string(cd, "uuid"));
+	auto open = [](void *, calldata_t *) {
 		QMetaObject::invokeMethod(
 			qApp,
-			[uuid]() {
+			[]() {
 				if (owner) {
-					SpazzSponsorCenter::Open(owner, uuid);
+					SpazzSponsorCenter::Open(owner);
 				}
 			},
 			Qt::QueuedConnection);
@@ -833,6 +988,24 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 	pushTimer->setSingleShot(true);
 	pushTimer->setInterval(250);
 	connect(pushTimer, &QTimer::timeout, this, &SpazzSponsorCenter::Push);
+
+	/* another sponsor source turned up (pasted, or an old collection): fold
+	 * it into the one, once things are quiet */
+	tidyTimer = new QTimer(this);
+	tidyTimer->setSingleShot(true);
+	tidyTimer->setInterval(300);
+	connect(tidyTimer, &QTimer::timeout, this, [this]() {
+		if (loading) {
+			return;
+		}
+		Sponsors();
+		if (!dirty) {
+			LoadFromLive(true);
+		}
+		UpdateWhere();
+	});
+	createdSig.Connect(obs_get_signal_handler(), "source_create", SpazzSponsorCenter::SourceCreated, this);
+	obs_frontend_add_event_callback(SpazzSponsorCenter::FrontendEvent, this);
 
 	/* ---- left: preview over the live scene ---- */
 	QWidget *left = new QWidget(this);
@@ -858,13 +1031,7 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 	QVBoxLayout *rl = new QVBoxLayout(right);
 	rl->setContentsMargins(0, 0, 0, 0);
 
-	QFormLayout *top = new QFormLayout();
-	editing = new QComboBox(right);
-	top->addRow(QTStr("Sponsorcenter.Editing"), editing);
-	rl->addLayout(top);
-
 	QTabWidget *tabs = new QTabWidget(right);
-
 	cardScroll = new QScrollArea(tabs);
 	cardScroll->setWidgetResizable(true);
 	cardScroll->setFrameShape(QFrame::NoFrame);
@@ -882,19 +1049,27 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 	lookTabs = tabs;
 	rl->addWidget(tabs, 1);
 
-	QFormLayout *bottom = new QFormLayout();
-	nameEdit = new QLineEdit(right);
-	bottom->addRow(QTStr("Sponsorcenter.Name"), nameEdit);
-	rl->addLayout(bottom);
+	where = new QLabel(right);
+	where->setWordWrap(true);
+	where->setProperty("class", "text-muted");
+	rl->addWidget(where);
 
 	QHBoxLayout *buttons = new QHBoxLayout();
 	status = new QLabel(right);
 	status->setWordWrap(true);
 	liveButton = new QPushButton(QTStr("Sponsorcenter.PlayLive"), right);
-	saveButton = new QPushButton(right);
+	liveButton->setToolTip(QTStr("Sponsorcenter.PlayLiveTip"));
+	sceneButton = new QPushButton(QTStr("Sponsorcenter.AddToScene"), right);
+	sceneButton->setToolTip(QTStr("Sponsorcenter.AddToSceneTip"));
+	revertButton = new QPushButton(QTStr("Sponsorcenter.Revert"), right);
+	revertButton->setToolTip(QTStr("Sponsorcenter.RevertTip"));
+	saveButton = new QPushButton(QTStr("Sponsorcenter.Save"), right);
+	saveButton->setToolTip(QTStr("Sponsorcenter.SaveTip"));
 	saveButton->setDefault(true);
 	buttons->addWidget(status, 1);
 	buttons->addWidget(liveButton);
+	buttons->addWidget(sceneButton);
+	buttons->addWidget(revertButton);
 	buttons->addWidget(saveButton);
 	rl->addLayout(buttons);
 
@@ -909,10 +1084,14 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 
 	connect(display, &OBSQTDisplay::DisplayCreated, this,
 		[this]() { obs_display_add_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this); });
-	connect(editing, &QComboBox::currentIndexChanged, this, &SpazzSponsorCenter::EditingChanged);
 	connect(replay, &QPushButton::clicked, this, &SpazzSponsorCenter::Replay);
 	connect(saveButton, &QPushButton::clicked, this, &SpazzSponsorCenter::Save);
+	connect(revertButton, &QPushButton::clicked, this, [this]() {
+		LoadFromLive(true);
+		status->setText(QTStr("Sponsorcenter.Reverted"));
+	});
 	connect(liveButton, &QPushButton::clicked, this, &SpazzSponsorCenter::PlayLive);
+	connect(sceneButton, &QPushButton::clicked, this, [this]() { AddToCurrentScene(this); });
 	connect(addButton, &QPushButton::clicked, this, &SpazzSponsorCenter::AddSponsor);
 
 	/* clicking into a sponsor's card shows that sponsor in the preview */
@@ -927,10 +1106,13 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QWidget(parent)
 			}
 		}
 	});
+	SetDirty(false);
 }
 
 SpazzSponsorCenter::~SpazzSponsorCenter()
 {
+	obs_frontend_remove_event_callback(SpazzSponsorCenter::FrontendEvent, this);
+	createdSig.Disconnect();
 	if (display && display->GetDisplay()) {
 		obs_display_remove_draw_callback(display->GetDisplay(), SpazzSponsorCenter::Draw, this);
 	}
@@ -939,20 +1121,78 @@ SpazzSponsorCenter::~SpazzSponsorCenter()
 	}
 }
 
+void SpazzSponsorCenter::SourceCreated(void *data, calldata_t *cd)
+{
+	obs_source_t *src = static_cast<obs_source_t *>(calldata_ptr(cd, "source"));
+	if (!src || strcmp(obs_source_get_unversioned_id(src), kSponsorId) != 0) {
+		return;
+	}
+	SpazzSponsorCenter *self = static_cast<SpazzSponsorCenter *>(data);
+	QMetaObject::invokeMethod(self->tidyTimer, qOverload<>(&QTimer::start), Qt::QueuedConnection);
+}
+
+void SpazzSponsorCenter::FrontendEvent(enum obs_frontend_event event, void *data)
+{
+	SpazzSponsorCenter *self = static_cast<SpazzSponsorCenter *>(data);
+	switch (event) {
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
+	case OBS_FRONTEND_EVENT_EXIT:
+		self->loading = true;
+		self->tidyTimer->stop();
+		break;
+	case OBS_FRONTEND_EVENT_FINISHED_LOADING:
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+		self->loading = false;
+		/* a different collection: its own sponsors, nothing pending */
+		self->dirty = false;
+		self->tidyTimer->start();
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_CHANGED:
+	case OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED:
+		self->UpdateWhere();
+		break;
+	default:
+		break;
+	}
+}
+
 /* The preview (a browser) only exists once the tab is first opened, and
  * only renders while the tab is on screen. */
 void SpazzSponsorCenter::Start()
 {
+	LoadFromLive(true);
+}
+
+void SpazzSponsorCenter::MakePreview(obs_data_t *from)
+{
+	if (preview && previewShowing) {
+		obs_source_dec_showing(preview);
+		previewShowing = false;
+	}
+	if (view) {
+		delete view;
+		view = nullptr;
+	}
+
 	OBSDataAutoRelease init = obs_data_create();
+	if (from) {
+		obs_data_apply(init, from);
+		CloneItems(init);
+	}
 	struct obs_video_info ovi;
 	if (obs_get_video_info(&ovi)) {
 		obs_data_set_int(init, "width", ovi.base_width);
 		obs_data_set_int(init, "height", ovi.base_height);
 	}
 	obs_data_set_bool(init, "studio_preview", true);
+	obs_data_set_int(init, "studio_focus", -1);
 	preview = obs_source_create_private(kSponsorId, "SPONSORCENTER preview", init);
 	if (!preview) {
 		return;
+	}
+	if (isVisible()) {
+		obs_source_inc_showing(preview);
+		previewShowing = true;
 	}
 
 	OBSDataAutoRelease settings = obs_source_get_settings(preview);
@@ -963,13 +1203,102 @@ void SpazzSponsorCenter::Start()
 	/* a preset in the Look tab restyles every sponsor's motion too */
 	connect(view, &OBSPropertiesView::Changed, this, [this]() {
 		status->clear();
-		dirty = true;
+		SetDirty(true);
 		SyncCardsFromSettings();
 	});
+}
 
-	const QString uuid = pendingUuid;
-	pendingUuid.clear();
-	RefreshEditing(uuid);
+/* what's on stream now, into the editor. With no Sponsors source yet, the
+ * editor keeps what it has unless `fresh` asks for a clean start. */
+void SpazzSponsorCenter::LoadFromLive(bool fresh)
+{
+	if (!isVisible() && !preview) {
+		return; /* built the first time the tab opens */
+	}
+	OBSSource live = loading ? nullptr : Sponsors();
+	OBSDataAutoRelease theirs = live ? obs_source_get_settings(live) : nullptr;
+	if (!preview || (!theirs && fresh)) {
+		MakePreview(theirs);
+	} else if (theirs) {
+		/* same page, new settings: no reload */
+		OBSDataAutoRelease mine = obs_source_get_settings(preview);
+		obs_data_clear(mine);
+		obs_data_apply(mine, theirs);
+		CloneItems(mine);
+		obs_data_set_bool(mine, "studio_preview", true);
+		obs_data_set_int(mine, "studio_focus", -1);
+		if (view) {
+			view->ReloadProperties();
+		}
+	} else if (!fresh) {
+		UpdateWhere();
+		return;
+	}
+
+	focusCard = -1;
+	lastTouched = -1;
+	LoadCards();
+	/* cards save only what they show, so the editor starts from that */
+	WriteItems();
+	Push();
+	SetDirty(false);
+	UpdateWhere();
+}
+
+void SpazzSponsorCenter::SetDirty(bool on)
+{
+	dirty = on;
+	saveButton->setEnabled(on);
+	revertButton->setEnabled(on);
+	saveButton->setText(QTStr(on ? "Sponsorcenter.Save" : "Sponsorcenter.Saved"));
+}
+
+/* which scenes the Sponsors source is in */
+void SpazzSponsorCenter::UpdateWhere()
+{
+	if (loading) {
+		return;
+	}
+	OBSSource live;
+	obs_enum_sources(
+		[](void *param, obs_source_t *src) {
+			if (strcmp(obs_source_get_unversioned_id(src), kSponsorId) == 0) {
+				*static_cast<OBSSource *>(param) = src;
+				return false;
+			}
+			return true;
+		},
+		&live);
+
+	OBSSourceAutoRelease current = obs_frontend_get_current_scene();
+	if (!live) {
+		where->setText(QTStr("Sponsorcenter.WhereNone"));
+		sceneButton->setEnabled(current != nullptr);
+		liveButton->setEnabled(false);
+		return;
+	}
+
+	struct Ctx {
+		obs_source_t *sp;
+		QStringList names;
+	} ctx{live, {}};
+	obs_enum_scenes(
+		[](void *param, obs_source_t *src) {
+			Ctx *c = static_cast<Ctx *>(param);
+			if (!obs_source_is_group(src) &&
+			    obs_scene_find_source_recursive(obs_scene_from_source(src), obs_source_get_name(c->sp))) {
+				c->names << QT_UTF8(obs_source_get_name(src));
+			}
+			return true;
+		},
+		&ctx);
+
+	const bool here = current &&
+			  obs_scene_find_source(obs_scene_from_source(current), obs_source_get_name(live)) != nullptr;
+	sceneButton->setEnabled(current && !here);
+	liveButton->setEnabled(true);
+	where->setText(ctx.names.isEmpty() ? QTStr("Sponsorcenter.WhereNoScenes")
+					   : QTStr("Sponsorcenter.Where").arg(ctx.names.join(", ")));
 }
 
 void SpazzSponsorCenter::showEvent(QShowEvent *e)
@@ -977,11 +1306,15 @@ void SpazzSponsorCenter::showEvent(QShowEvent *e)
 	QWidget::showEvent(e);
 	if (!preview) {
 		Start();
+	} else if (!dirty) {
+		/* changed from its Properties window while this was closed */
+		LoadFromLive(false);
 	}
 	if (preview && !previewShowing) {
 		obs_source_inc_showing(preview);
 		previewShowing = true;
 	}
+	UpdateWhere();
 }
 
 void SpazzSponsorCenter::hideEvent(QHideEvent *e)
@@ -990,76 +1323,6 @@ void SpazzSponsorCenter::hideEvent(QHideEvent *e)
 	if (preview && previewShowing) {
 		obs_source_dec_showing(preview);
 		previewShowing = false;
-	}
-}
-
-/* ---- which spot we're editing ---- */
-
-void SpazzSponsorCenter::RefreshEditing(const QString &selectUuid)
-{
-	QSignalBlocker block(editing);
-	editing->clear();
-	editing->addItem(QTStr("Sponsorcenter.New"), QString());
-
-	auto add = [](void *param, obs_source_t *src) {
-		if (strcmp(obs_source_get_unversioned_id(src), kSponsorId) == 0) {
-			QComboBox *box = static_cast<QComboBox *>(param);
-			box->addItem(QT_UTF8(obs_source_get_name(src)), QT_UTF8(obs_source_get_uuid(src)));
-		}
-		return true;
-	};
-	obs_enum_sources(add, editing);
-
-	int idx = selectUuid.isEmpty() ? 0 : editing->findData(selectUuid);
-	editing->setCurrentIndex(idx < 0 ? 0 : idx);
-	EditingChanged();
-}
-
-void SpazzSponsorCenter::EditingChanged()
-{
-	if (!preview) {
-		return;
-	}
-	const QString uuid = editing->currentData().toString();
-	OBSSourceAutoRelease existing = uuid.isEmpty() ? nullptr : obs_get_source_by_uuid(QT_TO_UTF8(uuid));
-
-	OBSDataAutoRelease mine = obs_source_get_settings(preview);
-	if (existing) {
-		OBSDataAutoRelease theirs = obs_source_get_settings(existing);
-		obs_data_clear(mine);
-		obs_data_apply(mine, theirs);
-		CloneItems(mine);
-		obs_data_set_bool(mine, "studio_preview", true);
-		nameEdit->setText(QT_UTF8(obs_source_get_name(existing)));
-		nameEdit->setEnabled(false);
-		saveButton->setText(QTStr("Sponsorcenter.Update"));
-		liveButton->setEnabled(true);
-	} else {
-		nameEdit->setText(UniqueName(QTStr("Sponsorcenter.DefaultName")));
-		nameEdit->setEnabled(true);
-		saveButton->setText(QTStr("Sponsorcenter.AddToScene"));
-		liveButton->setEnabled(false);
-	}
-
-	focusCard = -1;
-	lastTouched = -1;
-	obs_data_set_int(mine, "studio_focus", -1);
-	obs_source_update(preview, nullptr);
-	LoadCards();
-	view->ReloadProperties();
-	status->clear();
-	dirty = false;
-}
-
-QString SpazzSponsorCenter::UniqueName(const QString &base) const
-{
-	QString name = base;
-	for (int i = 2;; i++) {
-		OBSSourceAutoRelease taken = obs_get_source_by_name(QT_TO_UTF8(name));
-		if (!taken) {
-			return name;
-		}
-		name = QString("%1 %2").arg(base).arg(i);
 	}
 }
 
@@ -1193,7 +1456,7 @@ void SpazzSponsorCenter::CardChanged(SponsorCard *card)
 	WriteItems();
 	pushTimer->start();
 	status->clear();
-	dirty = true;
+	SetDirty(true);
 }
 
 void SpazzSponsorCenter::Touched(SponsorCard *card)
@@ -1216,7 +1479,6 @@ void SpazzSponsorCenter::Touched(SponsorCard *card)
 
 void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 {
-	dirty = true;
 	const int idx = IndexOf(card);
 	if (idx < 0) {
 		return;
@@ -1254,6 +1516,7 @@ void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 	default:
 		return;
 	}
+	SetDirty(true);
 	Relayout();
 	WriteItems();
 	Push();
@@ -1261,25 +1524,22 @@ void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 
 void SpazzSponsorCenter::AddSponsor()
 {
-	dirty = true;
-	/* the new sponsor starts as a copy of the one you last worked on (or
-	 * the last one): same layout, size, animations and timing, no logo or text */
+	/* the new sponsor starts with the same shape as the one you last worked
+	 * on (or the last one): layout, size and cut, but no logo or text */
 	OBSDataAutoRelease item;
 	const int from = lastTouched >= 0 && lastTouched < int(cards.size()) ? lastTouched : int(cards.size()) - 1;
 	if (from >= 0) {
 		item = cards[size_t(from)]->Save();
 	} else {
-		OBSDataAutoRelease settings = obs_source_get_settings(preview);
 		item = obs_data_create();
 		obs_data_set_string(item, "layout", "left");
 		obs_data_set_double(item, "image_size", 1.0);
-		obs_data_set_double(item, "show_sec", 8.0);
-		for (const char *k : {"enter", "exit", "text_anim", "logo_anim"}) {
-			obs_data_set_string(item, k, obs_data_get_string(settings, k));
-		}
 	}
 	for (const char *k : {"image", "head", "sub", "badge"}) {
 		obs_data_set_string(item, k, "");
+	}
+	for (const char *k : {"zoom", "pan_x", "pan_y"}) {
+		obs_data_erase(item, k);
 	}
 	obs_data_set_bool(item, "off", false);
 
@@ -1287,6 +1547,7 @@ void SpazzSponsorCenter::AddSponsor()
 	cards.push_back(card);
 	focusCard = int(cards.size()) - 1;
 	lastTouched = focusCard;
+	SetDirty(true);
 	Relayout();
 	WriteItems();
 	Push();
@@ -1308,6 +1569,15 @@ void SpazzSponsorCenter::Replay()
 	}
 	WriteItems();
 	Push();
+}
+
+static void StudioDraw(bool on)
+{
+	uint8_t stack[128];
+	calldata_t cd;
+	calldata_init_fixed(&cd, stack, sizeof(stack));
+	calldata_set_bool(&cd, "on", on);
+	proc_handler_call(obs_get_proc_handler(), "spazz_sponsor_studio_draw", &cd);
 }
 
 void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
@@ -1336,9 +1606,15 @@ void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
 	gs_ortho(0.0f, float(baseCX), 0.0f, float(baseCY), -100.0f, 100.0f);
 	gs_set_viewport(x, y, newCX, newCY);
 
-	/* what's live right now (the frame OBS already rendered, so the scene
-	 * isn't drawn a second time), so you see the sponsor where it will sit */
-	obs_render_main_texture_src_color_only();
+	/* what's live right now, so you see the sponsor where it will sit, but
+	 * without the live Sponsors source: otherwise its sponsor and the one
+	 * you're editing show on top of each other */
+	OBSSourceAutoRelease program = obs_get_output_source(0);
+	if (program) {
+		StudioDraw(true);
+		obs_source_video_render(program);
+		StudioDraw(false);
+	}
 
 	/* the sponsor, stretched to the canvas like a full-screen overlay */
 	const uint32_t spCX = std::max(obs_source_get_width(sp), 1u);
@@ -1365,48 +1641,23 @@ void SpazzSponsorCenter::Save()
 	CloneItems(settings);
 	obs_data_erase(settings, "studio_preview");
 	obs_data_erase(settings, "studio_focus");
+	obs_data_erase(settings, "width");
+	obs_data_erase(settings, "height");
 
-	const QString uuid = editing->currentData().toString();
-	if (!uuid.isEmpty()) {
-		OBSSourceAutoRelease existing = obs_get_source_by_uuid(QT_TO_UTF8(uuid));
-		if (!existing) {
-			status->setText(QTStr("Sponsorcenter.Gone"));
-			RefreshEditing();
-			return;
-		}
-		obs_source_update(existing, settings);
-		status->setText(QTStr("Sponsorcenter.Updated").arg(QT_UTF8(obs_source_get_name(existing))));
-		dirty = false;
+	OBSSource live = Sponsors();
+	if (live) {
+		obs_source_update(live, settings);
+		status->setText(QTStr("Sponsorcenter.Updated"));
+		SetDirty(false);
 	} else {
-		OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
-		obs_scene_t *scene = obs_scene_from_source(sceneSource);
-		if (!scene) {
-			status->setText(QTStr("Sponsorcenter.NoScene"));
-			return;
+		/* the first save makes the Sponsors source and puts it in this scene */
+		SetDirty(false);
+		AddToCurrentScene(this);
+		if (!Sponsors()) {
+			SetDirty(true);
 		}
-
-		QString name = nameEdit->text().trimmed();
-		if (name.isEmpty()) {
-			name = QTStr("Sponsorcenter.DefaultName");
-		}
-		name = UniqueName(name);
-
-		/* full canvas, top left: Position decides where it shows */
-		struct obs_video_info ovi;
-		if (obs_get_video_info(&ovi)) {
-			obs_data_set_int(settings, "width", ovi.base_width);
-			obs_data_set_int(settings, "height", ovi.base_height);
-		}
-
-		OBSSourceAutoRelease created = obs_source_create(kSponsorId, QT_TO_UTF8(name), settings, nullptr);
-		if (!created) {
-			status->setText(QTStr("Sponsorcenter.Failed"));
-			return;
-		}
-		obs_scene_add(scene, created);
-		status->setText(QTStr("Sponsorcenter.Added").arg(name, QT_UTF8(obs_source_get_name(sceneSource))));
-		RefreshEditing(QT_UTF8(obs_source_get_uuid(created)));
 	}
+	UpdateWhere();
 
 	if (OBSBasic *main = OBSBasic::Get()) {
 		main->SaveProject();
@@ -1415,14 +1666,13 @@ void SpazzSponsorCenter::Save()
 
 void SpazzSponsorCenter::PlayLive()
 {
-	const QString uuid = editing->currentData().toString();
-	OBSSourceAutoRelease existing = uuid.isEmpty() ? nullptr : obs_get_source_by_uuid(QT_TO_UTF8(uuid));
-	if (!existing) {
+	OBSSource live = Sponsors();
+	if (!live) {
 		return;
 	}
 	calldata_t cd;
 	calldata_init(&cd);
-	proc_handler_call(obs_source_get_proc_handler(existing), "play", &cd);
+	proc_handler_call(obs_source_get_proc_handler(live), "play", &cd);
 	calldata_free(&cd);
-	status->setText(QTStr("Sponsorcenter.Playing").arg(QT_UTF8(obs_source_get_name(existing))));
+	status->setText(QTStr("Sponsorcenter.Playing"));
 }
