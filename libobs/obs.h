@@ -1572,6 +1572,10 @@ EXPORT uint32_t obs_source_get_base_width(obs_source_t *source);
 EXPORT uint32_t obs_source_get_base_height(obs_source_t *source);
 
 EXPORT bool obs_source_audio_pending(const obs_source_t *source);
+/** SPAZZbs: true when this source is in the audio tree more than once this
+ * tick (e.g. a source in both scenes of a transition); its audio is then
+ * mixed in on its own, so parents shouldn't add it again */
+EXPORT bool obs_source_audio_is_duplicated(const obs_source_t *source);
 EXPORT uint64_t obs_source_get_audio_timestamp(const obs_source_t *source);
 EXPORT void obs_source_get_audio_mix(const obs_source_t *source, struct obs_source_audio_mix *audio);
 

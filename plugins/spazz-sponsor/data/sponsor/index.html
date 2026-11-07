@@ -803,6 +803,12 @@ function setRunning(on) {
 }
 window.addEventListener('spazzSponsorRun', (e) => setRunning(!!(e.detail && e.detail.run)));
 window.addEventListener('spazzSponsorHide', hideNow);
+/* off screen (the studio tab hidden, or the scene not shown): videos stop
+ * so their sound does too */
+window.addEventListener('obsSourceVisibleChanged', (e) => {
+  if (e.detail && e.detail.visible === false)
+    document.querySelectorAll('video').forEach((v) => v.pause());
+});
 window.addEventListener('obsSourceActiveChanged', (e) => {
   const active = e.detail && e.detail.active;
   if (active && cfg.mode === 'onshow') play();

@@ -23,6 +23,7 @@ extern "C" {
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -88,6 +89,25 @@ SpazzMusicPlayer::SpazzMusicPlayer(QObject *parent)
 	connect(&saveTimer, &QTimer::timeout, this, &SpazzMusicPlayer::SavePlaylist);
 
 	LoadPlaylist();
+
+	/* folders synced with a folder on disk follow it as files come and go */
+	watcher = new QFileSystemWatcher(this);
+	connect(watcher, &QFileSystemWatcher::directoryChanged, this, [this](const QString &dir) {
+		dirtyDirs.insert(QDir::cleanPath(dir));
+		syncTimer.start();
+	});
+	syncTimer.setSingleShot(true);
+	syncTimer.setInterval(1500);
+	connect(&syncTimer, &QTimer::timeout, this, &SpazzMusicPlayer::RunPendingSyncs);
+	/* catch up with changes made while SPAZZbs was closed, once it's up */
+	QTimer::singleShot(4000, this, [this]() {
+		for (int i = 0; i < folders.size(); i++) {
+			if (!folders[i].syncPath.isEmpty()) {
+				SyncFolderNow(i);
+			}
+		}
+		UpdateWatcher();
+	});
 
 	obs_frontend_add_event_callback(FrontendEvent, this);
 	callbackRegistered = true;
@@ -368,8 +388,16 @@ void SpazzMusicPlayer::HandleMediaEnded()
 	/* switching files can report the old one as ended; only advance when
 	 * the source really is sitting at the end of a song, and not in the
 	 * moment right after a new song was asked for */
-	if (State() != OBS_MEDIA_STATE_ENDED || os_gettime_ns() - startedNs < 800000000ULL) {
+	if (State() != OBS_MEDIA_STATE_ENDED) {
 		emit StateChanged();
+		return;
+	}
+	const uint64_t since = os_gettime_ns() - startedNs;
+	if (since < 800000000ULL) {
+		/* too soon to tell an old song's "ended" from a very short new
+		 * one: look again once things have settled */
+		QTimer::singleShot(int((800000000ULL - since) / 1000000ULL) + 50, this,
+				   &SpazzMusicPlayer::HandleMediaEnded);
 		return;
 	}
 
@@ -541,7 +569,9 @@ void SpazzMusicPlayer::RemoveIds(const QList<quint64> &ids)
 			     shuffleHistory.end());
 
 	if (removingCurrent) {
-		Stop();
+		if (!keepPlaying) {
+			Stop();
+		}
 		if (tracks.isEmpty()) {
 			currentId = 0;
 		} else {
@@ -927,20 +957,36 @@ void SpazzMusicPlayer::QueueSave()
 void SpazzMusicPlayer::SavePlaylist()
 {
 	saveTimer.stop();
+	StashActive();
 
 	QJsonArray list;
-	for (const Track &t : tracks) {
-		QJsonObject o;
-		o["path"] = t.path;
-		if (t.durationMs > 0) {
-			o["duration"] = (double)t.durationMs;
+	for (const Folder &f : folders) {
+		QJsonArray songs;
+		for (const Track &t : f.tracks) {
+			QJsonObject o;
+			o["path"] = t.path;
+			if (t.durationMs > 0) {
+				o["duration"] = (double)t.durationMs;
+			}
+			songs.append(o);
 		}
-		list.append(o);
+		QJsonObject fo;
+		fo["name"] = f.name;
+		if (!f.syncPath.isEmpty()) {
+			fo["sync"] = f.syncPath;
+		}
+		fo["tracks"] = songs;
+		list.append(fo);
 	}
 
 	QJsonObject root;
-	root["version"] = 1;
-	root["tracks"] = list;
+	root["version"] = 2;
+	root["folders"] = list;
+	/* what builds from before folders read: the open folder's songs */
+	if (activeFolder >= 0 && activeFolder < list.size()) {
+		root["tracks"] = list[activeFolder].toObject()["tracks"];
+	}
+	root["active"] = activeFolder;
 	root["current"] = CurrentIndex();
 	root["shuffle"] = shuffle;
 	root["repeat"] = RepeatToString(repeat);
@@ -953,23 +999,48 @@ void SpazzMusicPlayer::SavePlaylist()
 void SpazzMusicPlayer::LoadPlaylist()
 {
 	const char *json = config_get_string(App()->GetUserConfig(), kConfigSection, kConfigPlaylist);
-	if (!json || !*json) {
-		return;
-	}
+	QJsonObject root = json && *json ? QJsonDocument::fromJson(QByteArray(json)).object() : QJsonObject();
 
-	QJsonObject root = QJsonDocument::fromJson(QByteArray(json)).object();
-
-	for (const QJsonValue &value : root["tracks"].toArray()) {
-		QJsonObject o = value.toObject();
-		Track t;
-		t.id = nextId++;
-		t.path = o["path"].toString();
-		t.title = TitleFor(t.path);
-		t.durationMs = o.contains("duration") ? (qint64)o["duration"].toDouble() : -1;
-		if (!t.path.isEmpty()) {
-			tracks.push_back(t);
+	auto readTracks = [this](const QJsonArray &arr) {
+		QList<Track> out;
+		for (const QJsonValue &value : arr) {
+			QJsonObject o = value.toObject();
+			Track t;
+			t.id = nextId++;
+			t.path = o["path"].toString();
+			t.title = TitleFor(t.path);
+			t.durationMs = o.contains("duration") ? (qint64)o["duration"].toDouble() : -1;
+			if (!t.path.isEmpty()) {
+				out.push_back(t);
+			}
 		}
+		return out;
+	};
+
+	if (root.contains("folders")) {
+		for (const QJsonValue &value : root["folders"].toArray()) {
+			QJsonObject fo = value.toObject();
+			Folder f;
+			f.name = fo["name"].toString();
+			f.syncPath = fo["sync"].toString();
+			f.tracks = readTracks(fo["tracks"].toArray());
+			folders.push_back(f);
+		}
+	} else if (root.contains("tracks")) {
+		/* from before folders: everything goes in the first one */
+		Folder f;
+		f.name = QTStr("SPAZZ.Music.FirstFolder");
+		f.tracks = readTracks(root["tracks"].toArray());
+		folders.push_back(f);
 	}
+	if (folders.isEmpty()) {
+		Folder f;
+		f.name = QTStr("SPAZZ.Music.FirstFolder");
+		folders.push_back(f);
+	}
+
+	activeFolder = std::clamp(root["active"].toInt(0), 0, int(folders.size()) - 1);
+	tracks = folders[activeFolder].tracks;
 
 	int current = root["current"].toInt(-1);
 	if (current >= 0 && current < tracks.size()) {
@@ -980,4 +1051,329 @@ void SpazzMusicPlayer::LoadPlaylist()
 
 	shuffle = root["shuffle"].toBool(false);
 	repeat = RepeatFromString(root["repeat"].toString("all"));
+}
+
+/* ------------------------------------------------------------------------ */
+/* folders                                                                   */
+
+void SpazzMusicPlayer::StashActive()
+{
+	if (activeFolder >= 0 && activeFolder < folders.size()) {
+		folders[activeFolder].tracks = tracks;
+	}
+}
+
+int SpazzMusicPlayer::FolderTrackCount(int i) const
+{
+	if (i == activeFolder) {
+		return tracks.size();
+	}
+	return i >= 0 && i < folders.size() ? folders[i].tracks.size() : 0;
+}
+
+QList<SpazzMusicPlayer::Track> SpazzMusicPlayer::MakeTracks(const QStringList &files)
+{
+	QList<Track> out;
+	out.reserve(files.size());
+	for (const QString &f : files) {
+		Track t;
+		t.id = nextId++;
+		t.path = f;
+		t.title = TitleFor(f);
+		out.push_back(t);
+	}
+	return out;
+}
+
+void SpazzMusicPlayer::SelectFolder(int i)
+{
+	if (i < 0 || i >= folders.size() || i == activeFolder) {
+		return;
+	}
+	StashActive();
+	activeFolder = i;
+	tracks = folders[i].tracks;
+	shuffleHistory.clear();
+
+	/* the song playing keeps playing; if it's in this folder too, it's
+	 * the current one here, otherwise this folder starts from the top
+	 * when it ends */
+	obs_media_state state = State();
+	const bool busy = state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED;
+	quint64 here = 0;
+	for (const Track &t : tracks) {
+		if (!loadedPath.isEmpty() && t.path == loadedPath) {
+			here = t.id;
+			break;
+		}
+	}
+	if (here) {
+		currentId = here;
+	} else if (!busy) {
+		currentId = tracks.isEmpty() ? 0 : tracks.first().id;
+	}
+
+	emit FoldersChanged();
+	emit PlaylistChanged();
+	emit CurrentChanged();
+	QueueSave();
+}
+
+int SpazzMusicPlayer::AddFolder(const QString &name)
+{
+	Folder f;
+	f.name = name;
+	folders.push_back(f);
+	emit FoldersChanged();
+	QueueSave();
+	return folders.size() - 1;
+}
+
+void SpazzMusicPlayer::RenameFolder(int i, const QString &name)
+{
+	if (i < 0 || i >= folders.size() || name.trimmed().isEmpty()) {
+		return;
+	}
+	folders[i].name = name.trimmed();
+	emit FoldersChanged();
+	QueueSave();
+}
+
+void SpazzMusicPlayer::RemoveFolder(int i)
+{
+	if (i < 0 || i >= folders.size() || folders.size() <= 1) {
+		return;
+	}
+	StashActive();
+	folders.removeAt(i);
+	if (i == activeFolder) {
+		activeFolder = std::min(i, int(folders.size()) - 1);
+		tracks = folders[activeFolder].tracks;
+		shuffleHistory.clear();
+		emit PlaylistChanged();
+		emit CurrentChanged();
+	} else if (i < activeFolder) {
+		activeFolder--;
+	}
+	UpdateWatcher();
+	emit FoldersChanged();
+	QueueSave();
+}
+
+void SpazzMusicPlayer::MoveFolder(int from, int to)
+{
+	if (from < 0 || from >= folders.size() || to < 0 || to >= folders.size() || from == to) {
+		return;
+	}
+	StashActive();
+	folders.move(from, to);
+	if (activeFolder == from) {
+		activeFolder = to;
+	} else if (from < activeFolder && to >= activeFolder) {
+		activeFolder--;
+	} else if (from > activeFolder && to <= activeFolder) {
+		activeFolder++;
+	}
+	emit FoldersChanged();
+	QueueSave();
+}
+
+void SpazzMusicPlayer::SetFolderSync(int i, const QString &dir)
+{
+	if (i < 0 || i >= folders.size()) {
+		return;
+	}
+	folders[i].syncPath = dir.isEmpty() ? QString() : QDir::cleanPath(dir);
+	if (!folders[i].syncPath.isEmpty()) {
+		SyncFolderNow(i);
+	}
+	UpdateWatcher();
+	emit FoldersChanged();
+	QueueSave();
+}
+
+static QString PathKey(const QString &path)
+{
+	QString p = QDir::cleanPath(path);
+#ifdef _WIN32
+	p = p.toLower(); /* Windows paths aren't case sensitive */
+#endif
+	return p;
+}
+
+/* Make the folder match its folder on disk: songs that appeared are added
+ * at the end, songs that are gone are removed. Songs you added from
+ * elsewhere stay. */
+void SpazzMusicPlayer::SyncFolderNow(int i)
+{
+	if (i < 0 || i >= folders.size() || folders[i].syncPath.isEmpty()) {
+		return;
+	}
+	StashActive();
+	Folder &f = folders[i];
+	if (!QFileInfo(f.syncPath).isDir()) {
+		return; /* drive unplugged or folder moved: leave the list alone */
+	}
+
+	QStringList files;
+	ExpandPath(f.syncPath, files, 0);
+	QSet<QString> onDisk;
+	for (const QString &file : files) {
+		onDisk.insert(PathKey(file));
+	}
+
+	const QString root = PathKey(f.syncPath) + "/";
+	const int before = f.tracks.size();
+	/* a drive waking up can list nothing for a moment: don't empty the
+	 * folder for that. Otherwise only songs whose file is really gone go. */
+	if (!files.isEmpty()) {
+		f.tracks.erase(std::remove_if(f.tracks.begin(), f.tracks.end(),
+					      [&](const Track &t) {
+						      const QString key = PathKey(t.path);
+						      return key.startsWith(root) && !onDisk.contains(key) &&
+							     !QFileInfo::exists(t.path);
+					      }),
+			       f.tracks.end());
+	}
+	bool changed = f.tracks.size() != before;
+
+	QSet<QString> have;
+	for (const Track &t : f.tracks) {
+		have.insert(PathKey(t.path));
+	}
+	QStringList fresh;
+	for (const QString &file : files) {
+		if (!have.contains(PathKey(file))) {
+			fresh.push_back(file);
+		}
+	}
+	if (!fresh.isEmpty()) {
+		f.tracks.append(MakeTracks(fresh));
+		changed = true;
+	}
+
+	if (!changed) {
+		return;
+	}
+	if (i == activeFolder) {
+		tracks = f.tracks;
+		emit PlaylistChanged();
+		emit CurrentChanged();
+	}
+	emit FoldersChanged();
+	QueueSave();
+}
+
+void SpazzMusicPlayer::UpdateWatcher()
+{
+	if (!watcher) {
+		return;
+	}
+	const QStringList old = watcher->directories();
+	if (!old.isEmpty()) {
+		watcher->removePaths(old);
+	}
+	QStringList dirs;
+	for (const Folder &f : folders) {
+		if (f.syncPath.isEmpty() || !QFileInfo(f.syncPath).isDir()) {
+			continue;
+		}
+		dirs.push_back(f.syncPath);
+		/* the folder and two levels below it, so Explorer can still rename
+		 * and delete things freely */
+		const int rootDepth = QDir::cleanPath(f.syncPath).count('/');
+		QDirIterator it(f.syncPath, QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable,
+				QDirIterator::Subdirectories);
+		while (it.hasNext() && dirs.size() < 200) {
+			const QString d = it.next();
+			if (QDir::cleanPath(d).count('/') - rootDepth <= 2) {
+				dirs.push_back(d);
+			}
+		}
+	}
+	if (!dirs.isEmpty()) {
+		watcher->addPaths(dirs);
+	}
+}
+
+void SpazzMusicPlayer::RunPendingSyncs()
+{
+	const QSet<QString> dirty = dirtyDirs;
+	dirtyDirs.clear();
+	for (int i = 0; i < folders.size(); i++) {
+		const QString root = QDir::cleanPath(folders[i].syncPath);
+		if (root.isEmpty()) {
+			continue;
+		}
+		for (const QString &d : dirty) {
+			if (d == root || d.startsWith(root + "/")) {
+				SyncFolderNow(i);
+				break;
+			}
+		}
+	}
+	UpdateWatcher(); /* new or removed sub folders */
+}
+
+void SpazzMusicPlayer::MoveTracksToFolder(const QList<quint64> &ids, int folder, bool copy)
+{
+	if (folder < 0 || folder >= folders.size() || folder == activeFolder || ids.isEmpty()) {
+		return;
+	}
+	const QSet<quint64> want(ids.begin(), ids.end());
+	QList<Track> moving;
+	for (const Track &t : tracks) {
+		if (want.contains(t.id)) {
+			Track c = t;
+			c.id = nextId++;
+			moving.push_back(c);
+		}
+	}
+	if (moving.isEmpty()) {
+		return;
+	}
+	folders[folder].tracks.append(moving);
+	if (!copy) {
+		/* the song playing keeps playing from its new folder */
+		keepPlaying = true;
+		RemoveIds(ids);
+		keepPlaying = false;
+	}
+	StashActive();
+	emit FoldersChanged();
+	QueueSave();
+}
+
+int SpazzMusicPlayer::AddPathsToFolder(const QStringList &paths, int folder)
+{
+	if (folder == activeFolder) {
+		return AddPaths(paths);
+	}
+	if (folder < 0 || folder >= folders.size()) {
+		return -1;
+	}
+	QStringList files;
+	for (const QString &p : paths) {
+		ExpandPath(p, files, 0);
+	}
+	if (files.isEmpty()) {
+		return -1;
+	}
+	folders[folder].tracks.append(MakeTracks(files));
+	emit FoldersChanged();
+	QueueSave();
+	return 0;
+}
+
+QString SpazzMusicPlayer::NowPlayingTitle() const
+{
+	int idx = CurrentIndex();
+	if (idx >= 0) {
+		return tracks[idx].title;
+	}
+	obs_media_state state = State();
+	if (!loadedPath.isEmpty() && (state == OBS_MEDIA_STATE_PLAYING || state == OBS_MEDIA_STATE_PAUSED)) {
+		return TitleFor(loadedPath);
+	}
+	return QString();
 }

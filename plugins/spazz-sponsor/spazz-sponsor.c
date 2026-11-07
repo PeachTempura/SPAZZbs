@@ -508,12 +508,17 @@ static void spn_update(void *data, obs_data_t *settings)
 		}
 		/* ... and gets it live while it's running */
 		send_event(sp, "spazzSponsorConfig", json);
+		/* the Sponsors switch may have flipped while this was built */
+		if (!sp->preview) {
+			send_event(sp, "spazzSponsorRun", compute_run(sp) ? "{\"run\":true}" : "{\"run\":false}");
+		}
 	}
 
 	/* hear sponsor videos: always in the studio (it isn't on stream), and on
 	 * a live spot if asked */
 	if (sp->browser) {
-		const bool mon = sp->preview || obs_data_get_bool(settings, "hear_video");
+		const bool mon = sp->preview ? obs_source_showing(sp->source)
+					     : obs_data_get_bool(settings, "hear_video");
 		if (obs_source_get_monitoring_enabled(sp->browser) != mon) {
 			obs_source_set_monitoring_enabled(sp->browser, mon);
 		}
@@ -560,7 +565,9 @@ static bool spn_audio_render(void *data, uint64_t *ts_out, struct obs_source_aud
 	UNUSED_PARAMETER(sample_rate);
 	struct spazz_sponsor *sp = data;
 	obs_source_t *child = sp->browser;
-	if (!child || obs_source_audio_pending(child)) {
+	/* in more than one scene at once (a transition): OBS mixes it in by
+	 * itself, so adding it here too would double it */
+	if (!child || obs_source_audio_pending(child) || obs_source_audio_is_duplicated(child)) {
 		return false;
 	}
 	const uint64_t ts = obs_source_get_audio_timestamp(child);
@@ -865,9 +872,10 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 	sp->source = source;
 	sp->config_path = config_path_for(source);
 
+	const bool fresh = !obs_data_has_user_value(settings, "preset_applied");
 	obs_data_array_t *items = obs_data_get_array(settings, "items");
 	if (!items) {
-		if (!obs_data_has_user_value(settings, "preset_applied")) {
+		if (fresh) {
 			/* a brand new spot starts with the Glass Card look and a sample sponsor */
 			apply_preset(settings, 0);
 			obs_data_set_string(settings, "preset", spn_presets[0].name);
@@ -889,7 +897,7 @@ static void *spn_create(obs_data_t *settings, obs_source_t *source)
 	obs_data_array_release(items);
 
 	/* spots from before "every X minutes": keep roughly the same rhythm */
-	if (!obs_data_has_user_value(settings, "every_min") && obs_data_has_user_value(settings, "preset_applied")) {
+	if (!fresh && !obs_data_has_user_value(settings, "every_min")) {
 		double run = 0.0;
 		obs_data_array_t *all = obs_data_get_array(settings, "items");
 		const double move =
@@ -936,6 +944,23 @@ static void spn_destroy(void *data)
 	}
 	bfree(sp->config_path);
 	bfree(sp);
+}
+
+/* the studio preview: heard only while its tab is on screen */
+static void spn_show(void *data)
+{
+	struct spazz_sponsor *sp = data;
+	if (sp->preview && sp->browser) {
+		obs_source_set_monitoring_enabled(sp->browser, true);
+	}
+}
+
+static void spn_hide(void *data)
+{
+	struct spazz_sponsor *sp = data;
+	if (sp->preview && sp->browser) {
+		obs_source_set_monitoring_enabled(sp->browser, false);
+	}
 }
 
 static void spn_render(void *data, gs_effect_t *effect)
@@ -992,6 +1017,8 @@ static struct obs_source_info spazz_sponsor_info = {
 	.enum_active_sources = spn_enum_sources,
 	.enum_all_sources = spn_enum_sources,
 	.audio_render = spn_audio_render,
+	.show = spn_show,
+	.hide = spn_hide,
 	.video_get_color_space = spn_color_space,
 	.icon_type = OBS_ICON_TYPE_SLIDESHOW,
 };

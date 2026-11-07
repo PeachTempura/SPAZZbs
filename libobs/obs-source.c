@@ -5517,6 +5517,11 @@ void obs_source_audio_render(obs_source_t *source, uint32_t mixers, size_t chann
 	process_audio_source_tick(source, mixers, channels, sample_rate, size);
 }
 
+bool obs_source_audio_is_duplicated(const obs_source_t *source)
+{
+	return obs_source_valid(source, "obs_source_audio_is_duplicated") && source->audio_is_duplicated;
+}
+
 bool obs_source_audio_pending(const obs_source_t *source)
 {
 	if (!obs_source_valid(source, "obs_source_audio_pending"))

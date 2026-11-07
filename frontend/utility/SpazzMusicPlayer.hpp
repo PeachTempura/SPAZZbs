@@ -16,6 +16,7 @@
 #include <QList>
 #include <QObject>
 #include <QStringList>
+#include <QSet>
 #include <QTimer>
 
 #include <memory>
@@ -41,6 +42,13 @@ public:
 		qint64 durationMs = -1;
 	};
 
+	/* playlists ("folders"); one is active: its songs are Tracks() */
+	struct Folder {
+		QString name;
+		QString syncPath; /* kept in step with this folder on disk, if set */
+		QList<Track> tracks;
+	};
+
 	/* a high output channel, clear of the ones plugins usually take */
 	static constexpr uint32_t kChannel = 60;
 	static constexpr const char *kSourceName = "SPAZZ Music";
@@ -59,6 +67,25 @@ public:
 	void RemoveIds(const QList<quint64> &ids);
 	void Clear();
 	void SetOrder(const QList<quint64> &ids);
+
+	/* folders */
+	int FolderCount() const { return folders.size(); }
+	QString FolderName(int i) const { return i >= 0 && i < folders.size() ? folders[i].name : QString(); }
+	QString FolderSync(int i) const { return i >= 0 && i < folders.size() ? folders[i].syncPath : QString(); }
+	int FolderTrackCount(int i) const;
+	int ActiveFolder() const { return activeFolder; }
+	void SelectFolder(int i);
+	int AddFolder(const QString &name);
+	void RenameFolder(int i, const QString &name);
+	void RemoveFolder(int i);
+	void MoveFolder(int from, int to);
+	void SetFolderSync(int i, const QString &dir);
+	void SyncFolderNow(int i);
+	/* drag songs onto another folder (copy keeps them here too) */
+	void MoveTracksToFolder(const QList<quint64> &ids, int folder, bool copy);
+	int AddPathsToFolder(const QStringList &paths, int folder);
+	/* the song playing, even when it's from another folder */
+	QString NowPlayingTitle() const;
 
 	/* transport */
 	void PlayIndex(int index);
@@ -92,6 +119,7 @@ public:
 
 signals:
 	void PlaylistChanged();
+	void FoldersChanged();
 	void CurrentChanged();
 	void StateChanged();
 	void VolumeChanged(float mul);
@@ -109,13 +137,19 @@ private:
 	OBSSource source;
 	std::vector<OBSSignal> sourceSignals;
 
-	QList<Track> tracks;
+	QList<Track> tracks; /* the active folder's songs (its copy in folders[] is stale) */
+	QList<Folder> folders;
+	int activeFolder = 0;
+	class QFileSystemWatcher *watcher = nullptr;
+	QTimer syncTimer;
+	QSet<QString> dirtyDirs;
 	quint64 nextId = 1;
 	quint64 currentId = 0;
 	QList<quint64> shuffleHistory;
 	QString loadedPath; /* the file the source has open */
 	int durationRetries = 0;
-	uint64_t startedNs = 0; /* when the current song was asked for */
+	uint64_t startedNs = 0;   /* when the current song was asked for */
+	bool keepPlaying = false; /* removing the playing song without stopping it */
 
 	bool shuffle = false;
 	Repeat repeat = Repeat::All;
@@ -134,6 +168,10 @@ private:
 	void Unbind();
 	void LoadPlaylist();
 	void QueueSave();
+	void StashActive();
+	void UpdateWatcher();
+	void RunPendingSyncs();
+	QList<Track> MakeTracks(const QStringList &files);
 	void StartTrack(int index);
 	int PickNextIndex(bool userAction) const;
 	int IndexOf(quint64 id) const;

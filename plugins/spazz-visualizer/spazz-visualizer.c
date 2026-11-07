@@ -40,7 +40,9 @@ MODULE_EXPORT const char *obs_module_description(void)
 #define RETRY_SECONDS 1.0f
 #define SILENCE_NS 250000000ULL
 
-static const char *style_techniques[] = {"PrismRain", "PrismHalo", "SpectrumGlass"};
+static const char *style_techniques[] = {"PrismRain",   "PrismHalo",     "PrismPetals",   "PrismAurora",
+					 "PrismTunnel", "PrismWaves",    "SpectrumGlass", "Bubbles",
+					 "Confetti",    "BounceBuddies", "DiscoFloor",    "LavaLamp"};
 #define NUM_STYLES (sizeof(style_techniques) / sizeof(style_techniques[0]))
 
 struct spazz_viz {
@@ -283,9 +285,11 @@ static obs_properties_t *viz_properties(void *data)
 
 	obs_property_t *p =
 		obs_properties_add_list(props, "style", T_("Style"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(p, T_("Style.PrismRain"), "PrismRain");
-	obs_property_list_add_string(p, T_("Style.PrismHalo"), "PrismHalo");
-	obs_property_list_add_string(p, T_("Style.SpectrumGlass"), "SpectrumGlass");
+	for (size_t i = 0; i < NUM_STYLES; i++) {
+		char key[64];
+		snprintf(key, sizeof(key), "Style.%s", style_techniques[i]);
+		obs_property_list_add_string(p, T_(key), style_techniques[i]);
+	}
 
 	p = obs_properties_add_list(props, "audio_source", T_("AudioSource"), OBS_COMBO_TYPE_LIST,
 				    OBS_COMBO_FORMAT_STRING);

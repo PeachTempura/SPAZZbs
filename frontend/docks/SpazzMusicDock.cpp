@@ -11,6 +11,7 @@
 #include "SpazzMusicDock.hpp"
 
 #include <OBSApp.hpp>
+#include <qt-wrappers.hpp>
 #include <utility/SpazzMusicPlayer.hpp>
 
 #include <QItemSelection>
@@ -23,6 +24,8 @@
 #include <QLabel>
 #include <QLinearGradient>
 #include <QMenu>
+#include <QMessageBox>
+#include <QStyle>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
@@ -834,6 +837,9 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 			if (d > 0) {
 				title += QString(" (%1)").arg(FormatTime(d));
 			}
+		} else {
+			/* still playing a song from another folder */
+			title = player->NowPlayingTitle();
 		}
 	}
 	if (title.isEmpty()) {
@@ -1107,7 +1113,22 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	transport->addWidget(shuffleBtn);
 	transport->addWidget(repeatBtn);
 	pv->addLayout(transport);
-	pv->addStretch(1);
+
+	/* --- folders, under the player --- */
+	pv->addWidget(new AmpTitle(QTStr("SPAZZ.Music.FoldersTitle"), playerPanel));
+	folderList = new AmpFolderList(playerPanel);
+	folderList->setMinimumHeight(60);
+	pv->addWidget(folderList, 1);
+	auto *folderRow = new QHBoxLayout();
+	folderRow->setSpacing(3);
+	auto *newFolderBtn = new AmpButton(AmpButton::Glyph::Text, "+ NEW", playerPanel);
+	auto *syncBtn = new AmpButton(AmpButton::Glyph::Text, "SYNC", playerPanel);
+	newFolderBtn->setToolTip(QTStr("SPAZZ.Music.NewFolderTip"));
+	syncBtn->setToolTip(QTStr("SPAZZ.Music.SyncTip"));
+	folderRow->addWidget(newFolderBtn);
+	folderRow->addWidget(syncBtn);
+	folderRow->addStretch(1);
+	pv->addLayout(folderRow);
 
 	/* --- playlist panel --- */
 	listPanel = new AmpPanel(body);
@@ -1118,6 +1139,7 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 
 	list = new AmpPlaylist(listPanel);
 	lv->addWidget(list, 1);
+	folderList->trackSource = list;
 
 	auto *footer = new QHBoxLayout();
 	footer->setSpacing(3);
@@ -1286,7 +1308,46 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 		menu.exec(list->viewport()->mapToGlobal(pos));
 	});
 
+	/* folders */
+	connect(newFolderBtn, &QAbstractButton::clicked, this, &SpazzMusicDock::NewFolder);
+	connect(syncBtn, &QAbstractButton::clicked, this,
+		[this]() { FolderMenu(folderList->viewport()->mapFromGlobal(QCursor::pos())); });
+	/* queued: switching rebuilds this list, which mustn't happen in the
+	 * middle of the click (or a drag) that switched it */
+	connect(
+		folderList, &QListWidget::currentRowChanged, this,
+		[this](int row) {
+			if (player && row >= 0 && row != player->ActiveFolder()) {
+				player->SelectFolder(row);
+			}
+		},
+		Qt::QueuedConnection);
+	folderList->setContextMenuPolicy(Qt::CustomContextMenu);
+	connect(folderList, &QWidget::customContextMenuRequested, this, &SpazzMusicDock::FolderMenu);
+	connect(folderList, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+		if (player) {
+			player->RenameFolder(folderList->row(item), item->text());
+		}
+	});
+	connect(folderList, &AmpFolderList::FilesDropped, this, [this](const QStringList &paths, int row) {
+		if (player) {
+			player->AddPathsToFolder(paths, row);
+		}
+	});
+	connect(folderList, &AmpFolderList::TracksDropped, this, [this](int row, bool copy) {
+		if (player) {
+			player->MoveTracksToFolder(SelectedIds(), row, copy);
+		}
+	});
+	connect(folderList, &AmpFolderList::FolderMoved, this, [this](int from, int to) {
+		if (player) {
+			player->MoveFolder(from, to);
+		}
+	});
+
 	if (player) {
+		connect(player, &SpazzMusicPlayer::FoldersChanged, this, &SpazzMusicDock::RebuildFolders);
+		connect(player, &SpazzMusicPlayer::PlaylistChanged, this, &SpazzMusicDock::RebuildFolders);
 		connect(player, &SpazzMusicPlayer::PlaylistChanged, this, &SpazzMusicDock::RebuildList);
 		connect(player, &SpazzMusicPlayer::TrackUpdated, this, &SpazzMusicDock::UpdateTrack);
 		connect(player, &SpazzMusicPlayer::CurrentChanged, this, &SpazzMusicDock::SyncCurrent);
@@ -1313,6 +1374,7 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	clock.start();
 
 	RebuildList();
+	RebuildFolders();
 	SyncState();
 }
 
@@ -1407,6 +1469,191 @@ void SpazzMusicDock::Frame()
 	if (frameTimer.interval() != interval) {
 		frameTimer.setInterval(interval);
 	}
+}
+
+/* ------------------------------------------------------------------------ */
+/* folders                                                                   */
+
+static QString MusicFolder();
+
+AmpFolderList::AmpFolderList(QWidget *parent) : QListWidget(parent)
+{
+	setObjectName("spazzFolders");
+	setSelectionMode(QAbstractItemView::SingleSelection);
+	setDragDropMode(QAbstractItemView::DragDrop);
+	setDefaultDropAction(Qt::CopyAction);
+	setAcceptDrops(true);
+	setDropIndicatorShown(true);
+	setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
+	setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+	setFrameShape(QFrame::NoFrame);
+	setFont(SpazzAmp::LcdFont(11, true));
+	setStyleSheet("#spazzFolders { background: #05060a; border: 1px solid #000000; border-radius: 3px;"
+		      " color: #b9b4d6; }"
+		      "#spazzFolders::item { padding: 2px 4px; }"
+		      "#spazzFolders::item:selected { background: #241c3d; color: #ffffff; }");
+}
+
+bool AmpFolderList::Accepts(QDropEvent *e) const
+{
+	return !LocalPaths(e->mimeData()).isEmpty() || (trackSource && e->source() == trackSource) ||
+	       e->source() == this;
+}
+
+void AmpFolderList::dragEnterEvent(QDragEnterEvent *e)
+{
+	if (Accepts(e)) {
+		e->setDropAction(e->source() == this ? Qt::MoveAction : Qt::CopyAction);
+		e->accept();
+	}
+}
+
+void AmpFolderList::dragMoveEvent(QDragMoveEvent *e)
+{
+	if (!Accepts(e)) {
+		e->ignore();
+		return;
+	}
+	/* songs and files land on a folder, folders move between folders */
+	QListWidget::dragMoveEvent(e);
+	e->setDropAction(e->source() == this ? Qt::MoveAction : Qt::CopyAction);
+	e->accept();
+}
+
+void AmpFolderList::dropEvent(QDropEvent *e)
+{
+	const QModelIndex at = indexAt(e->position().toPoint());
+	/* always a "copy" as far as Qt is concerned, so neither list removes
+	 * rows by itself: the player does the moving and both lists rebuild */
+	e->setDropAction(Qt::CopyAction);
+	e->accept();
+
+	const QStringList paths = LocalPaths(e->mimeData());
+	if (!paths.isEmpty()) {
+		emit FilesDropped(paths, at.isValid() ? at.row() : currentRow());
+		return;
+	}
+	if (trackSource && e->source() == trackSource) {
+		if (at.isValid()) {
+			emit TracksDropped(at.row(), (e->modifiers() & Qt::ControlModifier) != 0);
+		}
+		return;
+	}
+	if (e->source() == this) {
+		const int from = currentRow();
+		const int to = at.isValid() ? at.row() : count() - 1;
+		if (from >= 0 && to >= 0 && from != to) {
+			emit FolderMoved(from, to);
+		}
+	}
+}
+
+void SpazzMusicDock::RebuildFolders()
+{
+	if (!player || !folderList) {
+		return;
+	}
+	/* same folders: just refresh names and counts, so a rename being typed
+	 * or a drag in progress isn't interrupted */
+	if (folderList->count() == player->FolderCount() && !folderList->IsEditing()) {
+		QSignalBlocker quiet(folderList);
+		for (int i = 0; i < folderList->count(); i++) {
+			QListWidgetItem *item = folderList->item(i);
+			const QString sync = player->FolderSync(i);
+			if (item->text() != player->FolderName(i)) {
+				item->setText(player->FolderName(i));
+			}
+			item->setToolTip(sync.isEmpty()
+						 ? QTStr("SPAZZ.Music.FolderTip").arg(player->FolderTrackCount(i))
+						 : QTStr("SPAZZ.Music.FolderSyncedTip")
+							   .arg(player->FolderTrackCount(i))
+							   .arg(QDir::toNativeSeparators(sync)));
+			item->setIcon(sync.isEmpty() ? QIcon() : style()->standardIcon(QStyle::SP_BrowserReload));
+		}
+		if (folderList->currentRow() != player->ActiveFolder()) {
+			folderList->setCurrentRow(player->ActiveFolder());
+		}
+		return;
+	}
+	if (folderList->IsEditing()) {
+		return;
+	}
+	QSignalBlocker block(folderList);
+	folderList->clear();
+	for (int i = 0; i < player->FolderCount(); i++) {
+		const QString sync = player->FolderSync(i);
+		auto *item = new QListWidgetItem(player->FolderName(i), folderList);
+		item->setFlags(item->flags() | Qt::ItemIsEditable | Qt::ItemIsDragEnabled | Qt::ItemIsDropEnabled);
+		item->setData(Qt::UserRole, player->FolderName(i));
+		/* songs count, and a sync mark for folders that follow a PC folder */
+		item->setToolTip(sync.isEmpty() ? QTStr("SPAZZ.Music.FolderTip").arg(player->FolderTrackCount(i))
+						: QTStr("SPAZZ.Music.FolderSyncedTip")
+							  .arg(player->FolderTrackCount(i))
+							  .arg(QDir::toNativeSeparators(sync)));
+		if (!sync.isEmpty()) {
+			item->setIcon(style()->standardIcon(QStyle::SP_BrowserReload));
+		}
+	}
+	folderList->setCurrentRow(player->ActiveFolder());
+}
+
+void SpazzMusicDock::NewFolder()
+{
+	if (!player) {
+		return;
+	}
+	int n = player->FolderCount() + 1;
+	int idx = player->AddFolder(QTStr("SPAZZ.Music.NewFolderName").arg(n));
+	player->SelectFolder(idx);
+	if (QListWidgetItem *item = folderList->item(idx)) {
+		folderList->editItem(item);
+	}
+}
+
+void SpazzMusicDock::FolderMenu(const QPoint &pos)
+{
+	if (!player) {
+		return;
+	}
+	QListWidgetItem *item = folderList->itemAt(pos);
+	const int row = item ? folderList->row(item) : player->ActiveFolder();
+	const QString sync = player->FolderSync(row);
+
+	QMenu menu(this);
+	menu.addAction(QTStr("SPAZZ.Music.NewFolder"), this, &SpazzMusicDock::NewFolder);
+	if (row >= 0) {
+		menu.addAction(QTStr("Rename"), this, [this, row]() {
+			if (QListWidgetItem *it = folderList->item(row)) {
+				folderList->editItem(it);
+			}
+		});
+		menu.addSeparator();
+		menu.addAction(QTStr(sync.isEmpty() ? "SPAZZ.Music.SyncWith" : "SPAZZ.Music.SyncChange"), this,
+			       [this, row, sync]() {
+				       const QString dir =
+					       QFileDialog::getExistingDirectory(this, QTStr("SPAZZ.Music.SyncWith"),
+										 sync.isEmpty() ? MusicFolder() : sync);
+				       if (!dir.isEmpty()) {
+					       player->SetFolderSync(row, dir);
+				       }
+			       });
+		if (!sync.isEmpty()) {
+			menu.addAction(QTStr("SPAZZ.Music.SyncNow"), this,
+				       [this, row]() { player->SyncFolderNow(row); });
+			menu.addAction(QTStr("SPAZZ.Music.SyncStop"), this,
+				       [this, row]() { player->SetFolderSync(row, QString()); });
+		}
+		menu.addSeparator();
+		QAction *del = menu.addAction(QTStr("SPAZZ.Music.DeleteFolder"), this, [this, row]() {
+			if (OBSMessageBox::question(this, QTStr("SPAZZ.Music.DeleteFolder"),
+						    QTStr("SPAZZ.Music.DeleteFolderAsk").arg(player->FolderName(row))) ==
+			    QMessageBox::Yes) {
+				player->RemoveFolder(row);
+			}
+		});
+		del->setEnabled(player->FolderCount() > 1);
+	}
+	menu.exec(folderList->viewport()->mapToGlobal(pos));
 }
 
 QList<quint64> SpazzMusicDock::SelectedIds() const

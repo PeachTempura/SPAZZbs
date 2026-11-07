@@ -47,8 +47,8 @@ void SpazzStingerStudio::Open(QWidget *parent, const QString &uuid)
 		instance = new SpazzStingerStudio(parent);
 	}
 	/* opened from a transition's gear menu: edit that one */
-	if (!uuid.isEmpty() && instance->editing->findData(uuid) >= 0) {
-		instance->RefreshEditing(uuid);
+	if (!uuid.isEmpty() && uuid != instance->editing->currentData().toString()) {
+		instance->RefreshEditing(uuid); /* re-reads the list, so new ones are found */
 	}
 	instance->show();
 	instance->raise();

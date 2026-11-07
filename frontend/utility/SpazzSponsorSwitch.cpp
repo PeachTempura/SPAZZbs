@@ -18,11 +18,16 @@
 #include <QHBoxLayout>
 #include <QTimer>
 
+#include <atomic>
+
 #include "moc_SpazzSponsorSwitch.cpp"
 
 static constexpr const char *kSponsorId = "spazz_sponsor";
 static constexpr const char *kHotkeyOn = "SpazzSponsors.On";
 static constexpr const char *kHotkeyOff = "SpazzSponsors.Off";
+
+/* the global proc outlives this object, so it goes through this */
+static std::atomic<SpazzSponsorSwitch *> current{nullptr};
 
 SpazzSponsorSwitch::SpazzSponsorSwitch(OBSBasic *main_) : QObject(main_), main(main_)
 {
@@ -30,15 +35,20 @@ SpazzSponsorSwitch::SpazzSponsorSwitch(OBSBasic *main_) : QObject(main_), main(m
 		  config_get_bool(App()->GetUserConfig(), "SpazzSponsors", "Enabled");
 
 	/* sponsor spots ask this when they're created */
+	current = this;
 	proc_handler_add(obs_get_proc_handler(),
 			 "void spazz_sponsor_state(out bool enabled, out bool streaming, out bool recording)",
-			 StateProc, this);
+			 StateProc, nullptr);
 
 	QMetaObject::invokeMethod(this, &SpazzSponsorSwitch::Hook, Qt::QueuedConnection);
 }
 
 SpazzSponsorSwitch::~SpazzSponsorSwitch()
 {
+	current = nullptr;
+	if (hotkeys != OBS_INVALID_HOTKEY_PAIR_ID) {
+		obs_hotkey_pair_unregister(hotkeys);
+	}
 	if (hooked) {
 		obs_frontend_remove_event_callback(FrontendEvent, this);
 	}
@@ -174,9 +184,12 @@ void SpazzSponsorSwitch::FrontendEvent(enum obs_frontend_event event, void *data
 	}
 }
 
-void SpazzSponsorSwitch::StateProc(void *data, calldata_t *cd)
+void SpazzSponsorSwitch::StateProc(void *, calldata_t *cd)
 {
-	auto *self = static_cast<SpazzSponsorSwitch *>(data);
+	SpazzSponsorSwitch *self = current.load();
+	if (!self) {
+		return;
+	}
 	calldata_set_bool(cd, "enabled", self->enabled);
 	calldata_set_bool(cd, "streaming", obs_frontend_get_main_window() && obs_frontend_streaming_active());
 	calldata_set_bool(cd, "recording", obs_frontend_get_main_window() && obs_frontend_recording_active());

@@ -133,6 +133,30 @@ protected:
 	void paintEvent(QPaintEvent *e) override;
 };
 
+/* the folders (playlists) under the player: drop songs or files on one,
+ * drag them to reorder, right-click to rename / sync / delete */
+class AmpFolderList : public QListWidget {
+	Q_OBJECT
+
+public:
+	explicit AmpFolderList(QWidget *parent = nullptr);
+	QPointer<QWidget> trackSource; /* the playlist, for songs dragged in */
+	bool IsEditing() const { return state() == QAbstractItemView::EditingState; }
+
+signals:
+	void FilesDropped(const QStringList &paths, int row);
+	void TracksDropped(int row, bool copy);
+	void FolderMoved(int from, int to);
+
+protected:
+	void dragEnterEvent(QDragEnterEvent *e) override;
+	void dragMoveEvent(QDragMoveEvent *e) override;
+	void dropEvent(QDropEvent *e) override;
+
+private:
+	bool Accepts(QDropEvent *e) const;
+};
+
 class SpazzMusicDock : public OBSDock {
 	Q_OBJECT
 
@@ -163,6 +187,7 @@ private:
 	AmpButton *shuffleBtn = nullptr;
 	AmpButton *repeatBtn = nullptr;
 	AmpPlaylist *list = nullptr;
+	AmpFolderList *folderList = nullptr;
 	QLabel *totals = nullptr;
 
 	QTimer frameTimer;
@@ -172,6 +197,9 @@ private:
 
 	void Frame();
 	void RebuildList();
+	void RebuildFolders();
+	void FolderMenu(const QPoint &pos);
+	void NewFolder();
 	void UpdateTrack(int index);
 	void UpdateTotals();
 	void SyncCurrent();
