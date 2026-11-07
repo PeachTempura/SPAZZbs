@@ -88,6 +88,7 @@ uniform float2 box_x;
 uniform float2 box_y;
 /* the part of "image" that holds copied pixels; beyond it is off-canvas */
 uniform float4 cap_valid;
+uniform float4 cap_clamp; /* cap_valid pulled in half a texel, so filtering never reads past it */
 uniform float lin_canvas;
 
 float4 PSCapture(VertData v_in) : TARGET
@@ -105,7 +106,7 @@ float4 PSCapture(VertData v_in) : TARGET
 			float2 q = p + sx * (float(i) / 3.0) + sy * (float(j) / 3.0);
 			float inside = step(cap_valid.x, q.x) * step(q.x, cap_valid.z) * step(cap_valid.y, q.y) *
 				       step(q.y, cap_valid.w);
-			q = clamp(q, cap_valid.xy, cap_valid.zw);
+			q = clamp(q, cap_clamp.xy, cap_clamp.zw);
 			acc += image.SampleLevel(lin_clamp, q, 0.0).rgb * inside;
 		}
 	}
@@ -601,7 +602,9 @@ float4 PSFinal(VertData v_in) : TARGET
 
 	float2 pc = saturate(p);
 	float2 vp = pc * (1.0 - pc);
-	col *= pow(saturate(vp.x * vp.y * 16.0), uVignette * 0.6);
+	/* pow(0, 0) is NaN on D3D (exp(log(x) * y)); outside the tube vp is 0 */
+	if (uVignette > 0.0)
+		col *= pow(max(saturate(vp.x * vp.y * 16.0), 1e-6), uVignette * 0.6);
 	col *= uFlicker;
 
 	if (uLcdBleed > 0.0) {

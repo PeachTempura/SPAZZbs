@@ -108,8 +108,9 @@ QList<QDockWidget *> SpazzDockTabPage::Docks() const
 {
 	QList<QDockWidget *> result;
 	for (QDockWidget *dock : findChildren<QDockWidget *>(Qt::FindDirectChildrenOnly)) {
-		if (!dock->objectName().isEmpty())
+		if (!dock->objectName().isEmpty()) {
 			result.push_back(dock);
+		}
 	}
 	return result;
 }
@@ -143,8 +144,9 @@ SpazzDockTabs::SpazzDockTabs(QMainWindow *mainWindow_) : QDockWidget(mainWindow_
 	bar->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(bar, &QTabBar::customContextMenuRequested, this, &SpazzDockTabs::ShowTabMenu);
 	connect(bar, &QTabBar::tabBarDoubleClicked, this, [this](int index) {
-		if (index >= 0)
+		if (index >= 0) {
 			RenameTab(index);
+		}
 	});
 
 	setWidget(tabs);
@@ -165,8 +167,9 @@ SpazzDockTabPage *SpazzDockTabs::mainPage() const
 	/* The Main tab can be dragged to another position, so find it by marker. */
 	for (int i = 0; i < tabs->count(); i++) {
 		SpazzDockTabPage *page = pageAt(i);
-		if (page && page->property("spazzMain").toBool())
+		if (page && page->property("spazzMain").toBool()) {
 			return page;
+		}
 	}
 	return pageAt(0);
 }
@@ -174,28 +177,32 @@ SpazzDockTabPage *SpazzDockTabs::mainPage() const
 SpazzDockTabPage *SpazzDockTabs::AddTab(const QString &name)
 {
 	SpazzDockTabPage *page = new SpazzDockTabPage(tabs);
-	if (tabs->count() == 0)
+	if (tabs->count() == 0) {
 		page->setProperty("spazzMain", true);
+	}
 	tabs->addTab(page, name);
 	return page;
 }
 
 SpazzDockTabPage *SpazzDockTabs::PageForDock(QDockWidget *dock) const
 {
-	if (!dock)
+	if (!dock) {
 		return nullptr;
+	}
 	return qobject_cast<SpazzDockTabPage *>(dock->parentWidget());
 }
 
 QList<QDockWidget *> SpazzDockTabs::AllDocks() const
 {
 	QList<QDockWidget *> result;
-	if (!mainWindow)
+	if (!mainWindow) {
 		return result;
+	}
 
 	for (QDockWidget *dock : mainWindow->findChildren<QDockWidget *>()) {
-		if (dock == this || dock->objectName().isEmpty())
+		if (dock == this || dock->objectName().isEmpty()) {
 			continue;
+		}
 		result.push_back(dock);
 	}
 	return result;
@@ -203,17 +210,22 @@ QList<QDockWidget *> SpazzDockTabs::AllDocks() const
 
 void SpazzDockTabs::MoveDockToPage(QDockWidget *dock, SpazzDockTabPage *page)
 {
-	if (!dock || !page || dock == this)
+	/* docks without a name can't be saved or given back to the main
+	 * window when their tab closes, so they stay where they are */
+	if (!dock || !page || dock == this || dock->objectName().isEmpty()) {
 		return;
+	}
 
 	SpazzDockTabPage *oldPage = PageForDock(dock);
-	if (oldPage == page && !dock->isFloating())
+	if (oldPage == page && !dock->isFloating()) {
 		return;
+	}
 
-	if (oldPage)
+	if (oldPage) {
 		oldPage->removeDockWidget(dock);
-	else if (mainWindow && dock->parentWidget() == mainWindow)
+	} else if (mainWindow && dock->parentWidget() == mainWindow) {
 		mainWindow->removeDockWidget(dock);
+	}
 
 	dock->setParent(page);
 
@@ -222,13 +234,15 @@ void SpazzDockTabs::MoveDockToPage(QDockWidget *dock, SpazzDockTabPage *page)
 	existing.removeAll(dock);
 	QDockWidget *last = nullptr;
 	for (QDockWidget *d : existing) {
-		if (!d->isFloating() && d->isVisible())
+		if (!d->isFloating() && d->isVisible()) {
 			last = d;
+		}
 	}
 
 	page->addDockWidget(Qt::TopDockWidgetArea, dock);
-	if (last)
+	if (last) {
 		page->splitDockWidget(last, dock, Qt::Horizontal);
+	}
 
 	dock->setFloating(false);
 	dock->show();
@@ -237,12 +251,14 @@ void SpazzDockTabs::MoveDockToPage(QDockWidget *dock, SpazzDockTabPage *page)
 
 void SpazzDockTabs::MoveDockToMainWindow(QDockWidget *dock)
 {
-	if (!dock || !mainWindow)
+	if (!dock || !mainWindow) {
 		return;
+	}
 
 	SpazzDockTabPage *oldPage = PageForDock(dock);
-	if (oldPage)
+	if (oldPage) {
 		oldPage->removeDockWidget(dock);
+	}
 
 	dock->setParent(mainWindow);
 	mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
@@ -256,8 +272,9 @@ void SpazzDockTabs::ClearTabs()
 
 	for (int i = tabs->count() - 1; i >= 0; i--) {
 		SpazzDockTabPage *page = pageAt(i);
-		if (page == keep)
+		if (page == keep) {
 			continue;
+		}
 
 		/* Send docks back to the main window, floating and hidden,
 		 * the same way stock OBS resets extra docks. */
@@ -282,13 +299,15 @@ void SpazzDockTabs::ClearTabs()
 void SpazzDockTabs::ResetToDefault(const DefaultDocks &docks)
 {
 	ClearTabs();
+	pendingDocks.clear();
 	SpazzDockTabPage *page = mainPage();
 
 	/* Anything else living in Main goes back to the main window, hidden. */
 	for (QDockWidget *dock : page->Docks()) {
-		if (dock == docks.scenes || dock == docks.sources || dock == docks.mixer ||
-		    dock == docks.transitions || dock == docks.controls)
+		if (dock == docks.scenes || dock == docks.sources || dock == docks.mixer || dock == docks.transitions ||
+		    dock == docks.controls) {
 			continue;
+		}
 		page->removeDockWidget(dock);
 		dock->setParent(mainWindow);
 		mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
@@ -300,16 +319,18 @@ void SpazzDockTabs::ResetToDefault(const DefaultDocks &docks)
 
 	for (QDockWidget *dock : row) {
 		SpazzDockTabPage *oldPage = PageForDock(dock);
-		if (oldPage)
+		if (oldPage) {
 			oldPage->removeDockWidget(dock);
-		else if (dock->parentWidget() == mainWindow)
+		} else if (dock->parentWidget() == mainWindow) {
 			mainWindow->removeDockWidget(dock);
+		}
 		dock->setParent(page);
 	}
 
 	page->addDockWidget(Qt::TopDockWidgetArea, row[0]);
-	for (int i = 1; i < row.size(); i++)
+	for (int i = 1; i < row.size(); i++) {
 		page->splitDockWidget(row[i - 1], row[i], Qt::Horizontal);
+	}
 
 	for (QDockWidget *dock : row) {
 		dock->setFloating(false);
@@ -335,18 +356,21 @@ void SpazzDockTabs::Save() const
 	QJsonArray tabList;
 	for (int i = 0; i < tabs->count(); i++) {
 		SpazzDockTabPage *page = pageAt(i);
-		if (!page)
+		if (!page) {
 			continue;
+		}
 
 		QJsonArray dockNames;
-		for (QDockWidget *dock : page->Docks())
+		for (QDockWidget *dock : page->Docks()) {
 			dockNames.append(dock->objectName());
+		}
 
 		/* Docks that haven't been created yet this session (a plugin
 		 * that failed to load, say) keep their spot for next time. */
 		for (auto it = pendingDocks.cbegin(); it != pendingDocks.cend(); ++it) {
-			if (it.value() == page)
+			if (it.value() == page) {
 				dockNames.append(it.key());
+			}
 		}
 
 		QJsonObject tab;
@@ -369,19 +393,22 @@ void SpazzDockTabs::Save() const
 bool SpazzDockTabs::Load(const DefaultDocks &docks)
 {
 	const char *json = config_get_string(App()->GetUserConfig(), kConfigSection, kConfigKey);
-	if (!json || !*json)
+	if (!json || !*json) {
 		return false;
+	}
 
 	QJsonDocument doc = QJsonDocument::fromJson(QByteArray(json));
 	QJsonArray tabList = doc.object()["tabs"].toArray();
-	if (tabList.isEmpty())
+	if (tabList.isEmpty()) {
 		return false;
+	}
 
 	ClearTabs();
 
 	QHash<QString, QDockWidget *> byName;
-	for (QDockWidget *dock : AllDocks())
+	for (QDockWidget *dock : AllDocks()) {
 		byName.insert(dock->objectName(), dock);
+	}
 
 	bool mainSeen = false;
 	for (const QJsonValue &value : tabList) {
@@ -401,10 +428,11 @@ bool SpazzDockTabs::Load(const DefaultDocks &docks)
 		for (const QJsonValue &nameValue : tab["docks"].toArray()) {
 			QString name = nameValue.toString();
 			QDockWidget *dock = byName.value(name);
-			if (dock)
+			if (dock) {
 				MoveDockToPage(dock, page);
-			else
+			} else {
 				pendingDocks.insert(name, page);
+			}
 		}
 
 		QByteArray state = QByteArray::fromBase64(tab["state"].toString().toLatin1());
@@ -415,21 +443,24 @@ bool SpazzDockTabs::Load(const DefaultDocks &docks)
 	 * from the saved tabs, put it back in Main. */
 	for (QDockWidget *dock : {docks.scenes, docks.sources, docks.mixer, docks.transitions, docks.controls}) {
 		if (!PageForDock(dock) && dock->parentWidget() == mainWindow && !dock->isFloating() &&
-		    mainWindow->dockWidgetArea(dock) == Qt::NoDockWidgetArea)
+		    mainWindow->dockWidgetArea(dock) == Qt::NoDockWidgetArea) {
 			MoveDockToPage(dock, mainPage());
+		}
 	}
 
 	int current = doc.object()["current"].toInt();
-	if (current >= 0 && current < tabs->count())
+	if (current >= 0 && current < tabs->count()) {
 		tabs->setCurrentIndex(current);
+	}
 
 	return true;
 }
 
 void SpazzDockTabs::TrackDock(QDockWidget *dock)
 {
-	if (!dock || dock == this)
+	if (!dock || dock == this) {
 		return;
+	}
 
 	if (!dock->property("spazzTracked").toBool()) {
 		dock->setProperty("spazzTracked", true);
@@ -437,8 +468,9 @@ void SpazzDockTabs::TrackDock(QDockWidget *dock)
 
 		auto refreshHints = [this]() {
 			for (int i = 0; i < tabs->count(); i++) {
-				if (SpazzDockTabPage *page = pageAt(i))
+				if (SpazzDockTabPage *page = pageAt(i)) {
 					page->UpdateEmptyHint();
+				}
 			}
 		};
 		connect(dock, &QDockWidget::topLevelChanged, this, refreshHints, Qt::QueuedConnection);
@@ -446,8 +478,9 @@ void SpazzDockTabs::TrackDock(QDockWidget *dock)
 
 		/* Showing a dock from the Docks menu jumps to its tab. */
 		connect(dock->toggleViewAction(), &QAction::triggered, this, [this, dock](bool checked) {
-			if (checked)
+			if (checked) {
 				EnsureDockVisible(dock);
+			}
 		});
 	}
 
@@ -455,16 +488,18 @@ void SpazzDockTabs::TrackDock(QDockWidget *dock)
 	if (pending != pendingDocks.end()) {
 		QPointer<SpazzDockTabPage> page = pending.value();
 		pendingDocks.erase(pending);
-		if (page)
+		if (page) {
 			MoveDockToPage(dock, page);
+		}
 	}
 }
 
 void SpazzDockTabs::EnsureDockVisible(QDockWidget *dock)
 {
 	SpazzDockTabPage *page = PageForDock(dock);
-	if (page && !dock->isFloating())
+	if (page && !dock->isFloating()) {
 		tabs->setCurrentWidget(page);
+	}
 }
 
 bool SpazzDockTabs::eventFilter(QObject *obj, QEvent *event)
@@ -478,8 +513,9 @@ bool SpazzDockTabs::eventFilter(QObject *obj, QEvent *event)
 			hoverTab = -1;
 			hoverTicks = 0;
 		}
-		if (!dragPoll.isActive())
+		if (!dragPoll.isActive()) {
 			dragPoll.start();
+		}
 	}
 	return QDockWidget::eventFilter(obj, event);
 }
@@ -503,12 +539,13 @@ void SpazzDockTabs::PollDrag()
 	if (index != hoverTab) {
 		hoverTab = index;
 		hoverTicks = 0;
-		if (index >= 0)
+		if (index >= 0) {
 			QToolTip::showText(QCursor::pos(), QTStr("SPAZZ.DockTabs.DropHint").arg(tabs->tabText(index)));
-		else if (overPlus)
+		} else if (overPlus) {
 			QToolTip::showText(QCursor::pos(), QTStr("SPAZZ.DockTabs.DropNewHint"));
-		else
+		} else {
 			QToolTip::hideText();
+		}
 	} else if (index >= 0 && ++hoverTicks == kHoverSwitchTicks) {
 		/* Hovering a tab while dragging opens it so you can aim inside. */
 		tabs->setCurrentIndex(index);
@@ -525,8 +562,9 @@ void SpazzDockTabs::FinishDrag()
 	hoverTab = -1;
 	hoverTicks = 0;
 
-	if (!dock || !dock->isFloating())
+	if (!dock || !dock->isFloating()) {
 		return; /* Qt docked it normally, nothing to do */
+	}
 
 	QPoint pos = QCursor::pos();
 	QTabBar *bar = tabs->tabBar();
@@ -546,8 +584,9 @@ void SpazzDockTabs::FinishDrag()
 
 	if (addTabButton->rect().contains(addTabButton->mapFromGlobal(pos))) {
 		QTimer::singleShot(0, this, [this, dock]() {
-			if (dock)
+			if (dock) {
 				NewTabPrompt(dock);
+			}
 		});
 		return;
 	}
@@ -557,8 +596,9 @@ void SpazzDockTabs::FinishDrag()
 	if (currentPage && PageForDock(dock) != currentPage && current->rect().contains(current->mapFromGlobal(pos))) {
 		QPointer<SpazzDockTabPage> page = currentPage;
 		QTimer::singleShot(0, this, [this, dock, page]() {
-			if (dock && page)
+			if (dock && page) {
 				MoveDockToPage(dock, page);
+			}
 		});
 	}
 }
@@ -570,14 +610,17 @@ void SpazzDockTabs::NewTabPrompt(QDockWidget *withDock)
 	std::string name;
 	bool accepted = NameDialog::AskForName(mainWindow, QTStr("SPAZZ.DockTabs.NewTab.Title"),
 					       QTStr("SPAZZ.DockTabs.NewTab.Text"), name, suggestion);
-	if (!accepted)
+	if (!accepted) {
 		return;
-	if (name.empty())
+	}
+	if (name.empty()) {
 		name = suggestion.toStdString();
+	}
 
 	SpazzDockTabPage *page = AddTab(QString::fromStdString(name));
-	if (withDock)
+	if (withDock) {
 		MoveDockToPage(withDock, page);
+	}
 	tabs->setCurrentWidget(page);
 }
 
@@ -586,23 +629,27 @@ void SpazzDockTabs::RenameTab(int index)
 	std::string name;
 	bool accepted = NameDialog::AskForName(mainWindow, QTStr("SPAZZ.DockTabs.Rename.Title"),
 					       QTStr("SPAZZ.DockTabs.NewTab.Text"), name, tabs->tabText(index));
-	if (accepted && !name.empty())
+	if (accepted && !name.empty()) {
 		tabs->setTabText(index, QString::fromStdString(name));
+	}
 }
 
 void SpazzDockTabs::CloseTab(int index)
 {
 	SpazzDockTabPage *page = pageAt(index);
-	if (!page || page == mainPage())
+	if (!page || page == mainPage()) {
 		return;
+	}
 
 	/* Nothing gets lost: the tab's docks go back to Main. */
-	for (QDockWidget *dock : page->Docks())
+	for (QDockWidget *dock : page->Docks()) {
 		MoveDockToPage(dock, mainPage());
+	}
 
 	for (auto it = pendingDocks.begin(); it != pendingDocks.end(); ++it) {
-		if (it.value() == page)
+		if (it.value() == page) {
 			it.value() = mainPage();
+		}
 	}
 
 	tabs->removeTab(index);
@@ -621,15 +668,17 @@ void SpazzDockTabs::ShowTabMenu(const QPoint &pos)
 
 		menu.addAction(QTStr("SPAZZ.DockTabs.Rename"), this, [this, index]() { RenameTab(index); });
 
-		QAction *close = menu.addAction(QTStr("SPAZZ.DockTabs.Close"), this, [this, index]() { CloseTab(index); });
+		QAction *close =
+			menu.addAction(QTStr("SPAZZ.DockTabs.Close"), this, [this, index]() { CloseTab(index); });
 		close->setEnabled(page != mainPage());
 
 		menu.addSeparator();
 
 		QMenu *addMenu = menu.addMenu(QTStr("SPAZZ.DockTabs.AddDock").arg(tabs->tabText(index)));
 		for (QDockWidget *dock : AllDocks()) {
-			if (PageForDock(dock) == page && !dock->isFloating())
+			if (PageForDock(dock) == page && !dock->isFloating()) {
 				continue;
+			}
 			QString title = dock->windowTitle().isEmpty() ? dock->objectName() : dock->windowTitle();
 			addMenu->addAction(title, this, [this, dock, page]() {
 				MoveDockToPage(dock, page);
@@ -651,6 +700,8 @@ void SpazzDockTabs::ShowTabMenu(const QPoint &pos)
 
 void SpazzDockTabs::PopulateDocksMenu(QMenu *menu)
 {
+	/* clear() doesn't delete submenus, only their actions' links */
+	qDeleteAll(menu->findChildren<QMenu *>(Qt::FindDirectChildrenOnly));
 	menu->clear();
 	menu->addAction(QTStr("SPAZZ.DockTabs.NewTab"), this, [this]() { NewTabPrompt(); });
 	menu->addSeparator();
@@ -679,22 +730,26 @@ void SpazzDockTabs::PopulateDocksMenu(QMenu *menu)
 
 void SpazzDockTabs::PlaceInTab(QDockWidget *dock, const QString &tabName)
 {
-	if (!dock)
+	if (!dock) {
 		return;
+	}
 
 	SpazzDockTabPage *page = nullptr;
 	for (int i = 0; i < tabs->count(); i++) {
-		if (tabs->tabText(i) == tabName)
+		if (tabs->tabText(i) == tabName) {
 			page = pageAt(i);
+		}
 	}
 
 	QWidget *current = tabs->currentWidget();
-	if (!page)
+	if (!page) {
 		page = AddTab(tabName);
+	}
 
 	pendingDocks.remove(dock->objectName());
 	MoveDockToPage(dock, page);
 
-	if (current)
+	if (current) {
 		tabs->setCurrentWidget(current);
+	}
 }

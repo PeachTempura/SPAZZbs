@@ -54,6 +54,7 @@ struct spazz_sponsor {
 	char *config_path;
 	volatile long width, height;
 	bool preview;
+	uint64_t last_write_ns;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -419,10 +420,15 @@ static void spn_update(void *data, obs_data_t *settings)
 	os_atomic_set_long(&sp->height, (long)h);
 	sp->preview = obs_data_get_bool(settings, "studio_preview");
 
-	/* the page reads this when it (re)loads ... */
+	/* the page reads this when it (re)loads ... Updates run on the
+	 * graphics thread, and the SPONSORCENTER preview updates as you type,
+	 * so the preview's copy on disk is only refreshed now and then: the
+	 * running page gets every change through the event below anyway. */
 	char *json = build_config(settings, sp->preview);
-	if (sp->config_path) {
+	const uint64_t now = os_gettime_ns();
+	if (sp->config_path && (!sp->preview || !sp->browser || now - sp->last_write_ns > 1500000000ULL)) {
 		os_quick_write_utf8_file_safe(sp->config_path, json, strlen(json), false, "tmp", NULL);
+		sp->last_write_ns = now;
 	}
 
 	if (!sp->browser) {

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <obs.hpp>
+#include <obs-frontend-api.h>
 
 #include <QDialog>
 #include <QPointer>
@@ -67,6 +68,7 @@ private:
 	OBSSource SceneFor(QComboBox *combo) const;
 
 	static void Draw(void *data, uint32_t cx, uint32_t cy);
+	static void FrontendEvent(enum obs_frontend_event event, void *data);
 
 	static QPointer<SpazzStingerStudio> instance;
 };

@@ -66,6 +66,10 @@ struct spazz_stinger {
 	pthread_mutex_t mutex;
 	struct stg_vals vals;
 	struct stg_vals render;
+
+	/* read per audio sample, so kept outside the mutex */
+	volatile long mix_fade;
+	volatile long mix_cut_milli;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -86,8 +90,9 @@ static uint32_t hex_from_obs_color(long long c)
 static int style_index(const char *id)
 {
 	for (int i = 0; id && i < STG_STYLE_COUNT; i++) {
-		if (strcmp(stg_styles[i].id, id) == 0)
+		if (strcmp(stg_styles[i].id, id) == 0) {
 			return i;
+		}
 	}
 	return 0;
 }
@@ -95,8 +100,9 @@ static int style_index(const char *id)
 static int param_index(const char *key)
 {
 	for (int i = 0; key && i < STG_PARAM_COUNT; i++) {
-		if (strcmp(stg_params[i].key, key) == 0)
+		if (strcmp(stg_params[i].key, key) == 0) {
 			return i;
+		}
 	}
 	return -1;
 }
@@ -104,8 +110,9 @@ static int param_index(const char *key)
 static int preset_index(const char *name)
 {
 	for (int i = 0; name && i < STG_PRESET_COUNT; i++) {
-		if (strcmp(stg_presets[i].name, name) == 0)
+		if (strcmp(stg_presets[i].name, name) == 0) {
 			return i;
+		}
 	}
 	return -1;
 }
@@ -132,20 +139,23 @@ static void set_param(obs_data_t *s, int i, double value)
 /* defaults, then the preset's style, timing and values */
 static void apply_preset(obs_data_t *s, int idx)
 {
-	if (idx < 0 || idx >= STG_PRESET_COUNT)
+	if (idx < 0 || idx >= STG_PRESET_COUNT) {
 		return;
+	}
 	const struct stg_preset *pr = &stg_presets[idx];
 
-	for (int i = 0; i < STG_PARAM_COUNT; i++)
+	for (int i = 0; i < STG_PARAM_COUNT; i++) {
 		set_param(s, i, stg_params[i].def);
+	}
 
 	obs_data_set_string(s, "style", pr->style);
 	obs_data_set_int(s, "duration", pr->duration_ms);
 	obs_data_set_int(s, "cut", pr->cut_percent);
 	for (int k = 0; k < pr->count; k++) {
 		int i = param_index(pr->vals[k].key);
-		if (i >= 0)
+		if (i >= 0) {
 			set_param(s, i, pr->vals[k].value);
+		}
 	}
 }
 
@@ -189,6 +199,8 @@ static void stg_update(void *data, obs_data_t *settings)
 		}
 	}
 
+	os_atomic_set_long(&s->mix_fade, v.audio_fade ? 1 : 0);
+	os_atomic_set_long(&s->mix_cut_milli, (long)(v.cut * 1000.0f + 0.5f));
 	pthread_mutex_lock(&s->mutex);
 	s->vals = v;
 	pthread_mutex_unlock(&s->mutex);
@@ -230,8 +242,9 @@ static void show_style_groups(obs_properties_t *props, int style)
 		char name[64];
 		snprintf(name, sizeof(name), "grp_%s", stg_styles[i].id);
 		obs_property_t *g = obs_properties_get(props, name);
-		if (g)
+		if (g) {
 			obs_property_set_visible(g, i == style);
+		}
 	}
 }
 
@@ -253,12 +266,14 @@ static bool preset_modified(obs_properties_t *props, obs_property_t *prop, obs_d
 		obs_data_set_string(settings, "preset_applied", "");
 		return false;
 	}
-	if (applied && strcmp(preset, applied) == 0)
+	if (applied && strcmp(preset, applied) == 0) {
 		return false;
+	}
 
 	int idx = preset_index(preset);
-	if (idx < 0)
+	if (idx < 0) {
 		return false;
+	}
 
 	char name[128];
 	snprintf(name, sizeof(name), "%s", preset);
@@ -284,12 +299,14 @@ static void add_param(obs_properties_t *props, const struct stg_param *p)
 		break;
 	case STG_SELECT:
 		prop = obs_properties_add_list(props, p->key, p->label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
-		for (int o = 0; o < p->option_count; o++)
+		for (int o = 0; o < p->option_count; o++) {
 			obs_property_list_add_int(prop, p->options[o].label, p->options[o].value);
+		}
 		break;
 	}
-	if (prop && p->tip)
+	if (prop && p->tip) {
 		obs_property_set_long_description(prop, p->tip);
+	}
 }
 
 static obs_properties_t *stg_properties(void *data)
@@ -300,13 +317,15 @@ static obs_properties_t *stg_properties(void *data)
 
 	p = obs_properties_add_list(props, "preset", T_("Preset"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, T_("Preset.Custom"), "");
-	for (int i = 0; i < STG_PRESET_COUNT; i++)
+	for (int i = 0; i < STG_PRESET_COUNT; i++) {
 		obs_property_list_add_string(p, stg_presets[i].name, stg_presets[i].name);
+	}
 	obs_property_set_modified_callback(p, preset_modified);
 
 	p = obs_properties_add_list(props, "style", T_("Style"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	for (int i = 0; i < STG_STYLE_COUNT; i++)
+	for (int i = 0; i < STG_STYLE_COUNT; i++) {
 		obs_property_list_add_string(p, stg_styles[i].name, stg_styles[i].id);
+	}
 	obs_property_set_modified_callback(p, style_modified);
 
 	p = obs_properties_add_int_slider(props, "duration", T_("Duration"), 200, 6000, 50);
@@ -323,8 +342,9 @@ static obs_properties_t *stg_properties(void *data)
 	for (int si = 0; si < STG_STYLE_COUNT; si++) {
 		obs_properties_t *sub = obs_properties_create();
 		for (int i = 0; i < STG_PARAM_COUNT; i++) {
-			if (stg_params[i].style == si)
+			if (stg_params[i].style == si) {
 				add_param(sub, &stg_params[i]);
+			}
 		}
 		char name[64];
 		snprintf(name, sizeof(name), "grp_%s", stg_styles[si].id);
@@ -361,8 +381,9 @@ static void *stg_create(obs_data_t *settings, obs_source_t *source)
 	if (path) {
 		char *errors = NULL;
 		s->effect = gs_effect_create_from_file(path, &errors);
-		if (!s->effect)
+		if (!s->effect) {
 			blog(LOG_ERROR, "[spazz-stinger] could not load effect: %s", errors ? errors : "(no details)");
+		}
 		bfree(errors);
 	}
 	obs_leave_graphics();
@@ -382,8 +403,9 @@ static void *stg_create(obs_data_t *settings, obs_source_t *source)
 		s->p_lin = gs_effect_get_param_by_name(e, "lin_out");
 		static const char *slots[SLOT_COUNT] = {"u_c1", "u_c2", "u_c3", "u_c4", "u_p1", "u_p2",
 							"u_p3", "u_p4", "u_p5", "u_p6", "u_p7", "u_p8"};
-		for (int i = 0; i < SLOT_COUNT; i++)
+		for (int i = 0; i < SLOT_COUNT; i++) {
 			s->p_slot[i] = gs_effect_get_param_by_name(e, slots[i]);
+		}
 	}
 
 	/* a brand new stinger starts as the classic Matrix look */
@@ -402,8 +424,9 @@ static void *stg_create(obs_data_t *settings, obs_source_t *source)
 
 static inline void setf(gs_eparam_t *p, float v)
 {
-	if (p)
+	if (p) {
 		gs_effect_set_float(p, v);
+	}
 }
 
 static void stg_draw(void *data, gs_texture_t *a, gs_texture_t *b, float t, uint32_t cx, uint32_t cy)
@@ -411,8 +434,9 @@ static void stg_draw(void *data, gs_texture_t *a, gs_texture_t *b, float t, uint
 	struct spazz_stinger *s = data;
 	const struct stg_vals *v = &s->render;
 
-	if (!s->effect)
+	if (!s->effect) {
 		return;
+	}
 
 	const bool previous = gs_framebuffer_srgb_enabled();
 	gs_enable_framebuffer_srgb(true);
@@ -444,8 +468,9 @@ static void stg_draw(void *data, gs_texture_t *a, gs_texture_t *b, float t, uint
 
 	for (int i = 0; i < STG_PARAM_COUNT; i++) {
 		const struct stg_param *p = &stg_params[i];
-		if (p->style != v->style || p->slot < 0 || p->slot >= SLOT_COUNT || !s->p_slot[p->slot])
+		if (p->style != v->style || p->slot < 0 || p->slot >= SLOT_COUNT || !s->p_slot[p->slot]) {
 			continue;
+		}
 		if (p->type == STG_COLOR) {
 			uint32_t hex = (uint32_t)v->v[i];
 			struct vec3 c;
@@ -457,8 +482,9 @@ static void stg_draw(void *data, gs_texture_t *a, gs_texture_t *b, float t, uint
 		}
 	}
 
-	while (gs_effect_loop(s->effect, stg_styles[v->style].technique))
+	while (gs_effect_loop(s->effect, stg_styles[v->style].technique)) {
 		gs_draw_sprite(NULL, 0, cx, cy);
+	}
 
 	gs_enable_framebuffer_srgb(previous);
 }
@@ -481,13 +507,12 @@ static void stg_video_render(void *data, gs_effect_t *effect)
 static float stg_mix_a(void *data, float t)
 {
 	struct spazz_stinger *s = data;
-	pthread_mutex_lock(&s->mutex);
-	const bool fade = s->vals.audio_fade;
-	const float c = s->vals.cut;
-	pthread_mutex_unlock(&s->mutex);
+	const bool fade = os_atomic_load_long(&s->mix_fade) != 0;
+	const float c = (float)os_atomic_load_long(&s->mix_cut_milli) / 1000.0f;
 
-	if (fade)
+	if (fade) {
 		return 1.0f - t;
+	}
 	float x = (t - (c - 0.03f)) / 0.06f;
 	x = x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
 	return 1.0f - x * x * (3.0f - 2.0f * x);
@@ -514,8 +539,9 @@ static enum gs_color_space stg_get_color_space(void *data, size_t count, const e
 	enum gs_color_space space = transition_space;
 	for (size_t i = 0; i < count; ++i) {
 		space = preferred_spaces[i];
-		if (space == transition_space)
+		if (space == transition_space) {
 			break;
+		}
 	}
 	return space;
 }

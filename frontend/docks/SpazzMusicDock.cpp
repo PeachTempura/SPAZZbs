@@ -13,6 +13,8 @@
 #include <OBSApp.hpp>
 #include <utility/SpazzMusicPlayer.hpp>
 
+#include <QItemSelection>
+#include <QItemSelectionModel>
 #include <QBoxLayout>
 #include <QDragEnterEvent>
 #include <QFileDialog>
@@ -59,14 +61,16 @@ const char *kLabelStyle = "color: #6c6784; background: transparent; font-weight:
 
 QString FormatTime(qint64 ms, bool padMinutes = false)
 {
-	if (ms < 0)
+	if (ms < 0) {
 		ms = 0;
+	}
 	qint64 total = ms / 1000;
 	qint64 h = total / 3600;
 	qint64 m = (total / 60) % 60;
 	qint64 s = total % 60;
-	if (h > 0)
+	if (h > 0) {
 		return QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
+	}
 	return QString("%1:%2").arg(m, padMinutes ? 2 : 1, 10, QChar('0')).arg(s, 2, 10, QChar('0'));
 }
 
@@ -151,8 +155,9 @@ void DrawGlowText(QPainter &p, const QRectF &r, int flags, const QString &text, 
 		QColor halo = WithAlpha(c, (int)(40 * glow));
 		p.setPen(halo);
 		static const QPointF offs[] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}, {-2, 0}, {2, 0}, {0, -2}, {0, 2}};
-		for (const QPointF &o : offs)
+		for (const QPointF &o : offs) {
 			p.drawText(r.translated(o), flags, text);
+		}
 	}
 	p.setPen(c);
 	p.drawText(r, flags, text);
@@ -292,13 +297,13 @@ void DrawSegments(QPainter &p, const QRectF &r, int mask, const QColor &on)
 	const qreal t = r.width() * 0.2;
 	const qreal hh = r.height() / 2.0;
 	const QRectF segs[7] = {
-		QRectF(r.left() + t * 0.7, r.top(), r.width() - t * 1.4, t),                  // a
-		QRectF(r.right() - t, r.top() + t * 0.7, t, hh - t * 0.9),                    // b
-		QRectF(r.right() - t, r.top() + hh + t * 0.2, t, hh - t * 0.9),               // c
-		QRectF(r.left() + t * 0.7, r.bottom() - t, r.width() - t * 1.4, t),           // d
-		QRectF(r.left(), r.top() + hh + t * 0.2, t, hh - t * 0.9),                    // e
-		QRectF(r.left(), r.top() + t * 0.7, t, hh - t * 0.9),                         // f
-		QRectF(r.left() + t * 0.7, r.top() + hh - t / 2, r.width() - t * 1.4, t),    // g
+		QRectF(r.left() + t * 0.7, r.top(), r.width() - t * 1.4, t),              // a
+		QRectF(r.right() - t, r.top() + t * 0.7, t, hh - t * 0.9),                // b
+		QRectF(r.right() - t, r.top() + hh + t * 0.2, t, hh - t * 0.9),           // c
+		QRectF(r.left() + t * 0.7, r.bottom() - t, r.width() - t * 1.4, t),       // d
+		QRectF(r.left(), r.top() + hh + t * 0.2, t, hh - t * 0.9),                // e
+		QRectF(r.left(), r.top() + t * 0.7, t, hh - t * 0.9),                     // f
+		QRectF(r.left() + t * 0.7, r.top() + hh - t / 2, r.width() - t * 1.4, t), // g
 	};
 
 	p.setPen(Qt::NoPen);
@@ -318,10 +323,12 @@ void DrawSegments(QPainter &p, const QRectF &r, int mask, const QColor &on)
 int DigitMask(QChar c)
 {
 	static const int masks[10] = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
-	if (c.isDigit())
+	if (c.isDigit()) {
 		return masks[c.digitValue()];
-	if (c == '-')
+	}
+	if (c == '-') {
 		return 0x40;
+	}
 	return 0;
 }
 } // namespace
@@ -343,8 +350,9 @@ QSize AmpButton::sizeHint() const
 		QFontMetrics fm(LcdFont(10, true));
 		return QSize(fm.horizontalAdvance(text()) + (hasLed ? 26 : 16), 22);
 	}
-	if (glyph == Glyph::Repeat)
+	if (glyph == Glyph::Repeat) {
 		return QSize(40, 22);
+	}
 	return QSize(34, 26);
 }
 
@@ -395,12 +403,13 @@ void AmpButton::paintEvent(QPaintEvent *)
 	QPainterPath path;
 	auto tri = [&](qreal cx, qreal cy, qreal size, bool right) {
 		QPolygonF poly;
-		if (right)
+		if (right) {
 			poly << QPointF(cx - size * 0.45, cy - size * 0.55) << QPointF(cx + size * 0.55, cy)
 			     << QPointF(cx - size * 0.45, cy + size * 0.55);
-		else
+		} else {
 			poly << QPointF(cx + size * 0.45, cy - size * 0.55) << QPointF(cx - size * 0.55, cy)
 			     << QPointF(cx + size * 0.45, cy + size * 0.55);
+		}
 		path.addPolygon(poly);
 		path.closeSubpath();
 	};
@@ -482,9 +491,9 @@ void AmpButton::paintEvent(QPaintEvent *)
 	if (glyph == Glyph::Text) {
 		p.setFont(LcdFont(10, true));
 		QRectF tr(textLeft, r.top(), r.right() - textLeft - 4, r.height());
-		if (hovered || isChecked())
+		if (hovered || isChecked()) {
 			DrawGlowText(p, tr, Qt::AlignCenter, text(), ink, 0.7f);
-		else {
+		} else {
 			p.setPen(ink);
 			p.drawText(tr, Qt::AlignCenter, text());
 		}
@@ -508,8 +517,9 @@ AmpSlider::AmpSlider(Kind kind_, QWidget *parent) : QWidget(parent), kind(kind_)
 {
 	setCursor(Qt::PointingHandCursor);
 	setSizePolicy(kind == Kind::Seek ? QSizePolicy::Expanding : QSizePolicy::Expanding, QSizePolicy::Fixed);
-	if (kind == Kind::Balance)
+	if (kind == Kind::Balance) {
 		value = 0.5f;
+	}
 }
 
 QSize AmpSlider::sizeHint() const
@@ -542,15 +552,17 @@ QRectF AmpSlider::Track() const
 float AmpSlider::ValueAt(qreal x) const
 {
 	QRectF t = Track();
-	if (t.width() <= 0)
+	if (t.width() <= 0) {
 		return 0.0f;
+	}
 	return std::clamp((float)((x - t.left()) / t.width()), 0.0f, 1.0f);
 }
 
 void AmpSlider::mousePressEvent(QMouseEvent *e)
 {
-	if (e->button() != Qt::LeftButton)
+	if (e->button() != Qt::LeftButton) {
 		return;
+	}
 	if (kind == Kind::Balance && e->modifiers() & Qt::ControlModifier) {
 		value = 0.5f;
 	} else {
@@ -563,13 +575,15 @@ void AmpSlider::mousePressEvent(QMouseEvent *e)
 
 void AmpSlider::mouseMoveEvent(QMouseEvent *e)
 {
-	if (!dragging)
+	if (!dragging) {
 		return;
+	}
 	float v = ValueAt(e->position().x());
 
 	/* balance snaps to the middle, like the original */
-	if (kind == Kind::Balance && std::fabs(v - 0.5f) < 0.06f)
+	if (kind == Kind::Balance && std::fabs(v - 0.5f) < 0.06f) {
 		v = 0.5f;
+	}
 
 	value = v;
 	update();
@@ -578,8 +592,9 @@ void AmpSlider::mouseMoveEvent(QMouseEvent *e)
 
 void AmpSlider::mouseReleaseEvent(QMouseEvent *e)
 {
-	if (e->button() != Qt::LeftButton || !dragging)
+	if (e->button() != Qt::LeftButton || !dragging) {
 		return;
+	}
 	dragging = false;
 	update();
 	emit Released(value);
@@ -690,8 +705,9 @@ QSize AmpDisplay::minimumSizeHint() const
 
 void AmpDisplay::Tick(float dt)
 {
-	if (player)
+	if (player) {
 		player->UpdateSpectrum(dt, bars, 19, peaks);
+	}
 	marquee += dt * 28.0f;
 	update();
 }
@@ -699,8 +715,9 @@ void AmpDisplay::Tick(float dt)
 bool AmpDisplay::IsAnimating() const
 {
 	for (int i = 0; i < 19; i++) {
-		if (bars[i] > 0.002f || peaks[i] > 0.002f)
+		if (bars[i] > 0.002f || peaks[i] > 0.002f) {
 			return true;
+		}
 	}
 	return false;
 }
@@ -755,10 +772,12 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 	qint64 dur = player ? player->DurationMs() : 0;
 	qint64 shown = (showRemaining && dur > 0) ? dur - pos : pos;
 	QString text = active ? FormatTime(shown, true) : QString("00:00");
-	if (showRemaining && active && dur > 0)
+	if (showRemaining && active && dur > 0) {
 		text.prepend('-');
-	if (text.length() > 6)
+	}
+	if (text.length() > 6) {
 		text = text.right(6);
+	}
 
 	qreal dh = 24, dw = 13, gap = 4;
 	qreal x = lcd.right() - 10;
@@ -812,12 +831,14 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 			const auto &t = player->Tracks()[idx];
 			title = QString("%1. %2").arg(idx + 1).arg(t.title);
 			qint64 d = t.durationMs > 0 ? t.durationMs : dur;
-			if (d > 0)
+			if (d > 0) {
 				title += QString(" (%1)").arg(FormatTime(d));
+			}
 		}
 	}
-	if (title.isEmpty())
+	if (title.isEmpty()) {
 		title = QTStr("SPAZZ.Music.Idle");
+	}
 
 	QFont mf = LcdFont(12, true);
 	p.setFont(mf);
@@ -832,9 +853,10 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 		QString loop = title + "  ***  ";
 		qreal lw = fm.horizontalAdvance(loop);
 		qreal off = std::fmod((double)marquee, lw);
-		for (qreal sx = inner.left() - off; sx < inner.right(); sx += lw)
-			DrawGlowText(p, QRectF(sx, inner.top(), lw + 4, inner.height()), Qt::AlignVCenter | Qt::AlignLeft,
-				     loop, a, 0.9f);
+		for (qreal sx = inner.left() - off; sx < inner.right(); sx += lw) {
+			DrawGlowText(p, QRectF(sx, inner.top(), lw + 4, inner.height()),
+				     Qt::AlignVCenter | Qt::AlignLeft, loop, a, 0.9f);
+		}
 	}
 	p.restore();
 
@@ -849,8 +871,9 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 		QRectF b(left, info.top(), w, info.height());
 		DrawLcdWell(p, b, 2);
 		p.setFont(LcdFont(11, true));
-		if (active && !value.isEmpty())
+		if (active && !value.isEmpty()) {
 			DrawGlowText(p, b.adjusted(0, 0, -3, 0), Qt::AlignVCenter | Qt::AlignRight, value, a, 0.7f);
+		}
 		p.setFont(LcdFont(10, false));
 		p.setPen(kTextDim);
 		QRectF u(b.right() + 4, b.top(), 34, b.height());
@@ -867,17 +890,17 @@ void AmpDisplay::paintEvent(QPaintEvent *)
 	QRectF monoR(cx, info.top(), 30, info.height());
 	QRectF stereoR(monoR.right() + 2, info.top(), 42, info.height());
 	if (monoR.right() < right.right()) {
-		if (active && !stereo)
+		if (active && !stereo) {
 			DrawGlowText(p, monoR, Qt::AlignCenter, "mono", a, 0.7f);
-		else {
+		} else {
 			p.setPen(WithAlpha(kTextDim, 140));
 			p.drawText(monoR, Qt::AlignCenter, "mono");
 		}
 	}
 	if (stereoR.right() < right.right() + 4) {
-		if (active && stereo)
+		if (active && stereo) {
 			DrawGlowText(p, stereoR, Qt::AlignCenter, "stereo", a, 0.7f);
-		else {
+		} else {
 			p.setPen(WithAlpha(kTextDim, 140));
 			p.drawText(stereoR, Qt::AlignCenter, "stereo");
 		}
@@ -917,11 +940,13 @@ AmpPlaylist::AmpPlaylist(QWidget *parent) : QListWidget(parent)
 static QStringList LocalPaths(const QMimeData *mime)
 {
 	QStringList paths;
-	if (!mime || !mime->hasUrls())
+	if (!mime || !mime->hasUrls()) {
 		return paths;
+	}
 	for (const QUrl &url : mime->urls()) {
-		if (url.isLocalFile())
+		if (url.isLocalFile()) {
 			paths.push_back(url.toLocalFile());
+		}
 	}
 	return paths;
 }
@@ -1072,9 +1097,10 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	repeatBtn->setCheckable(true);
 	repeatBtn->setToolTip(QTStr("SPAZZ.Music.Repeat"));
 
-	for (QWidget *w : {(QWidget *)prevBtn, (QWidget *)playBtn, (QWidget *)pauseBtn, (QWidget *)stopBtn,
-			   (QWidget *)nextBtn})
+	for (QWidget *w :
+	     {(QWidget *)prevBtn, (QWidget *)playBtn, (QWidget *)pauseBtn, (QWidget *)stopBtn, (QWidget *)nextBtn}) {
 		transport->addWidget(w);
+	}
 	transport->addSpacing(6);
 	transport->addWidget(ejectBtn);
 	transport->addStretch(1);
@@ -1117,54 +1143,65 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 
 	/* --- wiring --- */
 	connect(prevBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->Previous();
+		}
 	});
 	connect(playBtn, &QAbstractButton::clicked, this, [this]() {
-		if (!player)
+		if (!player) {
 			return;
+		}
 		/* like the original: Play while playing starts the song over */
-		if (player->State() == OBS_MEDIA_STATE_PLAYING)
+		if (player->State() == OBS_MEDIA_STATE_PLAYING) {
 			player->Seek(0);
-		else
+		} else {
 			player->Play();
+		}
 	});
 	connect(pauseBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->TogglePlayPause();
+		}
 	});
 	connect(stopBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->Stop();
+		}
 	});
 	connect(nextBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->Next();
+		}
 	});
 	connect(ejectBtn, &QAbstractButton::clicked, this, &SpazzMusicDock::AddFilesDialog);
 	connect(shuffleBtn, &QAbstractButton::clicked, this, [this](bool on) {
-		if (player)
+		if (player) {
 			player->SetShuffle(on);
+		}
 	});
 	connect(repeatBtn, &QAbstractButton::clicked, this, [this]() {
-		if (!player)
+		if (!player) {
 			return;
+		}
 		using R = SpazzMusicPlayer::Repeat;
 		R next = player->RepeatMode() == R::Off ? R::All : (player->RepeatMode() == R::All ? R::One : R::Off);
 		player->SetRepeat(next);
 	});
 
 	connect(volume, &AmpSlider::Moved, this, [this](float v) {
-		if (player)
+		if (player) {
 			player->SetVolume(v * v * v);
+		}
 	});
 	connect(balance, &AmpSlider::Moved, this, [this](float v) {
-		if (player)
+		if (player) {
 			player->SetBalance(v);
+		}
 	});
 	connect(seek, &AmpSlider::Released, this, [this](float v) {
-		if (player && player->DurationMs() > 0)
+		if (player && player->DurationMs() > 0) {
 			player->Seek((qint64)(v * player->DurationMs()));
+		}
 	});
 
 	auto *addMenu = new QMenu(this);
@@ -1173,57 +1210,68 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 	connect(addBtn, &QAbstractButton::clicked, this,
 		[addBtn, addMenu]() { addMenu->exec(addBtn->mapToGlobal(QPoint(0, addBtn->height()))); });
 	connect(remBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->RemoveIds(SelectedIds());
+		}
 	});
 	connect(clrBtn, &QAbstractButton::clicked, this, [this]() {
-		if (player)
+		if (player) {
 			player->Clear();
+		}
 	});
 
 	connect(list, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
-		if (player)
+		if (player) {
 			player->PlayIndex(list->row(item));
+		}
 	});
 	connect(list, &AmpPlaylist::ActivatePressed, this, [this]() {
-		if (player && list->currentRow() >= 0)
+		if (player && list->currentRow() >= 0) {
 			player->PlayIndex(list->currentRow());
+		}
 	});
 	connect(list, &AmpPlaylist::DeletePressed, this, [this]() {
-		if (player)
+		if (player) {
 			player->RemoveIds(SelectedIds());
+		}
 	});
 	connect(list, &AmpPlaylist::FilesDropped, this, [this](const QStringList &paths, int row) {
-		if (player)
+		if (player) {
 			player->AddPaths(paths, row);
+		}
 	});
 	connect(
 		list, &AmpPlaylist::OrderChanged, this,
 		[this]() {
-			if (!player)
+			if (!player) {
 				return;
+			}
 			QList<quint64> ids;
-			for (int i = 0; i < list->count(); i++)
+			for (int i = 0; i < list->count(); i++) {
 				ids.push_back(list->item(i)->data(IdRole).toULongLong());
+			}
 			player->SetOrder(ids);
 		},
 		Qt::QueuedConnection);
 
 	list->setContextMenuPolicy(Qt::CustomContextMenu);
 	connect(list, &QWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
-		if (!player)
+		if (!player) {
 			return;
+		}
 		QMenu menu(this);
 		QListWidgetItem *item = list->itemAt(pos);
 		if (item) {
 			int row = list->row(item);
 			menu.addAction(QTStr("SPAZZ.Music.Play"), this, [this, row]() {
-				if (player)
+				if (player) {
 					player->PlayIndex(row);
+				}
 			});
 			menu.addAction(QTStr("SPAZZ.Music.RemoveTooltip"), this, [this]() {
-				if (player)
+				if (player) {
 					player->RemoveIds(SelectedIds());
+				}
 			});
 			menu.addSeparator();
 		}
@@ -1231,8 +1279,9 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 		menu.addAction(QTStr("SPAZZ.Music.AddFolder"), this, &SpazzMusicDock::AddFolderDialog);
 		menu.addSeparator();
 		menu.addAction(QTStr("SPAZZ.Music.ClearTooltip"), this, [this]() {
-			if (player)
+			if (player) {
 				player->Clear();
+			}
 		});
 		menu.exec(list->viewport()->mapToGlobal(pos));
 	});
@@ -1244,8 +1293,9 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 		connect(player, &SpazzMusicPlayer::StateChanged, this, &SpazzMusicDock::SyncState);
 		connect(player, &SpazzMusicPlayer::SourceChanged, this, &SpazzMusicDock::SyncState);
 		connect(player, &SpazzMusicPlayer::VolumeChanged, this, [this](float mul) {
-			if (!volume->IsDragging())
+			if (!volume->IsDragging()) {
 				volume->SetValue(std::cbrt(std::max(mul, 0.0f)));
+			}
 		});
 		volume->SetValue(std::cbrt(std::max(player->Volume(), 0.0f)));
 		balance->SetValue(player->Balance());
@@ -1253,8 +1303,9 @@ SpazzMusicDock::SpazzMusicDock(SpazzMusicPlayer *player_, QWidget *parent) : OBS
 
 	/* everything that draws with the cycling accent colour */
 	for (QWidget *w : body->findChildren<QWidget *>()) {
-		if (qobject_cast<AmpButton *>(w) || qobject_cast<AmpSlider *>(w) || dynamic_cast<AmpTitle *>(w))
+		if (qobject_cast<AmpButton *>(w) || qobject_cast<AmpSlider *>(w) || dynamic_cast<AmpTitle *>(w)) {
 			accentWidgets.push_back(w);
+		}
 	}
 
 	frameTimer.setInterval(33);
@@ -1300,27 +1351,31 @@ void SpazzMusicDock::dragEnterEvent(QDragEnterEvent *e)
 void SpazzMusicDock::dropEvent(QDropEvent *e)
 {
 	QStringList paths = LocalPaths(e->mimeData());
-	if (paths.isEmpty() || !player)
+	if (paths.isEmpty() || !player) {
 		return;
+	}
 
 	e->setDropAction(Qt::CopyAction);
 	e->accept();
 
 	/* dropped on the player itself: add and play, like the classic */
 	int first = player->AddPaths(paths);
-	if (first >= 0)
+	if (first >= 0) {
 		player->PlayIndex(first);
+	}
 }
 
 void SpazzMusicDock::Frame()
 {
 	float dt = clock.restart() / 1000.0f;
-	if (dt <= 0.0f || dt > 0.25f)
+	if (dt <= 0.0f || dt > 0.25f) {
 		dt = 0.033f;
+	}
 
 	/* nothing on screen to draw while OBS is minimized */
-	if (window()->isMinimized())
+	if (window()->isMinimized()) {
 		return;
+	}
 
 	SetHue(Hue() + dt * 0.045f);
 	display->Tick(dt);
@@ -1339,8 +1394,9 @@ void SpazzMusicDock::Frame()
 	if (hueStep != lastHueStep) {
 		lastHueStep = hueStep;
 		for (const QPointer<QWidget> &w : accentWidgets) {
-			if (w && w->isVisible())
+			if (w && w->isVisible()) {
 				w->update();
+			}
 		}
 		list->viewport()->update();
 	}
@@ -1348,107 +1404,138 @@ void SpazzMusicDock::Frame()
 	/* playing or settling: 30 fps; idle: 15 fps is plenty for the marquee */
 	bool lively = state == OBS_MEDIA_STATE_PLAYING || display->IsAnimating();
 	int interval = lively ? 33 : 66;
-	if (frameTimer.interval() != interval)
+	if (frameTimer.interval() != interval) {
 		frameTimer.setInterval(interval);
+	}
 }
 
 QList<quint64> SpazzMusicDock::SelectedIds() const
 {
 	QList<quint64> ids;
-	for (QListWidgetItem *item : list->selectedItems())
+	for (QListWidgetItem *item : list->selectedItems()) {
 		ids.push_back(item->data(IdRole).toULongLong());
+	}
 	return ids;
 }
 
 void SpazzMusicDock::RebuildList()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	QSet<quint64> selected;
-	for (quint64 id : SelectedIds())
+	for (quint64 id : SelectedIds()) {
 		selected.insert(id);
+	}
 	int scroll = list->verticalScrollBar() ? list->verticalScrollBar()->value() : 0;
 
 	QSignalBlocker block(list);
 	list->clear();
 
 	const auto &tracks = player->Tracks();
+	QItemSelection sel;
+	int row = 0, runStart = -1;
 	for (const auto &t : tracks) {
 		auto *item = new QListWidgetItem(t.title, list);
 		item->setData(IdRole, (qulonglong)t.id);
 		item->setData(DurationRole, (qlonglong)t.durationMs);
 		item->setData(CurrentRole, t.id == player->CurrentId());
 		item->setToolTip(t.path);
-		item->setSelected(selected.contains(t.id));
+		/* one selection change for the whole list, in runs of rows */
+		if (selected.contains(t.id)) {
+			if (runStart < 0) {
+				runStart = row;
+			}
+		} else if (runStart >= 0) {
+			sel.select(list->model()->index(runStart, 0), list->model()->index(row - 1, 0));
+			runStart = -1;
+		}
+		row++;
+	}
+	if (runStart >= 0) {
+		sel.select(list->model()->index(runStart, 0), list->model()->index(row - 1, 0));
+	}
+	if (!sel.isEmpty()) {
+		list->selectionModel()->select(sel, QItemSelectionModel::Select);
 	}
 
-	if (list->verticalScrollBar())
+	if (list->verticalScrollBar()) {
 		list->verticalScrollBar()->setValue(scroll);
+	}
 
 	UpdateTotals();
 }
 
 void SpazzMusicDock::UpdateTotals()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	qint64 total = 0;
 	bool unknown = false;
 	const auto &tracks = player->Tracks();
 	for (const auto &t : tracks) {
-		if (t.durationMs > 0)
+		if (t.durationMs > 0) {
 			total += t.durationMs;
-		else
+		} else {
 			unknown = true;
+		}
 	}
 
-	totals->setText(tracks.isEmpty() ? QString()
-					 : QTStr("SPAZZ.Music.Totals")
-						   .arg(tracks.size())
-						   .arg(FormatTime(total) + (unknown ? "+" : "")));
+	totals->setText(
+		tracks.isEmpty()
+			? QString()
+			: QTStr("SPAZZ.Music.Totals").arg(tracks.size()).arg(FormatTime(total) + (unknown ? "+" : "")));
 }
 
 void SpazzMusicDock::UpdateTrack(int index)
 {
-	if (!player || index < 0 || index >= player->Tracks().size())
+	if (!player || index < 0 || index >= player->Tracks().size()) {
 		return;
+	}
 
 	QListWidgetItem *item = list->item(index);
-	if (item)
+	if (item) {
 		item->setData(DurationRole, (qlonglong)player->Tracks()[index].durationMs);
+	}
 	UpdateTotals();
 }
 
 void SpazzMusicDock::SyncCurrent()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	quint64 cur = player->CurrentId();
 	for (int i = 0; i < list->count(); i++) {
 		QListWidgetItem *item = list->item(i);
 		bool isCur = item->data(IdRole).toULongLong() == cur;
 		item->setData(CurrentRole, isCur);
-		if (isCur)
+		if (isCur) {
 			list->scrollToItem(item);
+		}
 	}
 	list->viewport()->update();
 }
 
 void SpazzMusicDock::SyncState()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	shuffleBtn->setChecked(player->Shuffle());
 	repeatBtn->setChecked(player->RepeatMode() != SpazzMusicPlayer::Repeat::Off);
 	repeatBtn->SetRepeatOne(player->RepeatMode() == SpazzMusicPlayer::Repeat::One);
-	if (!volume->IsDragging())
+	if (!volume->IsDragging()) {
 		volume->SetValue(std::cbrt(std::max(player->Volume(), 0.0f)));
-	if (!balance->IsDragging())
+	}
+	if (!balance->IsDragging()) {
 		balance->SetValue(player->Balance());
+	}
 	display->update();
 }
 
@@ -1460,24 +1547,28 @@ static QString MusicFolder()
 
 void SpazzMusicDock::AddFilesDialog()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	QString filter = QTStr("SPAZZ.Music.AudioFiles") +
 			 " (*.mp3 *.wav *.flac *.ogg *.oga *.opus *.m4a *.aac *.wma *.aif *.aiff *.ape *.wv *.mka "
 			 "*.m3u *.m3u8);;" +
 			 QTStr("SPAZZ.Music.AllFiles") + " (*.*)";
 	QStringList files = QFileDialog::getOpenFileNames(this, QTStr("SPAZZ.Music.AddFiles"), MusicFolder(), filter);
-	if (!files.isEmpty())
+	if (!files.isEmpty()) {
 		player->AddPaths(files);
+	}
 }
 
 void SpazzMusicDock::AddFolderDialog()
 {
-	if (!player)
+	if (!player) {
 		return;
+	}
 
 	QString dir = QFileDialog::getExistingDirectory(this, QTStr("SPAZZ.Music.AddFolder"), MusicFolder());
-	if (!dir.isEmpty())
+	if (!dir.isEmpty()) {
 		player->AddPaths({dir});
+	}
 }

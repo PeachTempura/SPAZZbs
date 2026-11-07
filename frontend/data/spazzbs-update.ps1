@@ -93,9 +93,51 @@ try {
 		Start-Sleep -Seconds 2
 	}
 
+	# Swap SPAZZbs's own folders instead of copying over them: set the old
+	# ones aside first (that fails cleanly if anything still has a file
+	# open), copy the new build in, and only then delete the old ones. If
+	# anything goes wrong the old folders go back, so you're never left
+	# with half an update. Plugins you added elsewhere are left alone.
+	$Owned = @('bin', 'core', 'data\libobs', 'data\obs-scripting', 'data\obs-studio')
+	$Tag = 'spazzbs-old'
+	foreach ($Rel in $Owned) {
+		$Old = Join-Path $AppDir "$Rel.$Tag"
+		if (Test-Path $Old) { Remove-Item $Old -Recurse -Force -ErrorAction SilentlyContinue }
+	}
+
+	function Restore-Old([string[]]$Rels) {
+		foreach ($Rel in $Rels) {
+			$Cur = Join-Path $AppDir $Rel
+			if (Test-Path $Cur) { Remove-Item $Cur -Recurse -Force -ErrorAction SilentlyContinue }
+			Rename-Item -Path (Join-Path $AppDir "$Rel.$Tag") -NewName (Split-Path $Rel -Leaf) -ErrorAction SilentlyContinue
+		}
+	}
+
 	Say 'Installing...'
+	$SetAside = @()
+	try {
+		foreach ($Rel in $Owned) {
+			$Cur = Join-Path $AppDir $Rel
+			if (Test-Path $Cur) {
+				Rename-Item -Path $Cur -NewName ((Split-Path $Rel -Leaf) + ".$Tag") -ErrorAction Stop
+				$SetAside += $Rel
+			}
+		}
+	} catch {
+		Restore-Old $SetAside
+		throw ('Some SPAZZbs files are still in use: by SPAZZbs, its browser helper, or an app using ' +
+			'the SPAZZbs virtual camera (Zoom, Discord...). Close those and run the update again.')
+	}
+
 	& robocopy.exe $Stage $AppDir /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
-	if ($LASTEXITCODE -ge 8) { throw "Copying the new files failed (robocopy code $LASTEXITCODE). Is SPAZZbs still open?" }
+	if ($LASTEXITCODE -ge 8) {
+		$Code = $LASTEXITCODE
+		Restore-Old $SetAside
+		throw "Copying the new files failed (robocopy code $Code)."
+	}
+	foreach ($Rel in $SetAside) {
+		Remove-Item (Join-Path $AppDir "$Rel.$Tag") -Recurse -Force -ErrorAction SilentlyContinue
+	}
 
 	# leftovers from older builds that shipped debug symbols
 	Get-ChildItem -Path $AppDir -Recurse -Filter '*.pdb' -ErrorAction SilentlyContinue |

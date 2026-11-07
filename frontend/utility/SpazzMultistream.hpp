@@ -20,6 +20,7 @@
 #include <QPointer>
 #include <QString>
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -91,6 +92,8 @@ public:
 		OBSEncoderAutoRelease ownAudio;
 		OBSSignal startSig, stopSig, reconnectSig, reconnectOkSig;
 		bool stopping = false;
+		bool restartPending = false;  /* asked to start while still stopping */
+		std::atomic<uint64_t> gen{0}; /* which output the signals belong to */
 		int ownBitrate = 0;
 		QString note; /* why it has its own encoder */
 	};
@@ -108,10 +111,10 @@ private:
 	void Toggled(Dest &d, bool on);
 	void Start(Dest &d);
 	void Stop(Dest &d);
-	void Release(Dest &d);
+	void Release(Dest &d, bool async = true);
 	void SetState(Dest &d, State state, const QString &detail = QString());
 	obs_encoder_t *OwnVideo(Dest &d, int bitrate);
-	obs_encoder_t *OwnAudio(Dest &d);
+	obs_encoder_t *OwnAudio(Dest &d, size_t mixer);
 
 	static void OnStart(void *data, calldata_t *cd);
 	static void OnStop(void *data, calldata_t *cd);

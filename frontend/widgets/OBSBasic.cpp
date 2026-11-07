@@ -186,6 +186,11 @@ OBSBasic::OBSBasic(QWidget *parent) : OBSMainWindow(parent), undo_s(ui), ui(new 
 
 	/* Add controls dock */
 	OBSBasicControls *controls = new OBSBasicControls(this);
+	controlsDock = new OBSDock(this);
+	controlsDock->setObjectName(QString::fromUtf8("controlsDock"));
+	controlsDock->setWindowTitle(QTStr("Basic.Main.Controls"));
+	/* Parenting is done there so controls will be deleted alongside controlsDock */
+	controlsDock->setWidget(controls);
 
 	/* SPAZZbs: "Also go live on: Kick X Rumble" right under Start Streaming */
 	spazzMulti = new SpazzMultistream(this);

@@ -64,8 +64,9 @@ SpazzStingerStudio::SpazzStingerStudio(QWidget *parent) : QDialog(parent, Qt::Wi
 	/* the transition being designed: private, never in the scene list */
 	preview = obs_source_create_private(kStingerId, "Stinger Studio preview", nullptr);
 	struct obs_video_info ovi;
-	if (obs_get_video_info(&ovi))
+	if (obs_get_video_info(&ovi)) {
 		obs_transition_set_size(preview, ovi.base_width, ovi.base_height);
+	}
 	obs_source_inc_showing(preview);
 
 	/* ---- left: preview ---- */
@@ -143,8 +144,9 @@ SpazzStingerStudio::SpazzStingerStudio(QWidget *parent) : QDialog(parent, Qt::Wi
 	main->addWidget(split);
 
 	const char *geom = config_get_string(App()->GetUserConfig(), "SpazzStingerStudio", "geometry");
-	if (!(geom && *geom && restoreGeometry(QByteArray::fromBase64(QByteArray(geom)))))
+	if (!(geom && *geom && restoreGeometry(QByteArray::fromBase64(QByteArray(geom))))) {
 		resize(1180, 680);
+	}
 
 	RefreshScenes();
 	RefreshEditing();
@@ -168,20 +170,48 @@ SpazzStingerStudio::SpazzStingerStudio(QWidget *parent) : QDialog(parent, Qt::Wi
 	/* changing the look restarts the loop so you see it from the top */
 	connect(view, &OBSPropertiesView::Changed, this, [this]() {
 		status->clear();
-		if (!paused)
+		if (!paused) {
 			nextStartMs = QDateTime::currentMSecsSinceEpoch() + 250;
+		}
 	});
 
 	connect(&loopTimer, &QTimer::timeout, this, &SpazzStingerStudio::Loop);
 	loopTimer.start(50);
 	ResetPreview();
+
+	/* let go of scenes that are being unloaded (so their webcams and
+	 * captures can close) and keep the scene lists current */
+	obs_frontend_add_event_callback(FrontendEvent, this);
+}
+
+void SpazzStingerStudio::FrontendEvent(enum obs_frontend_event event, void *data)
+{
+	SpazzStingerStudio *self = static_cast<SpazzStingerStudio *>(data);
+	switch (event) {
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING:
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CLEANUP:
+	case OBS_FRONTEND_EVENT_EXIT:
+		if (self->preview) {
+			obs_transition_clear(self->preview);
+		}
+		break;
+	case OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED:
+	case OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED:
+		self->RefreshScenes();
+		self->ResetPreview();
+		break;
+	default:
+		break;
+	}
 }
 
 SpazzStingerStudio::~SpazzStingerStudio()
 {
+	obs_frontend_remove_event_callback(FrontendEvent, this);
 	loopTimer.stop();
-	if (display && display->GetDisplay())
+	if (display && display->GetDisplay()) {
 		obs_display_remove_draw_callback(display->GetDisplay(), SpazzStingerStudio::Draw, this);
+	}
 	if (preview) {
 		obs_transition_clear(preview);
 		obs_source_dec_showing(preview);
@@ -238,8 +268,9 @@ void SpazzStingerStudio::RefreshEditing(const QString &selectUuid)
 	obs_frontend_get_transitions(&list);
 	for (size_t i = 0; i < list.sources.num; i++) {
 		obs_source_t *tr = list.sources.array[i];
-		if (strcmp(obs_source_get_unversioned_id(tr), kStingerId) != 0)
+		if (strcmp(obs_source_get_unversioned_id(tr), kStingerId) != 0) {
 			continue;
+		}
 		editing->addItem(QT_UTF8(obs_source_get_name(tr)), QT_UTF8(obs_source_get_uuid(tr)));
 	}
 	obs_frontend_source_list_free(&list);
@@ -281,15 +312,17 @@ QString SpazzStingerStudio::UniqueName(const QString &base) const
 		bool found = false;
 		struct obs_frontend_source_list list = {};
 		obs_frontend_get_transitions(&list);
-		for (size_t i = 0; i < list.sources.num && !found; i++)
+		for (size_t i = 0; i < list.sources.num && !found; i++) {
 			found = n == QT_UTF8(obs_source_get_name(list.sources.array[i]));
+		}
 		obs_frontend_source_list_free(&list);
 		return found;
 	};
 
 	QString name = base;
-	for (int i = 2; exists(name); i++)
+	for (int i = 2; exists(name); i++) {
 		name = QString("%1 %2").arg(base).arg(i);
+	}
 	return name;
 }
 
@@ -298,8 +331,9 @@ QString SpazzStingerStudio::UniqueName(const QString &base) const
 void SpazzStingerStudio::ResetPreview()
 {
 	OBSSource from = SceneFor(fromScene);
-	if (from)
+	if (from) {
 		obs_transition_set(preview, from);
+	}
 	forward = true;
 	wasActive = false;
 	nextStartMs = QDateTime::currentMSecsSinceEpoch() + 300;
@@ -307,8 +341,9 @@ void SpazzStingerStudio::ResetPreview()
 
 void SpazzStingerStudio::Loop()
 {
-	if (!preview)
+	if (!preview) {
 		return;
+	}
 
 	const bool active = obs_transition_is_active(preview);
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -320,13 +355,17 @@ void SpazzStingerStudio::Loop()
 	}
 	wasActive = active;
 
-	if (paused || active || now < nextStartMs)
+	if (paused || active || now < nextStartMs) {
 		return;
+	}
 
 	OBSSource from = SceneFor(forward ? fromScene : toScene);
 	OBSSource to = SceneFor(forward ? toScene : fromScene);
-	if (!from || !to)
+	if (!from || !to) {
+		/* a scene was deleted or renamed: don't keep the old one alive */
+		obs_transition_clear(preview);
 		return;
+	}
 
 	obs_transition_set(preview, from);
 	obs_transition_start(preview, OBS_TRANSITION_MODE_AUTO, 1000, to);
@@ -337,8 +376,9 @@ void SpazzStingerStudio::Draw(void *data, uint32_t cx, uint32_t cy)
 {
 	SpazzStingerStudio *w = static_cast<SpazzStingerStudio *>(data);
 	obs_source_t *src = w->preview.Get();
-	if (!src)
+	if (!src) {
 		return;
+	}
 
 	uint32_t sourceCX = std::max(obs_source_get_width(src), 1u);
 	uint32_t sourceCY = std::max(obs_source_get_height(src), 1u);
@@ -363,8 +403,9 @@ void SpazzStingerStudio::Draw(void *data, uint32_t cx, uint32_t cy)
 void SpazzStingerStudio::Save()
 {
 	OBSBasic *main = OBSBasic::Get();
-	if (!main)
+	if (!main) {
 		return;
+	}
 
 	OBSDataAutoRelease settings = obs_source_get_settings(preview);
 	const QString uuid = editing->currentData().toString();
@@ -382,8 +423,9 @@ void SpazzStingerStudio::Save()
 		status->setText(QTStr("SpazzStudio.Updated").arg(QT_UTF8(obs_source_get_name(existing))));
 	} else {
 		QString name = nameEdit->text().trimmed();
-		if (name.isEmpty())
+		if (name.isEmpty()) {
 			name = QTStr("SpazzStudio.DefaultName");
+		}
 		name = UniqueName(name);
 
 		target = main->SpazzAddTransition(kStingerId, QT_TO_UTF8(name), settings);
@@ -395,8 +437,9 @@ void SpazzStingerStudio::Save()
 		RefreshEditing(QT_UTF8(obs_source_get_uuid(target)));
 	}
 
-	if (makeCurrent->isChecked())
+	if (makeCurrent->isChecked()) {
 		obs_frontend_set_current_transition(target);
+	}
 
 	main->SaveProject();
 }

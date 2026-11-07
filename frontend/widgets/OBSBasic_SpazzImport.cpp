@@ -461,6 +461,14 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 		try {
 			const OBSProfile &profile = CreateProfile(name);
 			if (!CopyProfileFiles(src.dir, profile.path)) {
+				/* don't leave a half-copied profile behind for a later
+				 * run to switch to */
+				OBSProfile broken = profile;
+				try {
+					RemoveProfile(broken);
+				} catch (const std::exception &) {
+				}
+				profiles.erase(broken.name);
 				failed << QString::fromStdString(src.name);
 				continue;
 			}
@@ -505,8 +513,7 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 	OnEvent(OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED);
 	OnEvent(OBS_FRONTEND_EVENT_SCENE_COLLECTION_LIST_CHANGED);
 
-	/* switch to what OBS was using: profile first (it sets the canvas size
-	 * the collection is laid out for), then the scenes */
+	/* switch to what OBS was using */
 	QString switchNote;
 	/* imported on an earlier run: switch to that copy */
 	if (switchCollection.empty() && !setup.currentCollection.empty() &&
@@ -519,14 +526,23 @@ bool OBSBasic::SpazzImportFromOBS(bool startup)
 		if (Active()) {
 			switchNote = QTStr("SpazzImport.SwitchLater");
 		} else {
-			if (auto p = GetProfileByName(switchProfile)) {
-				OnEvent(OBS_FRONTEND_EVENT_PROFILE_CHANGING);
-				ActivateProfile(p.value(), true);
+			/* scenes first, then the profile: switching profile can ask
+			 * to restart SPAZZbs (different audio settings), and nothing
+			 * should be loaded after that */
+			try {
+				if (auto c = GetSceneCollectionByName(switchCollection)) {
+					OnEvent(OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING);
+					ActivateSceneCollection(c.value());
+				}
+				if (auto p = GetProfileByName(switchProfile)) {
+					OnEvent(OBS_FRONTEND_EVENT_PROFILE_CHANGING);
+					ActivateProfile(p.value(), true);
+				}
+			} catch (const std::exception &e) {
+				blog(LOG_WARNING, "[SPAZZbs import] switching failed: %s", e.what());
 			}
-			if (auto c = GetSceneCollectionByName(switchCollection)) {
-				OnEvent(OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGING);
-				ActivateSceneCollection(c.value());
-			}
+			if (isClosing())
+				return true;
 			switchNote = QTStr("SpazzImport.Switched")
 					     .arg(QString::fromStdString(switchCollection.empty() ? "-" : switchCollection),
 						  QString::fromStdString(switchProfile.empty() ? "-" : switchProfile));

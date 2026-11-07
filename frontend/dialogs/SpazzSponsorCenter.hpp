@@ -61,6 +61,7 @@ private:
 	std::vector<SponsorCard *> cards;
 	int lastTouched = -1; /* "+" copies this one */
 	int focusCard = -1;   /* the preview holds this one on screen */
+	bool dirty = false;   /* edits not yet saved to the spot */
 	QTimer *pushTimer = nullptr;
 
 	void RefreshEditing(const QString &selectUuid = QString());

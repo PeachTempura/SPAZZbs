@@ -34,6 +34,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMimeData>
+#include <QMessageBox>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPushButton>
@@ -425,8 +426,14 @@ private:
 void SpazzSponsorCenter::Open(QWidget *parent, const QString &uuid)
 {
 	if (instance) {
-		if (!uuid.isEmpty()) {
-			instance->RefreshEditing(uuid);
+		/* opening another spot while this one has unsaved edits: ask first */
+		if (!uuid.isEmpty() && uuid != instance->editing->currentData().toString()) {
+			bool go = !instance->dirty ||
+				  OBSMessageBox::question(instance, QTStr("Sponsorcenter.Title"),
+							  QTStr("Sponsorcenter.Discard")) == QMessageBox::Yes;
+			if (go) {
+				instance->RefreshEditing(uuid);
+			}
 		}
 		instance->show();
 		instance->raise();
@@ -583,6 +590,7 @@ SpazzSponsorCenter::SpazzSponsorCenter(QWidget *parent) : QDialog(parent, Qt::Wi
 	/* a preset in the Look tab restyles every sponsor's motion too */
 	connect(view, &OBSPropertiesView::Changed, this, [this]() {
 		status->clear();
+		dirty = true;
 		SyncCardsFromSettings();
 	});
 	/* clicking into a sponsor's card shows that sponsor in the preview */
@@ -668,6 +676,7 @@ void SpazzSponsorCenter::EditingChanged()
 	LoadCards();
 	view->ReloadProperties();
 	status->clear();
+	dirty = false;
 }
 
 QString SpazzSponsorCenter::UniqueName(const QString &base) const
@@ -800,6 +809,7 @@ void SpazzSponsorCenter::CardChanged(SponsorCard *card)
 	WriteItems();
 	pushTimer->start();
 	status->clear();
+	dirty = true;
 }
 
 void SpazzSponsorCenter::Touched(SponsorCard *card)
@@ -822,6 +832,7 @@ void SpazzSponsorCenter::Touched(SponsorCard *card)
 
 void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 {
+	dirty = true;
 	const int idx = IndexOf(card);
 	if (idx < 0) {
 		return;
@@ -866,6 +877,7 @@ void SpazzSponsorCenter::CardAction(SponsorCard *card, int action)
 
 void SpazzSponsorCenter::AddSponsor()
 {
+	dirty = true;
 	/* the new sponsor starts as a copy of the one you last worked on (or
 	 * the last one): same layout, size, animations and timing, no logo or text */
 	OBSDataAutoRelease item;
@@ -940,12 +952,9 @@ void SpazzSponsorCenter::Draw(void *data, uint32_t cx, uint32_t cy)
 	gs_ortho(0.0f, float(baseCX), 0.0f, float(baseCY), -100.0f, 100.0f);
 	gs_set_viewport(x, y, newCX, newCY);
 
-	/* what's live right now (the program output), so you see the
-	 * sponsor where it will sit */
-	OBSSourceAutoRelease program = obs_get_output_source(0);
-	if (program) {
-		obs_source_video_render(program);
-	}
+	/* what's live right now (the frame OBS already rendered, so the scene
+	 * isn't drawn a second time), so you see the sponsor where it will sit */
+	obs_render_main_texture_src_color_only();
 
 	/* the sponsor, stretched to the canvas like a full-screen overlay */
 	const uint32_t spCX = std::max(obs_source_get_width(sp), 1u);
@@ -980,6 +989,7 @@ void SpazzSponsorCenter::Save()
 		}
 		obs_source_update(existing, settings);
 		status->setText(QTStr("Sponsorcenter.Updated").arg(QT_UTF8(obs_source_get_name(existing))));
+		dirty = false;
 	} else {
 		OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
 		obs_scene_t *scene = obs_scene_from_source(sceneSource);

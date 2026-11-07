@@ -41,7 +41,8 @@ public:
 		qint64 durationMs = -1;
 	};
 
-	static constexpr uint32_t kChannel = 7;
+	/* a high output channel, clear of the ones plugins usually take */
+	static constexpr uint32_t kChannel = 60;
 	static constexpr const char *kSourceName = "SPAZZ Music";
 
 	explicit SpazzMusicPlayer(QObject *parent = nullptr);
@@ -112,6 +113,8 @@ private:
 	quint64 nextId = 1;
 	quint64 currentId = 0;
 	QList<quint64> shuffleHistory;
+	QString loadedPath; /* the file the source has open */
+	int durationRetries = 0;
 
 	bool shuffle = false;
 	Repeat repeat = Repeat::All;
@@ -122,6 +125,7 @@ private:
 
 	std::mutex analyzerMutex;
 	std::unique_ptr<spazz_analyzer> analyzer;
+	std::unique_ptr<spazz_analyzer> spectrum; /* the UI thread's copy, analysed outside the lock */
 	std::vector<float> monoScratch;
 	uint64_t lastAudioNs = 0;
 

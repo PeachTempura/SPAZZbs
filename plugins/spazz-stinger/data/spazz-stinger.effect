@@ -130,9 +130,20 @@ float ease(float x)
 	return x * x * (3.0 - 2.0 * x);
 }
 
+float srgb_to_linear_ch(float u)
+{
+	return (u <= 0.04045) ? (u / 12.92) : pow(mad(u, 1.0 / 1.055, 0.055 / 1.055), 2.4);
+}
+
+/* The render target writes sRGB (like OBS's fade). On SDR canvases the
+ * shader works on display values, so hand them back as linear light and
+ * let the target encode them once. */
 float4 finish(float3 c)
 {
-	return float4(max(c, float3(0.0, 0.0, 0.0)), 1.0);
+	c = max(c, float3(0.0, 0.0, 0.0));
+	if (lin_out < 0.5)
+		c = float3(srgb_to_linear_ch(c.r), srgb_to_linear_ch(c.g), srgb_to_linear_ch(c.b));
+	return float4(c, 1.0);
 }
 
 /* ------------------------------------------------------------------ */

@@ -247,6 +247,8 @@ const easeBack = (x) => { const c = 1.70158, c3 = c + 1; return 1 + c3 * Math.po
 const bounce = (x) => { const n = 7.5625, d = 2.75;
   if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + .75;
   if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + .9375; return n * (x -= 2.625 / d) * x + .984375; };
+/* only touch the DOM when a value really changes: the page runs every frame */
+const setS = (el, k, v) => { const c = el.__s || (el.__s = {}); if (c[k] !== v) { c[k] = v; el.style[k] = v; } };
 const hash = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
 
 /* ---------------- the sponsor list ---------------- */
@@ -307,6 +309,7 @@ function build(idx) {
   const card = $('#card');
   card.innerHTML = '';
   card.removeAttribute('style');
+  card.__s = {};
   card.className = '';
 
   let media = null;
@@ -349,7 +352,8 @@ function build(idx) {
   if (cfg.idle === 'shine') card.appendChild(shine);
 
   built = { idx, it, lay, card, media, body, badge, shine, img: media && $('img', media),
-    head: $('.head', card), sub: $('.sub', card), track: $('.track', card), textKey: '' };
+    head: $('.head', card), sub: $('.sub', card), track: $('.track', card), textKey: '',
+    lshine: media && $('.lshine', media), trackW: 0 };
   if (built.track) fillTicker(it);
   else showText(it);
   place();
@@ -419,21 +423,21 @@ function animateText(ms) {
   const anim = built.it.textAnim;
   const hs = built.headSpans || [], ss = built.subSpans || [];
   const all = hs.concat(ss);
-  const reset = (s) => { s.style.transform = ''; s.style.opacity = ''; s.style.filter = ''; s.style.color = ''; s.style.textShadow = ''; };
+  const reset = (s) => { setS(s, 'transform', ''); setS(s, 'opacity', ''); setS(s, 'filter', ''); setS(s, 'color', ''); setS(s, 'textShadow', ''); };
 
   if (anim === 'none') { all.forEach(reset); return; }
 
   if (anim === 'type') {
     const cps = 28;
     const nH = Math.floor(ms / 1000 * cps);
-    hs.forEach((s, i) => { s.style.opacity = i < nH ? '1' : '0'; });
+    hs.forEach((s, i) => { setS(s, 'opacity', i < nH ? '1' : '0'); });
     const nS = Math.floor((ms / 1000 - hs.length / cps - .15) * cps * 1.4);
-    ss.forEach((s, i) => { s.style.opacity = i < nS ? '1' : '0'; });
+    ss.forEach((s, i) => { setS(s, 'opacity', i < nS ? '1' : '0'); });
     if (built.caret) {
       const typing = nH < hs.length;
-      built.caret.style.opacity = typing || Math.floor(ms / 500) % 2 === 0 ? '1' : '0';
+      setS(built.caret, 'opacity', typing || Math.floor(ms / 500) % 2 === 0 ? '1' : '0');
       if (!typing && built.caret !== built.head.lastChild) built.head.appendChild(built.caret);
-      if (typing && hs[nH]) built.head.insertBefore(built.caret, hs[nH]);
+      if (typing && hs[nH] && built.caret.nextSibling !== hs[nH]) built.head.insertBefore(built.caret, hs[nH]);
     }
     return;
   }
@@ -443,11 +447,11 @@ function animateText(ms) {
     hs.forEach((s, i) => {
       const p = clamp((ms - i * step) / dur);
       const e = easeBack(p);
-      if (anim === 'pop') { s.style.transform = `scale(${Math.max(0, e)})`; s.style.opacity = String(clamp(p * 3)); }
-      else { s.style.transform = `translateY(${(1 - e) * 0.9}em)`; s.style.opacity = String(clamp(p * 2)); }
+      if (anim === 'pop') { setS(s, 'transform', `scale(${Math.max(0, e)})`); setS(s, 'opacity', String(clamp(p * 3))); }
+      else { setS(s, 'transform', `translateY(${(1 - e) * 0.9}em)`); setS(s, 'opacity', String(clamp(p * 2))); }
     });
     const subStart = hs.length * step * .6 + 200;
-    ss.forEach((s, i) => { const p = clamp((ms - subStart - i * 10) / 400); s.style.opacity = String(easeOut(p)); s.style.transform = `translateY(${(1 - easeOut(p)) * .4}em)`; });
+    ss.forEach((s, i) => { const p = clamp((ms - subStart - i * 10) / 400); setS(s, 'opacity', String(easeOut(p))); setS(s, 'transform', `translateY(${(1 - easeOut(p)) * .4}em)`); });
     return;
   }
 
@@ -458,11 +462,11 @@ function animateText(ms) {
       const ch = s.dataset.ch;
       if (ch === undefined) return;
       const settle = start + i * per + 260;
-      if (ms >= settle || ch.trim() === '') { s.textContent = ch; s.style.opacity = '1'; s.style.color = ''; return; }
-      if (ms < start + i * per) { s.style.opacity = '0'; return; }
-      s.style.opacity = '1';
+      if (ms >= settle || ch.trim() === '') { if (s.textContent !== ch) s.textContent = ch; setS(s, 'opacity', '1'); setS(s, 'color', ''); return; }
+      if (ms < start + i * per) { setS(s, 'opacity', '0'); return; }
+      setS(s, 'opacity', '1');
       s.textContent = GLYPHS[Math.floor(hash(i * 7.3 + frame) * GLYPHS.length)];
-      s.style.color = `rgb(${hexRgb(cfg.accent2)})`;
+      setS(s, 'color', `rgb(${hexRgb(cfg.accent2)})`);
     };
     hs.forEach((s, i) => decodeChar(s, i, 0));
     ss.forEach((s, i) => decodeChar(s, i, hs.length * per * .5 + 150));
@@ -471,8 +475,8 @@ function animateText(ms) {
 
   if (anim === 'wave') {
     const intro = (i, start) => clamp((ms - start - i * 20) / 300);
-    hs.forEach((s, i) => { const y = Math.sin(ms / 1000 * 5 - i * .45) * .12; s.style.transform = `translateY(${y}em)`; s.style.opacity = String(intro(i, 0)); });
-    ss.forEach((s, i) => { s.style.opacity = String(intro(i, 200)); });
+    hs.forEach((s, i) => { const y = Math.sin(ms / 1000 * 5 - i * .45) * .12; setS(s, 'transform', `translateY(${y}em)`); setS(s, 'opacity', String(intro(i, 0))); });
+    ss.forEach((s, i) => { setS(s, 'opacity', String(intro(i, 200))); });
     return;
   }
 
@@ -481,18 +485,18 @@ function animateText(ms) {
     const pos = ((ms / 1000) * .55 % 1.6) - .3;
     hs.forEach((s, i) => {
       const k = clamp(1 - Math.abs(i / n - pos) * 5);
-      s.style.color = k > 0 ? `color-mix(in srgb, #ffffff ${Math.round(k * 85)}%, currentColor)` : '';
-      s.style.textShadow = k > 0 ? `0 0 ${(.6 * k).toFixed(2)}em rgba(255,255,255,${(.8 * k).toFixed(2)})` : '';
-      s.style.opacity = String(clamp((ms - i * 15) / 250));
+      setS(s, 'color', k > 0 ? `color-mix(in srgb, #ffffff ${Math.round(k * 85)}%, currentColor)` : '');
+      setS(s, 'textShadow', k > 0 ? `0 0 ${(.6 * k).toFixed(2)}em rgba(255,255,255,${(.8 * k).toFixed(2)})` : '');
+      setS(s, 'opacity', String(clamp((ms - i * 15) / 250)));
     });
-    ss.forEach((s, i) => { s.style.opacity = String(clamp((ms - 200 - i * 8) / 300)); });
+    ss.forEach((s, i) => { setS(s, 'opacity', String(clamp((ms - 200 - i * 8) / 300))); });
     return;
   }
 
   if (anim === 'glow') {
     const g = .5 + .5 * Math.sin(ms / 1000 * 3);
-    hs.forEach((s, i) => { s.style.opacity = String(clamp((ms - i * 15) / 300)); s.style.textShadow = `0 0 ${(.2 + .8 * g).toFixed(2)}em rgba(${hexRgb(cfg.accent)},.95)`; });
-    ss.forEach((s) => { s.style.opacity = String(clamp((ms - 200) / 300)); });
+    hs.forEach((s, i) => { setS(s, 'opacity', String(clamp((ms - i * 15) / 300))); setS(s, 'textShadow', `0 0 ${(.2 + .8 * g).toFixed(2)}em rgba(${hexRgb(cfg.accent)},.95)`); });
+    ss.forEach((s) => { setS(s, 'opacity', String(clamp((ms - 200) / 300))); });
   }
 }
 
@@ -511,12 +515,12 @@ function animateLogo(ms) {
     case 'wobble': tr += ` rotate(${(Math.sin(t * 2.4) * (behind ? 1.5 : 7)).toFixed(2)}deg)`; break;
     case 'bounce': { const c = t % 2.2; const h = c < .6 ? Math.sin(c / .6 * Math.PI) : 0; tr += ` translateY(${(-h * 14).toFixed(2)}%) scale(${(1 + .04 * h).toFixed(4)}, ${(1 - .03 * h).toFixed(4)})`; break; }
     case 'shine': {
-      const sh = $('.lshine', built.media);
+      const sh = built.lshine;
       const x = (t % 2.8) / .8;
       if (sh) sh.style.setProperty('--lshine', x < 1 ? `${(-60 + x * 200).toFixed(1)}%` : '-60%');
       break; }
   }
-  img.style.transform = tr.trim();
+  setS(img, 'transform', tr.trim());
 }
 
 /* ---------------- the card coming and going ---------------- */
@@ -562,7 +566,7 @@ function idle(ms) {
     case 'float': t = `translateY(${Math.sin(ms / 1000 * 1.6) * .35}rem)`; break;
     case 'tilt': t = `perspective(60rem) rotateY(${Math.sin(ms / 1000 * 1.1) * 5}deg) rotateX(${Math.cos(ms / 1000 * .9) * 3}deg)`; break;
     case 'pulse': t = `scale(${1 + Math.sin(ms / 1000 * 3) * .025})`; break;
-    case 'flicker': c.filter = hash(Math.floor(ms / 70) * 1.7) < .05 ? 'brightness(.6)' : ''; break;
+    case 'flicker': setS(built.card, 'filter', hash(Math.floor(ms / 70) * 1.7) < .05 ? 'brightness(.6)' : ''); break;
   }
   if (cfg.idle === 'shine') {
     const x = (ms % 3500) / 900;
@@ -638,22 +642,23 @@ function timeline(now) {
 function render(now) {
   liveNow = now;
   const tl = timeline(now);
-  if (!tl) { const c = $('#card'); c.style.opacity = '0'; c.style.visibility = 'hidden'; return; }
+  if (!tl) { const c = $('#card'); setS(c, 'opacity', '0'); setS(c, 'visibility', 'hidden'); return; }
   if (!built || built.idx !== tl.idx) build(tl.idx);
   const it = built.it, card = built.card;
-  card.style.visibility = '';
+  setS(card, 'visibility', '');
 
   const st = cardStyle(tl.leaving ? it.exit : it.enter, clamp(tl.p), tl.leaving);
   const motion = idle(tl.shownMs);
-  card.style.transform = [st.transform, motion].filter(Boolean).join(' ');
-  card.style.opacity = st.opacity;
-  if (cfg.idle !== 'flicker' || st.filter) card.style.filter = st.filter;
-  card.style.clipPath = st.clipPath;
+  setS(card, 'transform', [st.transform, motion].filter(Boolean).join(' '));
+  setS(card, 'opacity', st.opacity);
+  if (cfg.idle !== 'flicker' || st.filter) setS(card, 'filter', st.filter);
+  setS(card, 'clipPath', st.clipPath);
 
   if (built.track) {
-    const w = built.track.scrollWidth / 4 || 1;
+    if (!built.trackW) built.trackW = built.track.scrollWidth / 4;
+    const w = built.trackW || 1;
     const speed = 160 * (window.innerHeight / 1080);
-    built.track.style.transform = `translateX(${-((tl.shownMs / 1000 * speed) % w)}px)`;
+    setS(built.track, 'transform', `translateX(${-((tl.shownMs / 1000 * speed) % w)}px)`);
   } else {
     animateText(tl.shownMs - Math.min(cfg.enterMs * .5, 400));
   }

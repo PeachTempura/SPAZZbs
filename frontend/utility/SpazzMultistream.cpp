@@ -25,9 +25,12 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QThread>
 #include <QTimer>
 
 #include <algorithm>
+#include <functional>
+#include <thread>
 
 #include "moc_SpazzMultistream.cpp"
 
@@ -42,6 +45,26 @@ static const SpazzDestInfo kDests[] = {
 	{"X", "SpazzX", "X", "rtmps://va.pscp.tv:443/x", 40000, 9000, 3, false, false},
 	{"Rumble", "SpazzRumble", "Rumble", "rtmp://...", 20000, 6000, 4, false, false},
 };
+
+/* worker threads still holding outputs; OBS must not shut down under them */
+static std::atomic<int> pendingWorkers{0};
+
+static void RunWorker(std::function<void()> fn)
+{
+	pendingWorkers++;
+	std::thread([fn]() {
+		fn();
+		pendingWorkers--;
+	}).detach();
+}
+
+static void WaitForWorkers()
+{
+	/* a stream that's still timing out gets a little while to finish */
+	for (int i = 0; i < 300 && pendingWorkers.load() > 0; i++) {
+		QThread::msleep(50);
+	}
+}
 
 static QString DestStr(const SpazzDestInfo *info, const char *what)
 {
@@ -207,7 +230,7 @@ SpazzMultistream::~SpazzMultistream()
 		if (d->output && obs_output_active(d->output)) {
 			obs_output_force_stop(d->output);
 		}
-		Release(*d);
+		Release(*d, false);
 	}
 }
 
@@ -236,11 +259,14 @@ void SpazzMultistream::Hook()
 			case OBS_FRONTEND_EVENT_EXIT:
 				for (auto &d : self->dests) {
 					d->stopping = true;
+					d->restartPending = false;
 					if (d->output && obs_output_active(d->output)) {
 						obs_output_force_stop(d->output);
 					}
-					self->Release(*d);
+					/* OBS is shutting down: finish here, not on a thread */
+					self->Release(*d, false);
 				}
+				WaitForWorkers();
 				break;
 			default:
 				break;
@@ -404,17 +430,17 @@ obs_encoder_t *SpazzMultistream::OwnVideo(Dest &d, int bitrate)
 	return nullptr;
 }
 
-obs_encoder_t *SpazzMultistream::OwnAudio(Dest &d)
+obs_encoder_t *SpazzMultistream::OwnAudio(Dest &d, size_t mixer)
 {
 	for (auto &o : dests) {
-		if (o.get() != &d && o->ownAudio) {
+		if (o.get() != &d && o->ownAudio && obs_encoder_get_mixer_index(o->ownAudio) == mixer) {
 			d.ownAudio = obs_encoder_get_ref(o->ownAudio);
 			return d.ownAudio;
 		}
 	}
 	OBSDataAutoRelease as = obs_data_create();
 	obs_data_set_int(as, "bitrate", 160);
-	d.ownAudio = obs_audio_encoder_create("ffmpeg_aac", "SPAZZbs multistream audio", as, 0, nullptr);
+	d.ownAudio = obs_audio_encoder_create("ffmpeg_aac", "SPAZZbs multistream audio", as, mixer, nullptr);
 	if (d.ownAudio) {
 		obs_encoder_set_audio(d.ownAudio, obs_get_audio());
 	}
@@ -424,6 +450,10 @@ obs_encoder_t *SpazzMultistream::OwnAudio(Dest &d)
 void SpazzMultistream::Start(Dest &d)
 {
 	if (d.output) {
+		/* still finishing the last stream: go again once it has */
+		if (d.stopping) {
+			d.restartPending = true;
+		}
 		return;
 	}
 	config_t *cfg = main->Config();
@@ -457,7 +487,8 @@ void SpazzMultistream::Start(Dest &d)
 	}
 	obs_encoder_t *audio = mainAudio;
 	if (!audio || strcmp(obs_encoder_get_codec(audio), "aac") != 0) {
-		audio = OwnAudio(d);
+		/* same audio track the main stream sends */
+		audio = OwnAudio(d, audio ? obs_encoder_get_mixer_index(audio) : 0);
 	}
 	if (!video || !audio) {
 		SetState(d, State::Failed, QTStr("SpazzMulti.Why.NoEncoder"));
@@ -483,6 +514,7 @@ void SpazzMultistream::Start(Dest &d)
 	obs_output_set_audio_encoder(d.output, audio, 0);
 	obs_output_set_reconnect_settings(d.output, 20, 3);
 
+	d.gen++;
 	signal_handler_t *sh = obs_output_get_signal_handler(d.output);
 	d.startSig.Connect(sh, "start", OnStart, &d);
 	d.stopSig.Connect(sh, "stop", OnStop, &d);
@@ -509,25 +541,45 @@ void SpazzMultistream::Stop(Dest &d)
 		return;
 	}
 	d.stopping = true;
+	d.restartPending = false;
 	if (obs_output_active(d.output) || obs_output_reconnecting(d.output)) {
-		obs_output_stop(d.output); /* "stop" fires, then it's released */
+		/* stopping a stream that's reconnecting waits for its connection
+		 * attempt to time out, so do it off the UI thread; "stop" fires
+		 * when it's done and the output is released then */
+		OBSOutput out = d.output.Get();
+		RunWorker([out]() { obs_output_stop(out); });
 	} else {
 		Release(d);
 		SetState(d, State::Off);
 	}
 }
 
-void SpazzMultistream::Release(Dest &d)
+void SpazzMultistream::Release(Dest &d, bool async)
 {
 	d.startSig.Disconnect();
 	d.stopSig.Disconnect();
 	d.reconnectSig.Disconnect();
 	d.reconnectOkSig.Disconnect();
+	d.ownBitrate = 0;
+
+	/* destroying an output that's still connecting waits for the attempt
+	 * to give up, so let a worker thread hold the last references */
+	OBSOutput out = d.output.Get();
+	OBSService svc = d.service.Get();
+	OBSEncoder vid = d.ownVideo.Get();
+	OBSEncoder aud = d.ownAudio.Get();
 	d.output = nullptr;
 	d.service = nullptr;
 	d.ownVideo = nullptr;
 	d.ownAudio = nullptr;
-	d.ownBitrate = 0;
+	if (async && out) {
+		RunWorker([out, svc, vid, aud]() mutable {
+			out = nullptr; /* output first: it holds the others */
+			svc = nullptr;
+			vid = nullptr;
+			aud = nullptr;
+		});
+	}
 }
 
 void SpazzMultistream::SetState(Dest &d, State state, const QString &detail)
@@ -599,6 +651,7 @@ void SpazzMultistream::OnReconnectOk(void *data, calldata_t *)
 void SpazzMultistream::OnStop(void *data, calldata_t *cd)
 {
 	Dest *d = static_cast<Dest *>(data);
+	const uint64_t gen = d->gen.load();
 	const long long code = calldata_int(cd, "code");
 	obs_output_t *out = static_cast<obs_output_t *>(calldata_ptr(cd, "output"));
 	const char *err = out ? obs_output_get_last_error(out) : nullptr;
@@ -606,12 +659,20 @@ void SpazzMultistream::OnStop(void *data, calldata_t *cd)
 
 	QMetaObject::invokeMethod(
 		d->owner,
-		[d, code, lastError]() {
+		[d, gen, code, lastError]() {
 			SpazzMultistream *self = d->owner;
+			if (gen != d->gen.load() || !d->output) {
+				return; /* from an output that's already been replaced */
+			}
 			const bool wanted = d->stopping || code == OBS_OUTPUT_SUCCESS;
 			self->Release(*d);
 			if (wanted) {
 				self->SetState(*d, State::Off);
+				const bool again = d->restartPending;
+				d->restartPending = false;
+				if (again && self->Enabled(*d) && self->Configured(*d) && self->MainLive()) {
+					self->Start(*d);
+				}
 				return;
 			}
 			QString why;

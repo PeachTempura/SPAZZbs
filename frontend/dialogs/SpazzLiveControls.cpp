@@ -21,6 +21,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QScreen>
+#include <QPushButton>
 #include <QSizeGrip>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -79,8 +80,9 @@ static const char *kStyle = R"(
 
 void SpazzLiveControls::Open(obs_source_t *source, QWidget *parent)
 {
-	if (!source || !obs_source_configurable(source))
+	if (!source || !obs_source_configurable(source)) {
 		return;
+	}
 
 	QString id = QT_UTF8(obs_source_get_uuid(source));
 	QPointer<SpazzLiveControls> existing = openWindows.value(id);
@@ -175,6 +177,14 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 	QLabel *hint = new QLabel(QTStr("SpazzLive.Hint"), footer);
 	hint->setObjectName("spazzLiveHint");
 	fl->addWidget(hint, 1);
+	/* some sources (browser, media...) only take changes when told to,
+	 * so a page doesn't reload on every key: give those an Apply button */
+	if (view->DeferUpdate()) {
+		QPushButton *apply = new QPushButton(QTStr("Apply"), footer);
+		apply->setToolTip(QTStr("SpazzLive.ApplyTip"));
+		fl->addWidget(apply);
+		connect(apply, &QPushButton::clicked, view, [this]() { view->UpdateSettings(); });
+	}
 	fl->addWidget(new QSizeGrip(footer), 0, Qt::AlignBottom | Qt::AlignRight);
 	layout->addWidget(footer);
 
@@ -185,18 +195,21 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 
 	bool pinned = true;
 	config_t *cfg = App()->GetUserConfig();
-	if (config_has_user_value(cfg, "SpazzLiveControls", "Pinned"))
+	if (config_has_user_value(cfg, "SpazzLiveControls", "Pinned")) {
 		pinned = config_get_bool(cfg, "SpazzLiveControls", "Pinned");
+	}
 	pinButton->blockSignals(true);
 	pinButton->setChecked(pinned);
 	pinButton->blockSignals(false);
-	if (!pinned)
+	if (!pinned) {
 		setWindowFlag(Qt::WindowStaysOnTopHint, false);
+	}
 
 	const char *geom = config_get_string(cfg, "SpazzLiveControls", "geometry");
 	bool placed = false;
-	if (geom && *geom)
+	if (geom && *geom) {
 		placed = restoreGeometry(QByteArray::fromBase64(QByteArray(geom)));
+	}
 	if (!placed || !screen()) {
 		resize(380, 560);
 		QPoint at = QCursor::pos() + QPoint(16, -40);
@@ -211,8 +224,9 @@ SpazzLiveControls::SpazzLiveControls(obs_source_t *source_, QWidget *parent)
 
 SpazzLiveControls::~SpazzLiveControls()
 {
-	if (openWindows.value(uuid) == this)
+	if (openWindows.value(uuid) == this) {
 		openWindows.remove(uuid);
+	}
 }
 
 void SpazzLiveControls::UpdateTitle()
@@ -236,11 +250,13 @@ void SpazzLiveControls::SetPinned(bool pinned)
 void SpazzLiveControls::RecordUndo()
 {
 	OBSBasic *main = OBSBasic::Get();
-	if (!main || removed || !source)
+	if (!main || removed || !source) {
 		return;
+	}
 
-	if (view->DeferUpdate())
+	if (view->DeferUpdate()) {
 		view->UpdateSettings();
+	}
 
 	OBSDataAutoRelease newSettings = obs_data_create();
 	OBSDataAutoRelease cur = obs_source_get_settings(source);
@@ -250,14 +266,16 @@ void SpazzLiveControls::RecordUndo()
 
 	std::string undo_data(obs_data_get_json(oldSettings));
 	std::string redo_data(obs_data_get_json(newSettings));
-	if (undo_data == redo_data)
+	if (undo_data == redo_data) {
 		return;
+	}
 
 	auto undo_redo = [](const std::string &data) {
 		OBSDataAutoRelease s = obs_data_create_from_json(data.c_str());
 		OBSSourceAutoRelease src = obs_get_source_by_uuid(obs_data_get_string(s, "undo_uuid"));
-		if (!src)
+		if (!src) {
 			return;
+		}
 		obs_source_reset_settings(src, s);
 		obs_source_update_properties(src);
 	};
@@ -285,17 +303,20 @@ void SpazzLiveControls::keyPressEvent(QKeyEvent *e)
 
 bool SpazzLiveControls::eventFilter(QObject *obj, QEvent *e)
 {
-	if (obj != header)
+	if (obj != header) {
 		return QWidget::eventFilter(obj, e);
+	}
 
 	switch (e->type()) {
 	case QEvent::MouseButtonPress: {
 		QMouseEvent *me = static_cast<QMouseEvent *>(e);
-		if (me->button() != Qt::LeftButton)
+		if (me->button() != Qt::LeftButton) {
 			break;
+		}
 		/* let the OS move it (snapping, multi-monitor) when it can */
-		if (windowHandle() && windowHandle()->startSystemMove())
+		if (windowHandle() && windowHandle()->startSystemMove()) {
 			return true;
+		}
 		dragging = true;
 		dragOffset = me->globalPosition().toPoint() - frameGeometry().topLeft();
 		return true;

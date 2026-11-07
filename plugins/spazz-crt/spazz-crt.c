@@ -61,7 +61,7 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 #define T_(s) obs_module_text(s)
 
-#define MAX_VIEWS 4
+#define MAX_VIEWS 8
 #define VIEW_EXPIRE_FRAMES 180
 #define MIN_DIM 16u
 #define MAX_BEAM 4096u
@@ -77,7 +77,7 @@ MODULE_EXPORT const char *obs_module_description(void)
 
 #define CRT_UNIFORMS(X)                                                                                         \
 	X(image) X(image2) X(image3) X(in_size) X(out_size) X(uTime) X(uFrame) X(box_o) X(box_x) X(box_y)       \
-	X(cap_valid) X(lin_canvas) X(uLumaBlur) X(uChromaBlur) X(uChromaShift) X(uArtifacts) X(uGhost)          \
+	X(cap_valid) X(cap_clamp) X(lin_canvas) X(uLumaBlur) X(uChromaBlur) X(uChromaShift) X(uArtifacts) X(uGhost)          \
 	X(uGhostOff) X(uRinging) X(uNoise) X(uInterf) X(uJitter) X(uWobble) X(uTracking) X(uDropouts)           \
 	X(uRollOff) X(uStatic) X(uBright) X(uContrast) X(uSat) X(uHue) X(uBlack) X(uGammaIn) X(uTemp)           \
 	X(uMono) X(uMonoLevels) X(uMonoDark) X(uMonoLight) X(uDecay) X(uMode) X(uTint) X(uRect) X(uCurv)        \
@@ -96,8 +96,9 @@ struct crt_uniforms {
 
 static inline void setf(gs_eparam_t *p, float v)
 {
-	if (p)
+	if (p) {
 		gs_effect_set_float(p, v);
+	}
 }
 
 static inline void set2(gs_eparam_t *p, float x, float y)
@@ -129,8 +130,9 @@ static inline void set4(gs_eparam_t *p, const float c[4])
 
 static inline void settex(gs_eparam_t *p, gs_texrender_t *tr)
 {
-	if (p)
+	if (p) {
 		gs_effect_set_texture(p, gs_texrender_get_texture(tr));
+	}
 }
 
 /* ------------------------------------------------------------------------ */
@@ -157,6 +159,7 @@ struct crt_view {
 	bool page_valid;
 	bool persist_clear;
 	uint64_t last_frame;
+	bool off_settled; /* already drawn once while switched off */
 	double last_capture;
 	float rect[4];
 };
@@ -198,7 +201,9 @@ struct spazz_crt {
 	/* sound */
 	uint32_t sample_rate;
 	float *mix;
-	size_t mix_len, mix_cap;
+	size_t mix_pos, mix_len, mix_cap; /* mix_len frames waiting from mix_pos */
+	float *clip[4];                   /* the four sounds, made once */
+	size_t clip_len[4];
 	uint64_t next_ts;
 	bool streaming;
 	uint32_t rng;
@@ -239,22 +244,27 @@ static void rgb_from_hex(uint32_t hex, float out[3])
 static void lin_from_hex(uint32_t hex, float g, float out[3])
 {
 	rgb_from_hex(hex, out);
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 3; i++) {
 		out[i] = powf(out[i], g);
+	}
 }
 
 static bool parse_hex_color(const char *s, uint32_t *out)
 {
-	if (!s)
+	if (!s) {
 		return false;
-	if (*s == '#')
+	}
+	if (*s == '#') {
 		s++;
-	if (strlen(s) != 6)
+	}
+	if (strlen(s) != 6) {
 		return false;
+	}
 	char *end = NULL;
 	unsigned long v = strtoul(s, &end, 16);
-	if (!end || *end)
+	if (!end || *end) {
 		return false;
+	}
 	*out = (uint32_t)v;
 	return true;
 }
@@ -269,12 +279,13 @@ static void kelvin_rgb(double k, float out[3])
 		r = 329.698727446 * pow(t - 60.0, -0.1332047592);
 		g = 288.1221695283 * pow(t - 60.0, -0.0755148492);
 	}
-	if (t >= 66.0)
+	if (t >= 66.0) {
 		b = 255.0;
-	else if (t <= 19.0)
+	} else if (t <= 19.0) {
 		b = 0.0;
-	else
+	} else {
 		b = 138.5177312231 * log(t - 10.0) - 305.0447927307;
+	}
 	out[0] = (float)(fmin(255.0, fmax(0.0, r)) / 255.0);
 	out[1] = (float)(fmin(255.0, fmax(0.0, g)) / 255.0);
 	out[2] = (float)(fmin(255.0, fmax(0.0, b)) / 255.0);
@@ -283,24 +294,27 @@ static void kelvin_rgb(double k, float out[3])
 static int param_index(const char *id)
 {
 	for (int i = 0; i < CP_COUNT; i++) {
-		if (strcmp(crt_params[i].id, id) == 0)
+		if (strcmp(crt_params[i].id, id) == 0) {
 			return i;
+		}
 	}
 	return -1;
 }
 
 static double decode_select(enum crt_param_id id, const char *s)
 {
-	if (!s || !*s)
+	if (!s || !*s) {
 		s = crt_params[id].def_str;
+	}
 
 	switch (id) {
 	case CP_lines:
 		return strcmp(s, "native") == 0 ? 0.0 : atof(s);
 	case CP_aspect: {
 		int a = 0, b = 0;
-		if (strcmp(s, "fill") == 0 || sscanf(s, "%d:%d", &a, &b) != 2 || a <= 0 || b <= 0)
+		if (strcmp(s, "fill") == 0 || sscanf(s, "%d:%d", &a, &b) != 2 || a <= 0 || b <= 0) {
 			return 0.0;
+		}
 		return (double)a / (double)b;
 	}
 	default:
@@ -314,8 +328,9 @@ static double decode_select(enum crt_param_id id, const char *s)
 static void read_vals(obs_data_t *settings, struct crt_vals *out)
 {
 	bool group_on[CRT_G_COUNT];
-	for (int g = 0; g < CRT_G_COUNT; g++)
+	for (int g = 0; g < CRT_G_COUNT; g++) {
 		group_on[g] = g == CRT_G_PICTURE ? true : obs_data_get_bool(settings, crt_group_ids[g]);
+	}
 
 	for (int i = 0; i < CP_COUNT; i++) {
 		const struct crt_param *p = &crt_params[i];
@@ -324,8 +339,9 @@ static void read_vals(obs_data_t *settings, struct crt_vals *out)
 		switch (p->type) {
 		case CRT_SLIDER: {
 			double v = bypass ? p->bypass : obs_data_get_double(settings, p->id);
-			if (!bypass)
+			if (!bypass) {
 				v = fmin(p->max, fmax(p->min, v));
+			}
 			out->v[i] = v;
 			break;
 		}
@@ -345,8 +361,9 @@ static void read_vals(obs_data_t *settings, struct crt_vals *out)
 	out->lines = (int)out->v[CP_lines];
 	out->aspect = out->v[CP_aspect];
 	out->fps = (int)out->v[CP_fps];
-	if (out->fps <= 0)
+	if (out->fps <= 0) {
 		out->fps = 60;
+	}
 	out->mask_type = (int)out->v[CP_maskType];
 	out->clear_outside = obs_data_get_bool(settings, "clear_outside");
 	out->off_passthrough = strcmp(obs_data_get_string(settings, "off_mode"), "passthrough") == 0;
@@ -376,8 +393,9 @@ static void set_param(obs_data_t *s, int i, double num, const char *str)
 			str = buf;
 		}
 		for (const char *const *o = p->options; *o; o += 2) {
-			if (strcmp(*o, str) == 0)
+			if (strcmp(*o, str) == 0) {
 				pick = *o;
+			}
 		}
 		obs_data_set_string(s, p->id, pick ? pick : p->def_str);
 		break;
@@ -387,16 +405,19 @@ static void set_param(obs_data_t *s, int i, double num, const char *str)
 
 static void reset_params(obs_data_t *s)
 {
-	for (int i = 0; i < CP_COUNT; i++)
+	for (int i = 0; i < CP_COUNT; i++) {
 		set_param(s, i, crt_params[i].def, crt_params[i].def_str);
-	for (int g = 0; g < CRT_G_COUNT; g++)
+	}
+	for (int g = 0; g < CRT_G_COUNT; g++) {
 		obs_data_set_bool(s, crt_group_ids[g], true);
+	}
 }
 
 static void apply_preset(obs_data_t *s, int idx)
 {
-	if (idx < 0 || idx >= CRT_PRESET_COUNT)
+	if (idx < 0 || idx >= CRT_PRESET_COUNT) {
 		return;
+	}
 
 	/* keep the user's performance choice and picture refresh */
 	double scale = obs_data_get_double(s, "renderScale");
@@ -406,8 +427,9 @@ static void apply_preset(obs_data_t *s, int idx)
 
 	reset_params(s);
 	const struct crt_preset *pr = &crt_presets[idx];
-	for (int k = 0; k < pr->count; k++)
+	for (int k = 0; k < pr->count; k++) {
 		set_param(s, pr->vals[k].param, pr->vals[k].num, pr->vals[k].str);
+	}
 
 	obs_data_set_double(s, "renderScale", scale > 0.0 ? scale : 1.0);
 	obs_data_set_string(s, "fps", fps_buf);
@@ -416,8 +438,9 @@ static void apply_preset(obs_data_t *s, int idx)
 static int preset_index(const char *name)
 {
 	for (int i = 0; name && i < CRT_PRESET_COUNT; i++) {
-		if (strcmp(crt_presets[i].name, name) == 0)
+		if (strcmp(crt_presets[i].name, name) == 0) {
 			return i;
+		}
 	}
 	return -1;
 }
@@ -427,16 +450,19 @@ static int preset_index(const char *name)
  * bare object of values. */
 static bool import_phosphor_json(obs_data_t *s, const char *json)
 {
-	if (!json || !*json)
+	if (!json || !*json) {
 		return false;
+	}
 
 	obs_data_t *root = obs_data_create_from_json(json);
-	if (!root)
+	if (!root) {
 		return false;
+	}
 
 	obs_data_t *p = obs_data_get_obj(root, "p");
-	if (!p)
+	if (!p) {
 		p = obs_data_get_obj(root, "params");
+	}
 	if (!p) {
 		p = root;
 		obs_data_addref(p);
@@ -445,8 +471,9 @@ static bool import_phosphor_json(obs_data_t *s, const char *json)
 	int matched = 0;
 	for (obs_data_item_t *it = obs_data_first(p); it; obs_data_item_next(&it)) {
 		int i = param_index(obs_data_item_get_name(it));
-		if (i >= 0)
+		if (i >= 0) {
 			matched++;
+		}
 	}
 
 	if (matched == 0) {
@@ -461,24 +488,27 @@ static bool import_phosphor_json(obs_data_t *s, const char *json)
 
 	for (obs_data_item_t *it = obs_data_first(p); it; obs_data_item_next(&it)) {
 		int i = param_index(obs_data_item_get_name(it));
-		if (i < 0)
+		if (i < 0) {
 			continue;
+		}
 
 		const struct crt_param *d = &crt_params[i];
 		enum obs_data_type type = obs_data_item_gettype(it);
 
 		if (d->type == CRT_COLOR) {
 			uint32_t hex;
-			if (type == OBS_DATA_STRING && parse_hex_color(obs_data_item_get_string(it), &hex))
+			if (type == OBS_DATA_STRING && parse_hex_color(obs_data_item_get_string(it), &hex)) {
 				set_param(s, i, (double)hex, NULL);
+			}
 		} else if (type == OBS_DATA_STRING) {
 			const char *str = obs_data_item_get_string(it);
-			if (d->type == CRT_SELECT)
+			if (d->type == CRT_SELECT) {
 				set_param(s, i, 0.0, str);
-			else if (d->type == CRT_TOGGLE)
+			} else if (d->type == CRT_TOGGLE) {
 				set_param(s, i, strcmp(str, "true") == 0 ? 1.0 : 0.0, NULL);
-			else
+			} else {
 				set_param(s, i, atof(str), NULL);
+			}
 		} else if (type == OBS_DATA_NUMBER) {
 			set_param(s, i, obs_data_item_get_double(it), NULL);
 		} else if (type == OBS_DATA_BOOLEAN) {
@@ -504,20 +534,23 @@ static void export_phosphor_json(obs_data_t *s)
 	obs_data_t *p = obs_data_create();
 	for (int i = 0; i < CP_COUNT; i++) {
 		const struct crt_param *d = &crt_params[i];
-		if (d->hidden)
+		if (d->hidden) {
 			continue;
+		}
 
 		bool group_on = d->group == CRT_G_PICTURE || obs_data_get_bool(s, crt_group_ids[d->group]);
 		bool bypass = d->has_bypass && !group_on;
 
 		switch (d->type) {
 		case CRT_SLIDER:
-			if (fabs(v.v[i] - d->def) > 1e-9)
+			if (fabs(v.v[i] - d->def) > 1e-9) {
 				obs_data_set_double(p, d->id, v.v[i]);
+			}
 			break;
 		case CRT_TOGGLE:
-			if ((v.v[i] != 0.0) != (d->def != 0.0))
+			if ((v.v[i] != 0.0) != (d->def != 0.0)) {
 				obs_data_set_bool(p, d->id, v.v[i] != 0.0);
+			}
 			break;
 		case CRT_COLOR:
 			if ((uint32_t)v.v[i] != (uint32_t)d->def) {
@@ -528,8 +561,9 @@ static void export_phosphor_json(obs_data_t *s)
 			break;
 		case CRT_SELECT: {
 			const char *str = bypass ? d->bypass_str : obs_data_get_string(s, d->id);
-			if (str && *str && strcmp(str, d->def_str) != 0)
+			if (str && *str && strcmp(str, d->def_str) != 0) {
 				obs_data_set_string(p, d->id, str);
+			}
 			break;
 		}
 		}
@@ -556,10 +590,12 @@ static inline float rnd(struct spazz_crt *c)
 /* WebAudio's exponential ramps: value v0 at t0 to v1 at t1 */
 static inline float exp_ramp(float t, float t0, float v0, float t1, float v1)
 {
-	if (t <= t0)
+	if (t <= t0) {
 		return v0;
-	if (t >= t1)
+	}
+	if (t >= t1) {
 		return v1;
+	}
 	return v0 * powf(v1 / v0, (t - t0) / (t1 - t0));
 }
 
@@ -603,6 +639,10 @@ static inline float biquad_run(struct biquad *f, float x)
 
 static float *mix_reserve(struct spazz_crt *c, size_t frames)
 {
+	if (c->mix_pos) {
+		memmove(c->mix, c->mix + c->mix_pos, c->mix_len * sizeof(float));
+		c->mix_pos = 0;
+	}
 	if (c->mix_len < frames) {
 		if (c->mix_cap < frames) {
 			c->mix = brealloc(c->mix, frames * sizeof(float));
@@ -616,12 +656,8 @@ static float *mix_reserve(struct spazz_crt *c, size_t frames)
 
 enum crt_sound { SND_POWER_ON, SND_POWER_OFF, SND_CHANNEL, SND_DEGAUSS };
 
-static void play_sound(struct spazz_crt *c, enum crt_sound which)
+static float clip_seconds(enum crt_sound which)
 {
-	if (!os_atomic_load_bool(&c->sounds))
-		return;
-
-	const float rate = (float)c->sample_rate;
 	float len = 0.0f;
 	switch (which) {
 	case SND_POWER_ON:
@@ -638,8 +674,13 @@ static void play_sound(struct spazz_crt *c, enum crt_sound which)
 		break;
 	}
 
-	size_t n = (size_t)(len * rate);
-	float *out = mix_reserve(c, n);
+	return len;
+}
+
+/* synthesise one sound into out (n frames, zeroed) */
+static void synth_clip(struct spazz_crt *c, enum crt_sound which, float *out, size_t n)
+{
+	const float rate = (float)c->sample_rate;
 	struct biquad f;
 
 	switch (which) {
@@ -657,8 +698,9 @@ static void play_sound(struct spazz_crt *c, enum crt_sound which)
 				s += (2.0f * (ph - floorf(ph)) - 1.0f) * amps[k] * 0.25f;
 			}
 			float v = s * g;
-			if (t < 0.08f)
+			if (t < 0.08f) {
 				v += biquad_run(&f, rnd(c)) * 0.9f;
+			}
 			out[i] += v;
 		}
 		break;
@@ -669,8 +711,9 @@ static void play_sound(struct spazz_crt *c, enum crt_sound which)
 		for (size_t i = 0; i < n; i++) {
 			float t = (float)i / rate;
 			float v = 0.0f;
-			if (t < 0.05f)
+			if (t < 0.05f) {
 				v += rnd(c) * 0.5f;
+			}
 			if (t >= 0.05f && t < 1.25f) {
 				float g = t < 0.15f ? exp_ramp(t, 0.05f, 0.0001f, 0.15f, 0.06f)
 						    : exp_ramp(t, 0.15f, 0.06f, 1.1f, 0.0001f);
@@ -692,8 +735,9 @@ static void play_sound(struct spazz_crt *c, enum crt_sound which)
 			phase += fr / rate;
 			phase -= floorf(phase);
 			float v = sinf(2.0f * (float)M_PI * phase) * exp_ramp(t, 0.0f, 0.08f, 0.55f, 0.0001f);
-			if (t < 0.04f)
+			if (t < 0.04f) {
 				v += rnd(c) * 0.4f;
+			}
 			out[i] += v;
 		}
 		break;
@@ -706,6 +750,30 @@ static void play_sound(struct spazz_crt *c, enum crt_sound which)
 			out[i] += biquad_run(&f, rnd(c)) * exp_ramp(t, 0.0f, 0.12f, 0.3f, 0.0001f);
 		}
 		break;
+	}
+}
+
+/* made when the source is created, so pressing a hotkey live costs nothing */
+static void build_clips(struct spazz_crt *c)
+{
+	for (int w = 0; w < 4; w++) {
+		size_t n = (size_t)(clip_seconds((enum crt_sound)w) * (float)c->sample_rate);
+		c->clip[w] = bzalloc(n * sizeof(float));
+		c->clip_len[w] = n;
+		synth_clip(c, (enum crt_sound)w, c->clip[w], n);
+	}
+}
+
+static void play_sound(struct spazz_crt *c, enum crt_sound which)
+{
+	if (!os_atomic_load_bool(&c->sounds) || !c->clip[which]) {
+		return;
+	}
+	const size_t n = c->clip_len[which];
+	float *out = mix_reserve(c, n);
+	const float *in = c->clip[which];
+	for (size_t i = 0; i < n; i++) {
+		out[i] += in[i];
 	}
 }
 
@@ -729,7 +797,7 @@ static void pump_audio(struct spazz_crt *c)
 		size_t frames = c->mix_len < chunk ? c->mix_len : chunk;
 
 		struct obs_source_audio a = {0};
-		a.data[0] = (const uint8_t *)c->mix;
+		a.data[0] = (const uint8_t *)(c->mix + c->mix_pos);
 		a.frames = (uint32_t)frames;
 		a.speakers = SPEAKERS_MONO;
 		a.format = AUDIO_FORMAT_FLOAT;
@@ -738,7 +806,7 @@ static void pump_audio(struct spazz_crt *c)
 		obs_source_output_audio(c->source, &a);
 
 		c->mix_len -= frames;
-		memmove(c->mix, c->mix + frames, c->mix_len * sizeof(float));
+		c->mix_pos = c->mix_len ? c->mix_pos + frames : 0;
 		c->next_ts += util_mul_div64(frames, 1000000000ULL, c->sample_rate);
 	}
 }
@@ -799,8 +867,8 @@ static inline bool fully_off(const struct spazz_crt *c)
 
 static void view_free(struct crt_view *v)
 {
-	gs_texrender_t **all[] = {&v->page,    &v->signal, &v->persist[0], &v->persist[1], &v->persist_tmp,
-				  &v->beam,    &v->bloom_a, &v->bloom_b,   &v->halo_a,     &v->halo_b};
+	gs_texrender_t **all[] = {&v->page, &v->signal,  &v->persist[0], &v->persist[1], &v->persist_tmp,
+				  &v->beam, &v->bloom_a, &v->bloom_b,    &v->halo_a,     &v->halo_b};
 	for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
 		gs_texrender_destroy(*all[i]);
 		*all[i] = NULL;
@@ -811,10 +879,11 @@ static void view_free(struct crt_view *v)
 static void view_init(struct crt_view *v, uint32_t bw, uint32_t bh, uint32_t pw, uint32_t ph)
 {
 	view_free(v);
-	gs_texrender_t **all[] = {&v->page,    &v->signal, &v->persist[0], &v->persist[1], &v->persist_tmp,
-				  &v->beam,    &v->bloom_a, &v->bloom_b,   &v->halo_a,     &v->halo_b};
-	for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++)
+	gs_texrender_t **all[] = {&v->page, &v->signal,  &v->persist[0], &v->persist[1], &v->persist_tmp,
+				  &v->beam, &v->bloom_a, &v->bloom_b,    &v->halo_a,     &v->halo_b};
+	for (size_t i = 0; i < sizeof(all) / sizeof(all[0]); i++) {
 		*all[i] = gs_texrender_create(GS_RGBA16F, GS_ZS_NONE);
+	}
 
 	v->used = true;
 	v->bw = bw;
@@ -867,19 +936,34 @@ static struct crt_view *get_view(struct spazz_crt *c, uint32_t bw, uint32_t bh, 
 	for (int i = 0; i < MAX_VIEWS; i++) {
 		struct crt_view *v = &c->views[i];
 		if (!v->used) {
-			if (!free_slot)
+			if (!free_slot) {
 				free_slot = v;
+			}
 			continue;
 		}
-		if (v->bw == bw && v->bh == bh && v->pw == pw && v->ph == ph)
+		if (v->bw == bw && v->bh == bh && v->pw == pw && v->ph == ph) {
 			return v;
-		if (!oldest || v->last_frame < oldest->last_frame)
+		}
+		/* never throw away a view that was already drawn this frame */
+		if (v->last_frame != c->frame && (!oldest || v->last_frame < oldest->last_frame)) {
 			oldest = v;
+		}
 	}
 
 	struct crt_view *v = free_slot ? free_slot : oldest;
-	if (c->last_view == v)
+	if (!v) {
+		/* more different sizes in one frame than slots: reuse the
+		 * least recent one anyway */
+		v = &c->views[0];
+		for (int i = 1; i < MAX_VIEWS; i++) {
+			if (c->views[i].last_frame < v->last_frame) {
+				v = &c->views[i];
+			}
+		}
+	}
+	if (c->last_view == v) {
 		c->last_view = NULL;
+	}
 	view_init(v, bw, bh, pw, ph);
 	return v;
 }
@@ -888,8 +972,9 @@ static void expire_views(struct spazz_crt *c)
 {
 	for (int i = 0; i < MAX_VIEWS; i++) {
 		struct crt_view *v = &c->views[i];
-		if (v->used && v->last_frame + VIEW_EXPIRE_FRAMES < c->frame && v != c->last_view)
+		if (v->used && v->last_frame + VIEW_EXPIRE_FRAMES < c->frame && v != c->last_view) {
 			view_free(v);
+		}
 	}
 }
 
@@ -923,8 +1008,9 @@ static void to_target_px(const struct matrix4 *world, const struct matrix4 *proj
 
 static bool map_box(uint32_t w, uint32_t h, struct screen_map *m)
 {
-	if (!gs_get_target_info(&m->rt_w, &m->rt_h, &m->fmt))
+	if (!gs_get_target_info(&m->rt_w, &m->rt_h, &m->fmt)) {
 		return false;
+	}
 
 	switch (m->fmt) {
 	case GS_RGBA:
@@ -940,11 +1026,13 @@ static bool map_box(uint32_t w, uint32_t h, struct screen_map *m)
 	struct matrix4 world, proj;
 	struct gs_rect vp;
 	gs_matrix_get(&world);
-	if (!gs_projection_get(&proj))
+	if (!gs_projection_get(&proj)) {
 		return false;
+	}
 	gs_get_viewport(&vp);
-	if (vp.cx <= 0 || vp.cy <= 0)
+	if (vp.cx <= 0 || vp.cy <= 0) {
 		return false;
+	}
 
 	float px[2], py[2];
 	to_target_px(&world, &proj, &vp, 0.0f, 0.0f, m->o);
@@ -959,8 +1047,9 @@ static bool map_box(uint32_t w, uint32_t h, struct screen_map *m)
 
 static bool ensure_backdrop(struct spazz_crt *c, uint32_t w, uint32_t h, enum gs_color_format fmt)
 {
-	if (c->backdrop && c->back_fmt == fmt && c->back_w >= w && c->back_h >= h)
+	if (c->backdrop && c->back_fmt == fmt && c->back_w >= w && c->back_h >= h) {
 		return true;
+	}
 
 	/* round up so a box that moves or scales doesn't realloc every frame */
 	uint32_t nw = (w + 127u) & ~127u, nh = (h + 127u) & ~127u;
@@ -983,25 +1072,29 @@ static bool ensure_backdrop(struct spazz_crt *c, uint32_t w, uint32_t h, enum gs
 static bool pass_begin(gs_texrender_t *tr, uint32_t w, uint32_t h)
 {
 	gs_texrender_reset(tr);
-	if (!gs_texrender_begin(tr, w, h))
+	if (!gs_texrender_begin(tr, w, h)) {
 		return false;
+	}
 	gs_ortho(0.0f, (float)w, 0.0f, (float)h, -100.0f, 100.0f);
 	return true;
 }
 
 static void pass_run(struct spazz_crt *c, const char *tech, gs_texrender_t *tr, uint32_t w, uint32_t h)
 {
-	if (!pass_begin(tr, w, h))
+	if (!pass_begin(tr, w, h)) {
 		return;
-	while (gs_effect_loop(c->effect, tech))
+	}
+	while (gs_effect_loop(c->effect, tech)) {
 		gs_draw_sprite(NULL, 0, w, h);
+	}
 	gs_texrender_end(tr);
 }
 
 static void pass_clear(gs_texrender_t *tr, uint32_t w, uint32_t h)
 {
-	if (!pass_begin(tr, w, h))
+	if (!pass_begin(tr, w, h)) {
 		return;
+	}
 	struct vec4 black;
 	vec4_set(&black, 0.0f, 0.0f, 0.0f, 1.0f);
 	gs_clear(GS_CLEAR_COLOR, &black, 0.0f, 0);
@@ -1054,14 +1147,17 @@ static bool capture_page(struct spazz_crt *c, struct crt_view *v, const struct s
 	y0 = fmaxf(0.0f, floorf(y0 - margin));
 	x1 = fminf((float)m->rt_w, ceilf(x1 + margin));
 	y1 = fminf((float)m->rt_h, ceilf(y1 + margin));
-	if (x1 - x0 < 1.0f || y1 - y0 < 1.0f)
+	if (x1 - x0 < 1.0f || y1 - y0 < 1.0f) {
 		return false; /* entirely off the canvas */
+	}
 
 	uint32_t rx = (uint32_t)x0, ry = (uint32_t)y0, rw = (uint32_t)(x1 - x0), rh = (uint32_t)(y1 - y0);
-	if (!ensure_backdrop(c, rw, rh, m->fmt))
+	if (!ensure_backdrop(c, rw, rh, m->fmt)) {
 		return false;
-	if (!gs_copy_from_target(c->backdrop, rx, ry, rw, rh))
+	}
+	if (!gs_copy_from_target(c->backdrop, rx, ry, rw, rh)) {
 		return false;
+	}
 
 	const float bw = (float)c->back_w, bh = (float)c->back_h;
 	set2(c->u.box_o, (q0[0] - x0) / bw, (q0[1] - y0) / bh);
@@ -1069,10 +1165,13 @@ static bool capture_page(struct spazz_crt *c, struct crt_view *v, const struct s
 	set2(c->u.box_y, qy[0] / bw, qy[1] / bh);
 	const float valid[4] = {0.0f, 0.0f, (float)rw / bw, (float)rh / bh};
 	set4(c->u.cap_valid, valid);
+	const float clampv[4] = {0.5f / bw, 0.5f / bh, ((float)rw - 0.5f) / bw, ((float)rh - 0.5f) / bh};
+	set4(c->u.cap_clamp, clampv);
 	setf(c->u.lin_canvas, m->fmt == GS_RGBA16F ? 1.0f : 0.0f);
 	set2(c->u.out_size, (float)v->pw, (float)v->ph);
-	if (c->u.image)
+	if (c->u.image) {
 		gs_effect_set_texture(c->u.image, c->backdrop);
+	}
 
 	pass_run(c, "Capture", v->page, v->pw, v->ph);
 	return true;
@@ -1122,8 +1221,9 @@ static void run_tube(struct spazz_crt *c, struct crt_view *v, bool first_this_fr
 		float kt[3], k65[3], temp[3];
 		kelvin_rgb(p[CP_temperature], kt);
 		kelvin_rgb(6500.0, k65);
-		for (int i = 0; i < 3; i++)
+		for (int i = 0; i < 3; i++) {
 			temp[i] = kt[i] / k65[i];
+		}
 		set3(c->u.uTemp, temp);
 		setf(c->u.uMono, p[CP_mono] != 0.0 ? 1.0f : 0.0f);
 		setf(c->u.uMonoLevels, (float)p[CP_monoLevels]);
@@ -1207,8 +1307,9 @@ static void run_tube(struct spazz_crt *c, struct crt_view *v, bool first_this_fr
 	setf(c->u.uLcdShadow, (float)p[CP_lcdShadow]);
 	setf(c->u.uLcdShadowOff, (float)p[CP_lcdShadowOff]);
 	float gap[3] = {0.8f, 0.8f, 0.8f};
-	if (p[CP_mono] != 0.0)
+	if (p[CP_mono] != 0.0) {
 		lin_from_hex((uint32_t)p[CP_monoLight], (float)p[CP_gammaIn], gap);
+	}
 	set3(c->u.uGapColor, gap);
 	pass_run(c, "Beam", v->beam, v->bw, v->bh);
 
@@ -1268,8 +1369,9 @@ static void draw_final(struct spazz_crt *c, struct crt_view *v, uint32_t w, uint
 
 	const bool prev_srgb = gs_framebuffer_srgb_enabled();
 	gs_enable_framebuffer_srgb(false);
-	while (gs_effect_loop(c->effect, "Final"))
+	while (gs_effect_loop(c->effect, "Final")) {
 		gs_draw_sprite(NULL, 0, w, h);
+	}
 	gs_enable_framebuffer_srgb(prev_srgb);
 }
 
@@ -1323,8 +1425,9 @@ static void crt_defaults(obs_data_t *settings)
 			break;
 		}
 	}
-	for (int g = 0; g < CRT_G_COUNT; g++)
+	for (int g = 0; g < CRT_G_COUNT; g++) {
 		obs_data_set_default_bool(settings, crt_group_ids[g], true);
+	}
 
 	obs_data_set_default_string(settings, "preset", "");
 	obs_data_set_default_int(settings, "width", 640);
@@ -1350,13 +1453,15 @@ static bool preset_modified(obs_properties_t *props, obs_property_t *prop, obs_d
 		obs_data_set_string(settings, "preset_applied", "");
 		return false;
 	}
-	if (applied && strcmp(preset, applied) == 0)
+	if (applied && strcmp(preset, applied) == 0) {
 		return false;
+	}
 	obs_data_set_string(settings, "import_status", "");
 
 	int idx = preset_index(preset);
-	if (idx < 0)
+	if (idx < 0) {
 		return false;
+	}
 
 	char name[128];
 	snprintf(name, sizeof(name), "%s", preset);
@@ -1371,8 +1476,9 @@ static bool reapply_clicked(obs_properties_t *props, obs_property_t *prop, void 
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 
 	obs_data_t *s = obs_source_get_settings(c->source);
 	const char *preset = obs_data_get_string(s, "preset");
@@ -1398,8 +1504,9 @@ static bool import_clicked(obs_properties_t *props, obs_property_t *prop, void *
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 
 	obs_data_t *s = obs_source_get_settings(c->source);
 	char *json = bstrdup(obs_data_get_string(s, "phosphor_json"));
@@ -1420,8 +1527,9 @@ static bool export_clicked(obs_properties_t *props, obs_property_t *prop, void *
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 
 	obs_data_t *s = obs_source_get_settings(c->source);
 	export_phosphor_json(s);
@@ -1436,8 +1544,9 @@ static bool power_clicked(obs_properties_t *props, obs_property_t *prop, void *d
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 	os_atomic_set_bool(&c->req_power, true);
 	return false;
 }
@@ -1447,8 +1556,9 @@ static bool static_clicked(obs_properties_t *props, obs_property_t *prop, void *
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 	os_atomic_set_bool(&c->req_static, true);
 	return false;
 }
@@ -1458,8 +1568,9 @@ static bool degauss_clicked(obs_properties_t *props, obs_property_t *prop, void 
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(prop);
 	struct spazz_crt *c = data;
-	if (!c)
+	if (!c) {
 		return false;
+	}
 	os_atomic_set_bool(&c->req_degauss, true);
 	return false;
 }
@@ -1480,13 +1591,15 @@ static void add_param_property(obs_properties_t *props, const struct crt_param *
 		break;
 	case CRT_SELECT:
 		prop = obs_properties_add_list(props, p->id, p->label, OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-		for (const char *const *o = p->options; *o; o += 2)
+		for (const char *const *o = p->options; *o; o += 2) {
 			obs_property_list_add_string(prop, o[1], o[0]);
+		}
 		break;
 	}
 
-	if (prop && p->tip)
+	if (prop && p->tip) {
 		obs_property_set_long_description(prop, p->tip);
+	}
 }
 
 static obs_properties_t *crt_properties(void *data)
@@ -1497,8 +1610,9 @@ static obs_properties_t *crt_properties(void *data)
 	/* presets */
 	p = obs_properties_add_list(props, "preset", T_("Preset"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(p, T_("Preset.Custom"), "");
-	for (int i = 0; i < CRT_PRESET_COUNT; i++)
+	for (int i = 0; i < CRT_PRESET_COUNT; i++) {
 		obs_property_list_add_string(p, crt_presets[i].name, crt_presets[i].name);
+	}
 	obs_property_set_long_description(p, T_("Preset.Tip"));
 	obs_property_set_modified_callback(p, preset_modified);
 	obs_properties_add_button2(props, "reapply", T_("Preset.Reapply"), reapply_clicked, data);
@@ -1525,8 +1639,9 @@ static obs_properties_t *crt_properties(void *data)
 	/* picture: always on */
 	obs_properties_t *pic = obs_properties_create();
 	for (int i = 0; i < CP_COUNT; i++) {
-		if (crt_params[i].group == CRT_G_PICTURE && !crt_params[i].hidden)
+		if (crt_params[i].group == CRT_G_PICTURE && !crt_params[i].hidden) {
 			add_param_property(pic, &crt_params[i]);
+		}
 	}
 	obs_properties_add_int(pic, "width", T_("Width"), 16, 8192, 1);
 	obs_properties_add_int(pic, "height", T_("Height"), 16, 8192, 1);
@@ -1536,8 +1651,9 @@ static obs_properties_t *crt_properties(void *data)
 	for (int g = CRT_G_PICTURE + 1; g < CRT_G_COUNT; g++) {
 		obs_properties_t *sub = obs_properties_create();
 		for (int i = 0; i < CP_COUNT; i++) {
-			if ((int)crt_params[i].group == g && !crt_params[i].hidden)
+			if ((int)crt_params[i].group == g && !crt_params[i].hidden) {
 				add_param_property(sub, &crt_params[i]);
+			}
 		}
 		obs_properties_add_group(props, crt_group_ids[g], crt_group_titles[g], OBS_GROUP_CHECKABLE, sub);
 	}
@@ -1562,8 +1678,9 @@ static void hk_power(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool presse
 	UNUSED_PARAMETER(id);
 	UNUSED_PARAMETER(hk);
 	struct spazz_crt *c = data;
-	if (pressed)
+	if (pressed) {
 		os_atomic_set_bool(&c->req_power, true);
+	}
 }
 
 static void hk_static(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed)
@@ -1571,8 +1688,9 @@ static void hk_static(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool press
 	UNUSED_PARAMETER(id);
 	UNUSED_PARAMETER(hk);
 	struct spazz_crt *c = data;
-	if (pressed)
+	if (pressed) {
 		os_atomic_set_bool(&c->req_static, true);
+	}
 }
 
 static void hk_degauss(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pressed)
@@ -1580,8 +1698,9 @@ static void hk_degauss(void *data, obs_hotkey_id id, obs_hotkey_t *hk, bool pres
 	UNUSED_PARAMETER(id);
 	UNUSED_PARAMETER(hk);
 	struct spazz_crt *c = data;
-	if (pressed)
+	if (pressed) {
 		os_atomic_set_bool(&c->req_degauss, true);
+	}
 }
 
 /* -- lifetime -- */
@@ -1591,14 +1710,18 @@ static void crt_destroy(void *data)
 	struct spazz_crt *c = data;
 
 	obs_enter_graphics();
-	for (int i = 0; i < MAX_VIEWS; i++)
+	for (int i = 0; i < MAX_VIEWS; i++) {
 		view_free(&c->views[i]);
+	}
 	gs_texture_destroy(c->backdrop);
 	gs_effect_destroy(c->effect);
 	obs_leave_graphics();
 
 	pthread_mutex_destroy(&c->mutex);
 	bfree(c->mix);
+	for (int w = 0; w < 4; w++) {
+		bfree(c->clip[w]);
+	}
 	bfree(c);
 }
 
@@ -1619,14 +1742,16 @@ static void *crt_create(obs_data_t *settings, obs_source_t *source)
 
 	struct obs_audio_info oai;
 	c->sample_rate = obs_get_audio_info(&oai) ? oai.samples_per_sec : 48000;
+	build_clips(c);
 
 	char *path = obs_module_file("spazz-crt.effect");
 	obs_enter_graphics();
 	if (path) {
 		char *errors = NULL;
 		c->effect = gs_effect_create_from_file(path, &errors);
-		if (!c->effect)
+		if (!c->effect) {
 			blog(LOG_ERROR, "[spazz-crt] could not load effect: %s", errors ? errors : "(no details)");
+		}
 		bfree(errors);
 	}
 	obs_leave_graphics();
@@ -1667,10 +1792,11 @@ static void crt_activate(void *data)
 {
 	struct spazz_crt *c = data;
 	long mode = os_atomic_load_long(&c->on_show);
-	if (mode == SHOW_POWER_ON)
+	if (mode == SHOW_POWER_ON) {
 		os_atomic_set_bool(&c->req_power_on, true);
-	else if (mode == SHOW_STATIC)
+	} else if (mode == SHOW_STATIC) {
 		os_atomic_set_bool(&c->req_static, true);
+	}
 }
 
 static void crt_tick(void *data, float seconds)
@@ -1714,8 +1840,9 @@ static void crt_tick(void *data, float seconds)
 
 	float h = (float)(c->roll_h ? c->roll_h : 480);
 	c->roll_off = fmodf(c->roll_off + (float)c->P.v[CP_roll] * dt * h * 0.9f, h * 1.07f);
-	if (c->roll_off < 0.0f)
+	if (c->roll_off < 0.0f) {
 		c->roll_off += h * 1.07f;
+	}
 
 	float fl = (float)c->P.v[CP_flicker];
 	float r = (rnd(c) + 1.0f) * 0.5f;
@@ -1729,12 +1856,14 @@ static void crt_render(void *data, gs_effect_t *unused)
 	UNUSED_PARAMETER(unused);
 	struct spazz_crt *c = data;
 
-	if (!c->effect)
+	if (!c->effect) {
 		return;
+	}
 
 	/* switched off with "let the scene through": nothing to draw */
-	if (fully_off(c) && c->P.off_passthrough)
+	if (fully_off(c) && c->P.off_passthrough) {
 		return;
+	}
 
 	const uint32_t w = (uint32_t)os_atomic_load_long(&c->width);
 	const uint32_t h = (uint32_t)os_atomic_load_long(&c->height);
@@ -1772,15 +1901,22 @@ static void crt_render(void *data, gs_effect_t *unused)
 		if (want_capture) {
 			if (capture_page(c, v, &m)) {
 				v->page_valid = true;
-				if (first)
+				if (first) {
 					v->last_capture = c->clock;
+				}
 			} else if (!v->page_valid) {
 				pass_clear(v->page, v->pw, v->ph);
 				v->page_valid = true;
 			}
 		}
 
-		run_tube(c, v, first);
+		/* switched off: the picture is multiplied by zero, so once the
+		 * view has been drawn dark there's nothing more to compute */
+		const bool off = fully_off(c);
+		if (!off || !v->off_settled) {
+			run_tube(c, v, first);
+		}
+		v->off_settled = off;
 		c->last_view = v;
 		c->roll_h = ph;
 	} else {
@@ -1792,8 +1928,9 @@ static void crt_render(void *data, gs_effect_t *unused)
 	gs_enable_framebuffer_srgb(prev_srgb);
 	gs_blend_state_pop();
 
-	if (v && v->used)
+	if (v && v->used) {
 		draw_final(c, v, w, h, mapped && m.fmt == GS_RGBA16F);
+	}
 }
 
 static uint32_t crt_width(void *data)

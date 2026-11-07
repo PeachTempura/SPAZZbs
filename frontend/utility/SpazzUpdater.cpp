@@ -53,8 +53,9 @@ QString SpazzUpdater::BuildCommit()
 
 void SpazzUpdater::Check(bool manual)
 {
-	if (checking.exchange(true))
+	if (checking.exchange(true)) {
 		return;
+	}
 
 	QPointer<SpazzUpdater> self(this);
 	std::thread([self, manual]() {
@@ -77,12 +78,18 @@ void SpazzUpdater::Check(bool manual)
 			error = "GitHub answered " + std::to_string(code);
 		}
 
+		/* SPAZZbs may have closed while GitHub was slow to answer */
+		if (!self || QCoreApplication::closingDown() || !qApp) {
+			return;
+		}
+
 		QString qerror = QString::fromStdString(error);
 		QMetaObject::invokeMethod(
 			qApp,
 			[self, manual, ok, latest, qerror]() {
-				if (self)
+				if (self) {
 					self->CheckDone(manual, ok, latest, qerror);
+				}
 			},
 			Qt::QueuedConnection);
 	}).detach();
@@ -94,8 +101,9 @@ void SpazzUpdater::CheckDone(bool manual, bool ok, const QString &latest, const 
 
 	if (!ok) {
 		blog(LOG_WARNING, "[SPAZZbs update] check failed: %s", QT_TO_UTF8(error));
-		if (manual && window)
+		if (manual && window) {
 			OBSMessageBox::warning(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.CheckFailed"));
+		}
 		return;
 	}
 
@@ -105,27 +113,32 @@ void SpazzUpdater::CheckDone(bool manual, bool ok, const QString &latest, const 
 	blog(LOG_INFO, "[SPAZZbs update] this build %s, newest %s", known ? QT_TO_UTF8(mine.left(8)) : "unknown",
 	     QT_TO_UTF8(latest.left(8)));
 
-	if (!window)
-		return;
-
-	if (known && !newer) {
-		if (manual)
-			OBSMessageBox::information(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.UpToDate"));
+	if (!window) {
 		return;
 	}
-	if (!known && !manual)
+
+	if (known && !newer) {
+		if (manual) {
+			OBSMessageBox::information(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.UpToDate"));
+		}
+		return;
+	}
+	if (!known && !manual) {
 		return; /* a local build: never nag */
+	}
 
 	OBSBasic *main = OBSBasic::Get();
-	if (!manual && main && main->Active())
+	if (!manual && main && main->Active()) {
 		return; /* don't interrupt a stream; it asks again next launch */
+	}
 
 	/* another dialog is up (e.g. the first-launch import): ask after it */
 	if (!manual && QApplication::activeModalWidget()) {
 		QPointer<SpazzUpdater> self(this);
 		QTimer::singleShot(5000, this, [self, latest]() {
-			if (self)
+			if (self) {
 				self->CheckDone(false, true, latest, QString());
+			}
 		});
 		return;
 	}
@@ -140,8 +153,9 @@ void SpazzUpdater::CheckDone(bool manual, bool ok, const QString &latest, const 
 	box.setDefaultButton(now);
 	box.exec();
 
-	if (box.clickedButton() != now)
+	if (box.clickedButton() != now) {
 		return;
+	}
 
 	if (main && main->Active()) {
 		OBSMessageBox::warning(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.WhileLive"));
@@ -193,8 +207,9 @@ void SpazzUpdater::StartUpdate()
 	CloseHandle(pi.hProcess);
 
 	blog(LOG_INFO, "[SPAZZbs update] updater started for %s, closing", QT_TO_UTF8(appDir));
-	if (window)
+	if (window) {
 		QMetaObject::invokeMethod(window, "close", Qt::QueuedConnection);
+	}
 #else
 	OBSMessageBox::information(window, QTStr("SpazzUpdate.Title"), QTStr("SpazzUpdate.WindowsOnly"));
 #endif
