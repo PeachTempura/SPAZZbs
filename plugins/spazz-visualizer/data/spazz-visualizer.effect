@@ -50,6 +50,8 @@ uniform float4 pl_info;      /* x volume, y shuffle, z repeat (0 off 1 all 2 one
 uniform float4 pl_look;      /* x LCD viz kind, y strip viz kind (-1 off), z colour cycle, w accent mode (0 fixed, 1 cycle, 2 palette) */
 uniform float3 pl_accent;
 uniform float4 pl_show;      /* x title bar, y seek bar, z buttons, w stereo */
+uniform float3 pl_accent2;   /* a colour scheme's second colour */
+uniform float4 pl_glitch;    /* x glitch amount, y music drive (with the amount), z glitch clock (holds on hits), w garbage letters */
 
 sampler_state band_sampler {
 	Filter   = Linear;
@@ -1902,12 +1904,22 @@ float3 pl_hsv(float h, float s, float v)
 	return v * lerp(float3(1.0, 1.0, 1.0), k, s);
 }
 
-/* the accent: fixed, cycling (like the SPAZZamp dock) or the palette */
+/* the accent: fixed (0), cycling like the SPAZZamp dock (1), the palette
+ * (2), a two-colour scheme (3), channels cycling on their own (4), or a
+ * rainbow sweeping across the player (5: cycling, shifted by position) */
 float3 pl_col(float shift)
 {
 	float3 cyc = pl_hsv(pl_look.z + shift, 0.66, 1.0);
 	float3 pal = prism(hue + shift);
-	return pl_look.w < 0.5 ? pl_accent : (pl_look.w < 1.5 ? cyc : pal);
+	float3 c = pl_look.w < 0.5 ? pl_accent : (pl_look.w < 1.5 ? cyc : pal);
+	float3 scheme = lerp(pl_accent, pl_accent2, 0.5 - 0.5 * cos(shift * 9.42477796));
+	float tz = (pl_look.z + shift) * 6.2831853;
+	float3 spl = 0.5 + 0.5 * sin(float3(tz, 2.0 * tz + 2.1, 3.0 * tz + 4.2));
+	spl = spl / max(max(spl.r, max(spl.g, spl.b)), 0.05);
+	c = pl_look.w > 2.5 && pl_look.w < 3.5 ? scheme : c;
+	c = pl_look.w > 3.5 && pl_look.w < 4.5 ? spl : c;
+	c = pl_look.w > 4.5 ? cyc : c;
+	return c;
 }
 
 /* ---- pixel font ---- */
@@ -1933,7 +1945,11 @@ float pl_font_px(float2 q, float row, float start, float count, float scroll, fl
 	float idx = cell + floor(scroll);
 	idx = loop_len > 0.5 ? glmod(idx, loop_len) : idx;
 	float2 g = float2(x - cell * 6.0, q.y);
-	return pl_glyph(pl_char(row, start + idx), g) * inside;
+	float code = pl_char(row, start + idx);
+	/* Corrupted: letters turn to garbage on the hits */
+	float junk = step(1.0 - pl_glitch.w, hash21(float2(idx * 1.37 + row * 7.1, pl_glitch.z)));
+	code = lerp(code, floor(hash21(float2(idx + row * 3.3, pl_glitch.z + 3.7)) * 94.0) + 1.0, junk);
+	return pl_glyph(code, g) * inside;
 }
 
 /* LCD-dot text: "count" characters of text row "row" from "start", its
@@ -2176,9 +2192,10 @@ float4 pl_draw(float2 p, float px, float skin)
 	float paused = step(1.5, st) * step(st, 2.5);
 	float going = max(playing, paused);
 
-	/* the skin */
-	float3 acc = pl_col(0.0);
-	float3 acc2 = pl_col(0.33);
+	/* the skin (a rainbow sweep shifts the colour along the window) */
+	float sweep = step(4.5, pl_look.w) * (p.x / 275.0 + p.y / 420.0);
+	float3 acc = pl_col(sweep);
+	float3 acc2 = pl_col(0.33 + sweep);
 	float3 body_a = float3(0.118, 0.110, 0.169);
 	float3 body_b = float3(0.071, 0.067, 0.102);
 	float3 lcd = float3(0.016, 0.020, 0.039);
@@ -2485,20 +2502,51 @@ float4 PSPlayerCRT(VertData v_in) : TARGET
 	return finish_paint(c, uv);
 }
 
-/* Glitch: colour channels split apart and slices jump sideways on the beat */
+/* ---- the glitch players ------------------------------------------- */
+/* pl_glitch.x is the Glitch amount (0 = a clean player), .y how hard the */
+/* music hits right now (the amount already applied), .z a clock that     */
+/* ticks 14 times a second but holds still for a moment on big hits.     */
+
+/* random glitch bursts: frequent when it's loud, rare when it's quiet */
+float pl_burst(float tick, float gd)
+{
+	float calm = saturate(0.35 + gd * 1.5);
+	return step(0.82 - 0.35 * gd, hash11(tick * 0.37 + 1.3)) * step(hash11(tick * 0.71 + 0.2), calm);
+}
+
+/* rows of the player jumping sideways */
+float pl_slip(float2 p, float tick, float gd, float ga, float burst, float rowh)
+{
+	float row = floor(p.y / rowh);
+	float g = hash21(float2(row, tick));
+	float slip = (g - 0.5) * (14.0 + 22.0 * saturate(gd)) * burst * step(0.7 - 0.15 * saturate(gd), hash21(float2(row * 1.7, tick + 3.0)));
+	/* big hits tear whole bands across */
+	float tear = step(0.6, gd) * step(0.86, hash21(float2(floor(p.y / 14.0), tick + 9.0)));
+	slip += tear * (hash21(float2(floor(p.y / 14.0), tick + 2.0)) - 0.5) * 34.0;
+	return slip * ga;
+}
+
+/* Glitch: colour channels split apart and slices jump sideways, harder the
+ * louder it gets; big hits tear bands, swap or invert the colours */
 float4 PSPlayerGlitch(VertData v_in) : TARGET
 {
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 5.0);
+	}
 	float2 uv = view_uv(v_in.uv);
 	float sc = pl_scale();
 	float2 p = pl_pos(uv, sc);
 	float px = 1.0 / sc;
 	float2 dims = float2(275.0, pl_height());
-	float tick = floor(time * 14.0);
-	float row = floor(p.y / 4.5);
-	float g = hash21(float2(row, tick));
-	float burst = step(0.82 - 0.35 * beat, hash11(tick * 0.37 + 1.3));
-	p.x += (g - 0.5) * 14.0 * burst * step(0.7, hash21(float2(row * 1.7, tick + 3.0)));
-	float split = 0.6 + 1.6 * beat + 1.4 * burst;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float burst = pl_burst(tick, gd);
+	p.x += pl_slip(p, tick, gd, ga, burst, 4.5);
+	/* the whole player jolts on the biggest hits */
+	p.y += (hash11(tick * 1.17 + 5.0) - 0.5) * 5.0 * step(0.9, gd) * ga;
+	float split = (0.6 + 1.6 * gd + 1.4 * burst) * ga;
 	float4 cr = pl_draw(p + float2(split, 0.0), px, 5.0);
 	float4 cg = pl_draw(p, px, 5.0);
 	float4 cb = pl_draw(p - float2(split, 0.0), px, 5.0);
@@ -2506,10 +2554,299 @@ float4 PSPlayerGlitch(VertData v_in) : TARGET
 	float3 rgb = float3(cr.r * cr.a, cg.g * cg.a, cb.b * cb.a) / max(a, 0.0001);
 	/* blocks of digital junk */
 	float2 blk = floor(p / float2(9.0, 3.0));
-	float junk = step(0.994 - 0.012 * beat - 0.01 * burst, hash21(blk + tick * 1.31)) * step(0.0, p.y) * step(p.y, dims.y);
+	float jt = 0.994 - (0.012 * gd + 0.01 * burst + 0.03 * saturate(gd - 0.6)) * ga;
+	float junk = step(jt, hash21(blk + tick * 1.31)) * step(0.0, p.y) * step(p.y, dims.y);
 	rgb = lerp(rgb, pl_col(hash21(blk) * 0.6), junk * 0.8);
 	a = max(a, junk * 0.8 * step(0.0, p.x) * step(p.x, dims.x));
+	/* big hits: channels swap places, or the picture flashes inverted */
+	float swap = step(0.75, gd) * step(0.55, hash11(tick * 1.91 + 4.0));
+	rgb = lerp(rgb, rgb.gbr, swap);
+	float inv = step(1.0, gd) * step(0.78, hash11(tick * 2.31 + 0.7));
+	rgb = lerp(rgb, float3(1.0, 1.0, 1.0) - rgb, inv * 0.85);
 	rgb *= 0.9 + 0.1 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* RGB Glitch: three rainbow copies of the player orbit each other, wider
+ * apart the harder the music hits */
+float4 PSPlayerRGBGlitch(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 0.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float burst = pl_burst(tick, gd);
+	p.x += pl_slip(p, tick, gd, ga, burst, 3.5) * 0.8;
+	float ang = time * 1.7 + gd * 2.0;
+	float rad = (0.9 + 2.4 * gd + 1.2 * burst) * ga;
+	float2 o1 = rad * float2(cos(ang), sin(ang) * 0.6);
+	float2 o2 = rad * float2(cos(ang + 2.0944), sin(ang + 2.0944) * 0.6);
+	float2 o3 = rad * float2(cos(ang + 4.1888), sin(ang + 4.1888) * 0.6);
+	float4 c1 = pl_draw(p + o1, px, 0.0);
+	float4 c2 = pl_draw(p + o2, px, 0.0);
+	float4 c3 = pl_draw(p + o3, px, 0.0);
+	float hz = pl_look.z * 2.0 + time * 0.08;
+	float3 h1 = pl_hsv(hz, 1.0, 1.0);
+	float3 h2 = pl_hsv(hz + 0.3333, 1.0, 1.0);
+	float3 h3 = pl_hsv(hz + 0.6667, 1.0, 1.0);
+	float3 rgb = (c1.rgb * c1.a * h1 + c2.rgb * c2.a * h2 + c3.rgb * c3.a * h3) / max(h1 + h2 + h3, 0.0001);
+	float a = max(c1.a, max(c2.a, c3.a));
+	rgb = rgb / max(a, 0.0001) * (1.0 + 0.35 * gd);
+	rgb *= 0.9 + 0.1 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Datamosh: on the hits, blocks of the player smear and bleed like a video
+ * whose keyframes went missing */
+float4 PSPlayerDatamosh(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 0.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float2 bs = float2(8.0, 6.0);
+	float2 blk = floor(p / bs);
+	float2 cell = frac(p / bs);
+	float era = floor(tick / 3.0);
+	float m = step(1.0 - saturate((0.025 + 0.26 * gd) * ga), hash21(blk + era * 1.7));
+	float2 mv = (float2(hash21(blk + 3.1 + era), hash21(blk + 7.7 + era)) - 0.5) * float2(26.0, 8.0) * ga;
+	/* a moshed block shows a stretched sliver from somewhere else */
+	float2 q = lerp(p, float2(p.x + mv.x, (blk.y + 0.18 * cell.y) * bs.y + mv.y), m);
+	float4 c = pl_draw(q, px, 0.0);
+	/* and the colour bleeds downwards out of it */
+	float4 g = pl_draw(q - float2(mv.x * 0.3, 3.0 + 7.0 * gd), px, 0.0);
+	float3 rgb = lerp(c.rgb, max(c.rgb, g.rgb * 0.95), m * 0.65);
+	rgb = lerp(rgb, floor(rgb * 5.0) / 5.0, m * 0.6);
+	rgb = lerp(rgb, rgb.gbr, m * step(0.7, hash21(blk + 11.0 + era)));
+	float a = max(c.a, g.a * m);
+	/* faint macroblock edges where it moshes */
+	float edge = max(step(cell.x, 0.06), step(cell.y, 0.08)) * m;
+	rgb = lerp(rgb, pl_col(0.5), edge * 0.25);
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* VHS Glitch: a worn tape: wobble, a tracking band, colour bleeding off
+ * the edges, head-switch noise at the bottom, snow on the hits */
+float4 PSPlayerVHSGlitch(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 1.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float y = v_in.uv.y;
+	p.x += (sin(p.y * 0.35 + time * 3.0) * 0.35 + sin(time * 1.3) * 0.3) * ga * (0.6 + gd);
+	/* the tracking band rolls down the picture */
+	float bc = frac(time * 0.11 + 0.3);
+	float bw = 0.03 + 0.07 * gd;
+	float band = step(abs(y - bc), bw) * ga;
+	float rowh = floor(p.y / 1.2);
+	p.x += band * (hash21(float2(rowh, tick)) - 0.5) * (6.0 + 22.0 * gd);
+	/* head switching along the bottom */
+	float head = step(0.93, y) * ga;
+	p.x += head * (y - 0.93) / 0.07 * (8.0 + 10.0 * hash11(tick * 0.9));
+	p.y += (hash11(tick * 1.3 + 2.0) - 0.5) * 2.5 * step(0.85, gd) * ga;
+	float4 c = pl_draw(p, px, 1.0);
+	float4 cc = pl_draw(p - float2((1.6 + 3.5 * gd) * ga, 0.0), px, 1.0);
+	float3 lw = float3(0.299, 0.587, 0.114);
+	float luma = dot(c.rgb, lw);
+	float3 chroma = cc.rgb - dot(cc.rgb, lw);
+	float3 rgb = luma + chroma * 1.15;
+	rgb = lerp(float3(luma, luma, luma), rgb, 0.85) * float3(1.04, 1.0, 0.92);
+	float a = max(c.a, cc.a * 0.85);
+	float n = hash21(floor(v_in.uv * res / 2.0) + tick * 7.13);
+	float snow = step(0.992 - 0.02 * gd - 0.06 * band - 0.1 * head, n) * ga;
+	rgb = lerp(rgb, float3(0.9, 0.9, 0.95), snow * 0.7);
+	a = max(a, snow * 0.6 * saturate(band + head));
+	rgb *= 0.88 + 0.12 * step(0.5, frac(y * res.y / 2.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Pixel Sort: on the loud parts, rows of the player stretch into bright
+ * sorted streaks */
+float4 PSPlayerPixelSort(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 3.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float era = floor(tick / 2.0);
+	float rowi = floor(p.y / 1.5);
+	float on = step(1.0 - saturate((0.08 + 0.7 * gd) * ga), hash21(float2(rowi, era)));
+	float x0 = hash21(float2(rowi * 2.3, era + 1.0)) * 275.0 - 20.0;
+	float len = (20.0 + 140.0 * hash21(float2(rowi * 0.7, era + 2.0))) * (0.4 + gd) * min(ga, 1.5);
+	float inrun = on * step(x0, p.x) * step(p.x, x0 + len);
+	float t = saturate((p.x - x0) / max(len, 1.0));
+	float2 q = float2(lerp(p.x, x0 + len * t * t * t, inrun), p.y);
+	float4 c = pl_draw(q, px, 3.0);
+	float3 rgb = lerp(c.rgb, c.rgb * (0.5 + 1.0 * t) + pl_col(t * 0.3) * 0.2 * t, inrun);
+	/* the odd vertical drip too */
+	float coli = floor(p.x / 2.0);
+	float drip = step(1.0 - saturate(0.12 * gd * ga), hash21(float2(coli, era + 5.0)));
+	float y0 = hash21(float2(coli * 1.9, era + 6.0)) * pl_height();
+	float dl = (8.0 + 30.0 * gd) * hash21(float2(coli, era + 8.0));
+	float indrip = drip * step(y0, p.y) * step(p.y, y0 + dl) * (1.0 - inrun);
+	float4 d = pl_draw(float2(p.x, y0), px, 3.0);
+	rgb = lerp(rgb, d.rgb * (1.2 - 0.6 * (p.y - y0) / max(dl, 1.0)), indrip * d.a);
+	float a = max(c.a, indrip * d.a);
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Neon Glitch: the neon player tears, flickers like a dying sign and throws
+ * a ghost copy on the hits */
+float4 PSPlayerNeonGlitch(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 2.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float burst = pl_burst(tick, gd);
+	p.x += pl_slip(p, tick, gd, ga, burst, 6.0);
+	float4 c1 = pl_draw(p, px, 2.0);
+	float2 go = float2((1.5 + 3.5 * gd) * ga, -0.8 * gd * ga);
+	float4 c2 = pl_draw(p + go, px, 2.0);
+	float dip = step(0.72 - 0.3 * gd, hash11(tick * 1.3 + 2.0)) * (0.45 + 0.4 * saturate(gd)) * min(ga, 1.0);
+	float f = 1.0 - dip;
+	float3 rgb = c1.rgb * c1.a * f + c2.rgb * c2.a * pl_col(0.5) * 0.55 * min(ga, 1.0);
+	float a = max(c1.a * f, c2.a * 0.55 * min(ga, 1.0));
+	/* sparks: a bright line flicks across on the big hits */
+	float ly = hash11(tick * 0.77 + 3.0) * pl_height();
+	float spark = exp(-abs(p.y - ly) * 2.5) * step(0.7, gd) * step(0.5, hash11(tick * 0.31 + 1.0)) * ga;
+	spark *= step(0.0, p.x) * step(p.x, 275.0);
+	rgb += pl_col(0.2) * spark;
+	a = max(a, spark * 0.8);
+	rgb = rgb / max(a, 0.0001);
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Corrupted: wrong colours in blocks, letters turning to garbage, broken
+ * pieces knocked out of place, more of it the harder it hits */
+float4 PSPlayerCorrupted(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 1.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float era = floor(tick / 4.0);
+	float2 blk = floor(p / float2(22.0, 10.0));
+	float hit = step(1.0 - saturate((0.06 + 0.4 * gd) * ga), hash21(blk + era * 3.1));
+	p += hit * (float2(hash21(blk + 5.0 + era), hash21(blk + 6.0 + era)) - 0.5) * float2(18.0, 4.0) * ga;
+	float4 c = pl_draw(p, px, 1.0);
+	float k = floor(hash21(blk + 9.0 + era) * 5.0);
+	float3 w = k < 1.0 ? c.brg : (k < 2.0 ? c.gbr : (k < 3.0 ? float3(1.0, 1.0, 1.0) - c.rgb : (k < 4.0 ? c.rrb : c.bgg)));
+	float3 rgb = lerp(c.rgb, w, hit);
+	/* stuck pixels and dead blocks */
+	float2 fine = floor(p / float2(3.0, 2.0));
+	float dead = step(0.996 - 0.02 * gd * ga, hash21(fine + era * 1.3)) * step(0.0, p.y) * step(p.y, pl_height());
+	rgb = lerp(rgb, pl_col(hash21(fine) * 0.7), dead);
+	float a = max(c.a, dead * step(0.0, p.x) * step(p.x, 275.0));
+	rgb *= 0.92 + 0.08 * step(0.5, frac(v_in.uv.y * res.y / 2.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Vaporwave Glitch: the synthwave player splits into pink and cyan, waving
+ * gently and pulling apart on the bass */
+float4 PSPlayerVaporGlitch(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 3.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float burst = pl_burst(tick, gd);
+	p.x += sin(p.y * 0.18 + time * 1.6) * 0.8 * ga * (0.4 + gd);
+	p.x += pl_slip(p, tick, gd, ga, burst, 5.0) * 0.6;
+	float s = (1.2 + 2.6 * gd) * ga;
+	float4 c1 = pl_draw(p + float2(s, s * 0.25), px, 3.0);
+	float4 c2 = pl_draw(p - float2(s, s * 0.25), px, 3.0);
+	float3 ca = pl_look.w < 0.5 ? float3(1.0, 0.44, 0.81) : pl_col(0.0);
+	float3 cb = pl_look.w < 0.5 ? float3(0.0, 0.8, 1.0) : pl_col(0.33);
+	float l1 = dot(c1.rgb, float3(0.333, 0.333, 0.333)) * c1.a;
+	float l2 = dot(c2.rgb, float3(0.333, 0.333, 0.333)) * c2.a;
+	float a = max(c1.a, c2.a);
+	float3 base = (c1.rgb * c1.a + c2.rgb * c2.a) * 0.5;
+	float3 rgb = lerp(base, ca * l1 * 1.5 + cb * l2 * 1.5, 0.6) / max(a, 0.0001);
+	rgb *= 0.9 + 0.1 * step(0.5, frac(v_in.uv.y * res.y / 3.0));
+	return finish_paint(float4(rgb, a), uv);
+}
+
+/* Hologram Glitch: a flickering see-through hologram of the player, with
+ * scanlines, a rolling bright band and jumps on the hits */
+float4 PSPlayerHoloGlitch(VertData v_in) : TARGET
+{
+	float ga = pl_glitch.x;
+	BRANCH
+	if (ga < 0.001) {
+		return player_plain(v_in, 0.0);
+	}
+	float2 uv = view_uv(v_in.uv);
+	float sc = pl_scale();
+	float2 p = pl_pos(uv, sc);
+	float px = 1.0 / sc;
+	float gd = pl_glitch.y;
+	float tick = pl_glitch.z;
+	float burst = pl_burst(tick, gd);
+	p.x += pl_slip(p, tick, gd, ga, burst, 3.0) * 0.7;
+	p.y += (hash11(tick * 0.93) - 0.5) * 3.0 * step(0.6, gd) * step(0.5, hash11(tick * 0.61 + 2.0)) * ga;
+	float4 c = pl_draw(p, px, 0.0);
+	float4 c2 = pl_draw(p + float2((0.8 + 1.8 * gd) * ga, 0.0), px, 0.0);
+	float3 hc = pl_look.w < 0.5 ? float3(0.3, 0.95, 1.0) : pl_col(0.0);
+	float l = dot(c.rgb, float3(0.3, 0.55, 0.15));
+	float3 rgb = hc * (l * 2.4 + 0.14);
+	rgb += pl_col(0.5) * dot(c2.rgb, float3(0.3, 0.55, 0.15)) * c2.a * 0.35;
+	float scan = 0.72 + 0.28 * sin(v_in.uv.y * res.y * 3.14159265 / 2.0 + time * 18.0);
+	float rb = glmod(v_in.uv.y - time * 0.35, 1.0) * 10.0 - 5.0;
+	float roll = 1.0 + 0.35 * exp(-rb * rb);
+	float flick = 0.86 + 0.14 * hash11(floor(time * 24.0)) - 0.35 * step(0.75 - 0.25 * gd, hash11(tick * 1.7 + 0.4)) * min(ga, 1.0);
+	rgb *= scan * roll * flick;
+	float a = max(c.a, c2.a * 0.5) * (0.7 + 0.25 * flick);
 	return finish_paint(float4(rgb, a), uv);
 }
 
@@ -3016,6 +3353,78 @@ technique PlayerGlitch
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSPlayerGlitch(v_in);
+	}
+}
+
+technique PlayerRGBGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerRGBGlitch(v_in);
+	}
+}
+
+technique PlayerDatamosh
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerDatamosh(v_in);
+	}
+}
+
+technique PlayerVHSGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerVHSGlitch(v_in);
+	}
+}
+
+technique PlayerPixelSort
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerPixelSort(v_in);
+	}
+}
+
+technique PlayerNeonGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerNeonGlitch(v_in);
+	}
+}
+
+technique PlayerCorrupted
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerCorrupted(v_in);
+	}
+}
+
+technique PlayerVaporGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerVaporGlitch(v_in);
+	}
+}
+
+technique PlayerHoloGlitch
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSPlayerHoloGlitch(v_in);
 	}
 }
 

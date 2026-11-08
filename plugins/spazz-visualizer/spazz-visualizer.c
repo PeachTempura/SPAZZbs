@@ -50,10 +50,15 @@ static const char *style_techniques[] = {
 	/* the SPAZZamp player on stream, in a few skins (keep these together,
 	 * in this order: the skin number is the offset from PlayerSpazz) */
 	"PlayerSpazz", "PlayerClassic", "PlayerNeon", "PlayerSynthwave", "PlayerCRT", "PlayerGlitch",
+	/* ... and the glitching ones (from PlayerGlitch on, they take the
+	 * Glitch amount) */
+	"PlayerRGBGlitch", "PlayerDatamosh", "PlayerVHSGlitch", "PlayerPixelSort", "PlayerNeonGlitch",
+	"PlayerCorrupted", "PlayerVaporGlitch", "PlayerHoloGlitch",
 	/* retro screens */
 	"NeonScope", "CRTSpectrum", "GlitchBars", "VHSTape"};
 #define NUM_STYLES (sizeof(style_techniques) / sizeof(style_techniques[0]))
-#define NUM_SKINS 6
+#define NUM_SKINS 14
+#define FIRST_GLITCH_SKIN 5 /* PlayerGlitch */
 
 /* the player's text: a font atlas (95 glyphs, 6 pixels apart, 8 tall) and
  * a little texture of character codes, one string per row */
@@ -67,7 +72,21 @@ static const char player_labels[] = "SPAZZAMP kbps khz mono stereo shuf rep EQ P
 
 /* each skin's own accent colour ("skin colours"); 0 means it cycles like
  * the SPAZZamp dock */
-static const uint32_t skin_accents[NUM_SKINS] = {0, 0x19ff4a, 0xff2bd6, 0xff3fb4, 0x39ff6a, 0x00ffd0};
+static const uint32_t skin_accents[NUM_SKINS] = {0,        0x19ff4a, 0xff2bd6, 0xff3fb4, 0x39ff6a, 0x00ffd0, 0,
+						 0xff3fb4, 0xffb347, 0xff3fb4, 0xff2bd6, 0x19ff4a, 0xff71ce, 0x4df3ff};
+
+/* named two-colour schemes for the player ("Player colours") */
+struct player_scheme {
+	const char *id;
+	uint32_t a, b;
+};
+static const struct player_scheme player_schemes[] = {
+	{"hotpink", 0xff2bd6, 0x00e5ff},     {"toxic", 0x39ff14, 0xd4ff00}, {"sunset", 0xff4e7a, 0xffb13c},
+	{"ice", 0x7ad7ff, 0xe8f8ff},         {"blood", 0xff1a2e, 0xff8a3d}, {"gold", 0xffd84d, 0xff9a3c},
+	{"pastel", 0xffb3e6, 0xb3e6ff},      {"vapor", 0xff71ce, 0x01cdfe}, {"matrix", 0x00ff41, 0x00b32c},
+	{"ultraviolet", 0xb967ff, 0x4d6bff}, {"mono", 0xffffff, 0x8a8a9a},
+};
+#define NUM_SCHEMES (sizeof(player_schemes) / sizeof(player_schemes[0]))
 
 static int player_skin(int style)
 {
@@ -113,7 +132,7 @@ struct spazz_viz {
 	gs_eparam_t *p_bands, *p_res, *p_time, *p_flow, *p_bass, *p_mid, *p_treble, *p_level, *p_beat, *p_hue,
 		*p_density, *p_bg, *p_pal_a, *p_pal_b, *p_pal_c, *p_pal_mix, *p_grade, *p_bg_col, *p_bg_flat, *p_view,
 		*p_flip_x, *p_font_tex, *p_text_tex, *p_pl_state, *p_pl_digits, *p_pl_info, *p_pl_look, *p_pl_accent,
-		*p_pl_show;
+		*p_pl_show, *p_pl_accent2, *p_pl_glitch;
 
 	/* settings */
 	uint32_t width, height;
@@ -170,7 +189,13 @@ struct spazz_viz {
 	bool text_dirty;
 	int player_viz, player_strip, player_color;
 	struct vec3 player_custom;
+	int player_scheme; /* -1 none, else player_schemes[] */
+	int rgb_mode;      /* 0 whole player, 1 channels on their own, 2 sweep */
 	bool player_rgb, player_remaining, show_title, show_seek, show_buttons;
+	/* the glitch players: how much, what drives it, and a clock that holds
+	 * still for a moment on the big hits */
+	float glitch_amount, glitch_env, glitch_prev, glitch_hold, glitch_tick;
+	int glitch_follow; /* 0 beat, 1 bass, 2 whole mix, 3 treble */
 	float rgb_speed, marquee_speed;
 	float skin_hue;
 	/* what's playing, from SPAZZamp (spazz_music_now) */
@@ -434,6 +459,18 @@ static void viz_update(void *data, obs_data_t *settings)
 	v->player_strip = is(ps, "bars") ? 0 : is(ps, "scope") ? 1 : is(ps, "aurora") ? 2 : is(ps, "peaks") ? 3 : -1;
 	const char *pc = obs_data_get_string(settings, "player_color");
 	v->player_color = is(pc, "palette") ? 2 : is(pc, "custom") ? 1 : 0;
+	v->player_scheme = -1;
+	for (size_t i = 0; i < NUM_SCHEMES; i++) {
+		if (is(pc, player_schemes[i].id)) {
+			v->player_scheme = (int)i;
+			v->player_color = 3;
+		}
+	}
+	const char *rm = obs_data_get_string(settings, "player_rgb_mode");
+	v->rgb_mode = is(rm, "split") ? 1 : is(rm, "sweep") ? 2 : 0;
+	v->glitch_amount = (float)obs_data_get_double(settings, "glitch_amount");
+	const char *gf = obs_data_get_string(settings, "glitch_follow");
+	v->glitch_follow = is(gf, "bass") ? 1 : is(gf, "mix") ? 2 : is(gf, "treble") ? 3 : 0;
 	color_from_obs(&v->player_custom, obs_data_get_int(settings, "player_accent"));
 	v->player_rgb = obs_data_get_bool(settings, "player_rgb");
 	v->rgb_speed = (float)obs_data_get_double(settings, "player_rgb_speed");
@@ -493,6 +530,9 @@ static void viz_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "player_accent", obs_color(0x2bd9ff));
 	obs_data_set_default_bool(settings, "player_rgb", false);
 	obs_data_set_default_double(settings, "player_rgb_speed", 1.0);
+	obs_data_set_default_string(settings, "player_rgb_mode", "whole");
+	obs_data_set_default_double(settings, "glitch_amount", 1.0);
+	obs_data_set_default_string(settings, "glitch_follow", "beat");
 	obs_data_set_default_string(settings, "player_time", "elapsed");
 	obs_data_set_default_bool(settings, "player_titlebar", true);
 	obs_data_set_default_bool(settings, "player_seek", true);
@@ -674,9 +714,14 @@ static bool player_color_modified(obs_properties_t *props, obs_property_t *prop,
 	const char *color = obs_data_get_string(settings, "player_color");
 	/* "the skin's own" only cycles on the SPAZZamp skin; the others have a
 	 * fixed colour. RGB cycle overrides the colour choice. */
-	const bool skin_cycles = is(color, "skin") && is(obs_data_get_string(settings, "style"), "PlayerSpazz");
+	const int skin = player_skin(style_index(obs_data_get_string(settings, "style")));
+	const bool skin_cycles = is(color, "skin") && skin >= 0 && skin_accents[skin] == 0;
 	obs_property_set_visible(obs_properties_get(props, "player_accent"), !rgb && is(color, "custom"));
 	obs_property_set_visible(obs_properties_get(props, "player_rgb_speed"), rgb || skin_cycles);
+	obs_property_set_visible(obs_properties_get(props, "player_rgb_mode"), rgb);
+	const bool glitchy = skin >= FIRST_GLITCH_SKIN;
+	obs_property_set_visible(obs_properties_get(props, "glitch_amount"), glitchy);
+	obs_property_set_visible(obs_properties_get(props, "glitch_follow"), glitchy);
 	return true;
 }
 
@@ -750,12 +795,30 @@ static obs_properties_t *viz_properties(void *data)
 	obs_property_list_add_string(p, T_("PlayerColor.skin"), "skin");
 	obs_property_list_add_string(p, T_("PlayerColor.palette"), "palette");
 	obs_property_list_add_string(p, T_("PlayerColor.custom"), "custom");
+	for (size_t i = 0; i < NUM_SCHEMES; i++) {
+		snprintf(key, sizeof(key), "PlayerColor.%s", player_schemes[i].id);
+		obs_property_list_add_string(p, T_(key), player_schemes[i].id);
+	}
 	obs_property_set_modified_callback(p, player_color_modified);
 	obs_properties_add_color(pl, "player_accent", T_("PlayerAccent"));
 	p = obs_properties_add_bool(pl, "player_rgb", T_("PlayerRGB"));
 	obs_property_set_modified_callback(p, player_color_modified);
+	p = add_list(pl, "player_rgb_mode", T_("PlayerRGBMode"));
+	obs_property_list_add_string(p, T_("PlayerRGBMode.whole"), "whole");
+	obs_property_list_add_string(p, T_("PlayerRGBMode.split"), "split");
+	obs_property_list_add_string(p, T_("PlayerRGBMode.sweep"), "sweep");
 	p = obs_properties_add_float_slider(pl, "player_rgb_speed", T_("PlayerRGBSpeed"), 0.05, 4.0, 0.05);
 	obs_property_float_set_suffix(p, "x");
+	/* the glitch players */
+	p = obs_properties_add_float_slider(pl, "glitch_amount", T_("GlitchAmount"), 0.0, 2.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("GlitchAmount.Tip"));
+	p = add_list(pl, "glitch_follow", T_("GlitchFollow"));
+	obs_property_list_add_string(p, T_("GlitchFollow.beat"), "beat");
+	obs_property_list_add_string(p, T_("GlitchFollow.bass"), "bass");
+	obs_property_list_add_string(p, T_("GlitchFollow.mix"), "mix");
+	obs_property_list_add_string(p, T_("GlitchFollow.treble"), "treble");
+	obs_property_set_long_description(p, T_("GlitchFollow.Tip"));
 	p = add_list(pl, "player_time", T_("PlayerTime"));
 	obs_property_list_add_string(p, T_("PlayerTime.elapsed"), "elapsed");
 	obs_property_list_add_string(p, T_("PlayerTime.remaining"), "remaining");
@@ -937,7 +1000,8 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 			P(p_text_tex, "text_tex"),   P(p_pl_state, "pl_state"),
 			P(p_pl_digits, "pl_digits"), P(p_pl_info, "pl_info"),
 			P(p_pl_look, "pl_look"),     P(p_pl_accent, "pl_accent"),
-			P(p_pl_show, "pl_show"),
+			P(p_pl_show, "pl_show"),     P(p_pl_accent2, "pl_accent2"),
+			P(p_pl_glitch, "pl_glitch"),
 #undef P
 		};
 		for (size_t i = 0; i < sizeof(params) / sizeof(params[0]); i++) {
@@ -1253,6 +1317,17 @@ static void viz_tick(void *data, float seconds)
 	v->treble = treble + (v->treble - treble) * keep;
 	v->level = a->level + (v->level - a->level) * keep;
 	v->beat = fminf(a->beat * v->beat_punch, 1.5f);
+	/* what pushes the glitch players: jumps up with the music, settles fast */
+	const float push = v->glitch_follow == 1   ? v->bass
+			   : v->glitch_follow == 2 ? fminf(v->level * 1.6f, 1.5f)
+			   : v->glitch_follow == 3 ? v->treble
+						   : v->beat;
+	v->glitch_env = fmaxf(push, v->glitch_env * powf(0.02f, seconds));
+	/* a big jump holds the glitch still for a moment: a stutter */
+	if (push - v->glitch_prev > 0.3f && v->glitch_hold <= 0.0f) {
+		v->glitch_hold = 0.05f + 0.1f * (float)(rand() % 100) / 100.0f;
+	}
+	v->glitch_prev = push;
 	const float level = a->level;
 	const float beat = a->beat;
 	pthread_mutex_unlock(&v->mutex);
@@ -1260,6 +1335,11 @@ static void viz_tick(void *data, float seconds)
 	v->tex_dirty = true;
 	const float dt = seconds * v->speed;
 	v->time += dt;
+	if (v->glitch_hold > 0.0f) {
+		v->glitch_hold -= seconds;
+	} else {
+		v->glitch_tick = floorf(v->time * 14.0f);
+	}
 	v->flow += dt * (0.3f + 1.1f * level + 0.5f * beat);
 	v->hue += seconds * v->color_speed * 0.08f;
 
@@ -1287,21 +1367,42 @@ static void draw_style(struct spazz_viz *v, int idx, float alpha)
 	struct vec3 acc;
 	float mode = 0.0f;
 	vec3_set(&acc, 1.0f, 1.0f, 1.0f);
+	struct vec3 acc2;
 	if (v->player_rgb) {
-		mode = 1.0f;
+		/* the whole player (1), channels on their own (4), a sweep (5) */
+		mode = v->rgb_mode == 1 ? 4.0f : v->rgb_mode == 2 ? 5.0f : 1.0f;
 	} else if (v->player_color == 2) {
 		mode = 2.0f;
 	} else if (v->player_color == 1) {
 		acc = v->player_custom;
+	} else if (v->player_color == 3 && v->player_scheme >= 0) {
+		mode = 3.0f;
+		color_from_hex(&acc, player_schemes[v->player_scheme].a);
 	} else if (skin >= 0 && skin_accents[skin]) {
 		color_from_hex(&acc, skin_accents[skin]);
 	} else {
 		mode = 1.0f;
 	}
+	acc2 = acc;
+	if (mode == 3.0f) {
+		color_from_hex(&acc2, player_schemes[v->player_scheme].b);
+	}
 	struct vec4 look;
 	vec4_set(&look, (float)v->player_viz, (float)v->player_strip, v->skin_hue, mode);
 	gs_effect_set_vec4(v->p_pl_look, &look);
 	gs_effect_set_vec3(v->p_pl_accent, &acc);
+	gs_effect_set_vec3(v->p_pl_accent2, &acc2);
+
+	/* the glitch players: amount, the music's push, the clock, and garbage
+	 * letters for Corrupted */
+	const bool glitchy = skin >= FIRST_GLITCH_SKIN;
+	const float amount = glitchy ? v->glitch_amount : 0.0f;
+	const float drive = fminf(v->glitch_env, 1.5f) * amount;
+	const bool corrupt = glitchy && strcmp(style_techniques[idx], "PlayerCorrupted") == 0;
+	struct vec4 glitch;
+	vec4_set(&glitch, amount, drive, v->glitch_tick,
+		 corrupt ? (0.04f + 0.35f * fminf(drive, 1.0f)) * fminf(amount, 1.0f) : 0.0f);
+	gs_effect_set_vec4(v->p_pl_glitch, &glitch);
 
 	const char *tech = style_techniques[idx];
 	while (gs_effect_loop(v->effect, tech)) {

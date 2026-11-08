@@ -1929,6 +1929,10 @@ static void FillVizMenu(QMenu *menu, obs_source_t *src)
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Background")), src, "background", VizChoices("background"));
 	/* the SPAZZamp player styles' own screen */
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.PlayerViz")), src, "player_viz", VizChoices("player_viz"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.PlayerColors")), src, "player_color",
+		      VizChoices("player_color"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.GlitchFollow")), src, "glitch_follow",
+		      VizChoices("glitch_follow"));
 	menu->addSeparator();
 	menu->addAction(QTStr("SPAZZ.Music.Vis.Settings"), menu,
 			withSource([](obs_source_t *s) { obs_frontend_open_source_properties(s); }));
