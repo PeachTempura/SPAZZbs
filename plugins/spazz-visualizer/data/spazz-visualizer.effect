@@ -3472,8 +3472,9 @@ float4 PSDreamGradient(VertData v_in) : TARGET
 	return finish_paint(float4(saturate(c + grain), 1.0), uv);
 }
 
-/* the bokeh behind the rainy glass: soft city lights */
-float3 rg_bokeh(float2 q, float aspect)
+/* the bokeh behind the rainy glass: soft city lights. `focus` (0..1)
+ * sharpens the discs for the view through a drop or a wiped trail */
+float3 rg_bokeh(float2 q, float aspect, float focus)
 {
 	float3 light = float3(0.0, 0.0, 0.0);
 	for (int i = 0; i < 40; i++) {
@@ -3486,7 +3487,7 @@ float3 rg_bokeh(float2 q, float aspect)
 				  0.3 + 0.7 * h2 * h2 + 0.01 * sin(time * 0.3 + fi));
 		float R = (0.05 + 0.09 * h3) * (1.0 + 0.1 * calm_in.y);
 		float d = length(q - c);
-		float disc = 1.0 - smoothstep(R * 0.82, R, d);
+		float disc = 1.0 - smoothstep(R * lerp(0.82, 0.97, focus), R, d);
 		float rim = smoothstep(R * 0.6, R * 0.97, d) * disc * 0.35;
 		float3 c_col = prism(cm_hue(hue + h1 * 0.45 + h3 * 0.2, float2(q.x / aspect, q.y), h1, fi));
 		light += c_col * (disc * 0.22 + rim * 0.2) * (0.45 + h2) * (0.7 + 0.45 * calm_in.x + 0.3 * calm_in.w * h3);
@@ -3496,7 +3497,43 @@ float3 rg_bokeh(float2 q, float aspect)
 	return light;
 }
 
-/* rain on glass: drops cling and slide down a window of blurred lights */
+/* one layer of drops resting on the glass: each grid cell may hold one.
+ * Returns the drop's lens normal (xy: offset over radius, also valid just
+ * outside it, for its shadow), how much of the pixel it covers (z) and
+ * its radius (w, 0 when the cell is empty) */
+float4 rg_static(float2 p, float cs, float seed, float chance, float px)
+{
+	float2 cell = floor(p / cs);
+	float h = hash21(cell + seed);
+	/* drops gather, sit a while, then dry up and others form */
+	float life = frac(time * (0.008 + 0.01 * hash21(cell + seed + 21.0)) + h * 7.0);
+	float grow = smoothstep(0.0, 0.1, life) * (1.0 - smoothstep(0.82, 1.0, life));
+	float sz = hash21(cell + seed + 13.0);
+	float r = cs * (0.06 + 0.3 * sz * sz) * grow * step(1.0 - chance, h);
+	float room = max(0.46 - r / cs, 0.0);
+	float2 off = (float2(hash21(cell + seed + 4.0), hash21(cell + seed + 9.0)) - 0.5) * 2.0 * room;
+	float2 d = p - (cell + 0.5 + off) * cs;
+	float rr = max(r, 0.00001);
+	/* a little heavier at the bottom, as drops on a window are */
+	d.x *= 1.0 + 0.14 * saturate(-d.y / rr);
+	float m = (1.0 - smoothstep(r - px, r + px, length(d))) * step(0.00001, r);
+	return float4(d / rr, m, r);
+}
+
+/* where a sliding drop is at height y: it wanders a little side to side */
+float rg_path(float y, float x0, float w, float hc)
+{
+	return x0 + w * (0.16 * sin(y * 9.0 + hc * 20.0) + 0.07 * sin(y * 23.0 + hc * 7.0));
+}
+
+/* its soft shadow on the glass, a touch below and right of a drop */
+float rg_shadow(float4 l)
+{
+	return (1.0 - smoothstep(0.8, 1.35, length(l.xy - float2(0.12, 0.2)))) * (1.0 - l.z) * step(0.00001, l.w);
+}
+
+/* rain on glass: drops cling, gather and slide down a window of blurred
+ * city lights; each drop is a tiny lens showing the street upside down */
 float4 PSRainGlass(VertData v_in) : TARGET
 {
 	float2 uv = view_uv(v_in.uv);
@@ -3504,51 +3541,124 @@ float4 PSRainGlass(VertData v_in) : TARGET
 	float px = 1.0 / res.y;
 	float2 pix = v_in.uv * res;
 	float2 p = float2(uv.x * aspect, uv.y);
-	float2 q = p;
-	float drop_a = 0.0;
-	float shine = 0.0;
+	float dens = clamp(density, 0.3, 2.0);
+	float sd = sqrt(dens);
 
-	/* small drops resting on the glass, here and there */
-	float cs = 0.05 / max(density, 0.3);
-	float2 cell = floor(p / cs);
-	float hh = hash21(cell + 31.0);
-	float2 dc = (cell + 0.5 + (float2(hash21(cell + 4.0), hash21(cell + 9.0)) - 0.5) * 0.7) * cs;
-	float dr = cs * (0.06 + 0.2 * hash21(cell + 13.0) * hash21(cell + 17.0)) * step(0.78, hh);
-	float dd = length(p - dc);
-	float in_small = 1.0 - smoothstep(dr - px, dr + px, dd);
-	q = lerp(q, dc - (p - dc) * 5.0, in_small);
-	drop_a = max(drop_a, in_small);
-	shine += exp(-length(p - dc - float2(-0.3, -0.35) * dr) / (px * 1.1)) * in_small;
+	/* the sliding drops first: they decide where the glass was wiped */
+	float4 slide = float4(0.0, 0.0, 0.0, 0.0);
+	float clear = 0.0;
+	float film = 0.0;
+	float shade = 0.0;
+	for (int k = 0; k < 2; k++) {
+		float fk = float(k);
+		float w = (0.13 + 0.06 * fk) / sd;
+		float shift = fk * 0.371;
+		float colx = floor((p.x + shift) / w);
+		float hc = hash11(colx * 1.37 + fk * 11.3 + 0.7);
+		float hs = hash11(colx * 2.11 + fk * 5.3 + 0.2);
+		float present = step(0.3, hc);
+		float x0 = (colx + 0.5) * w - shift;
+		/* slip, then stick a moment: drops lurch down a window; with
+		 * the music they slip a little more often */
+		float t = time * (0.16 + 0.2 * hs) + hc * 13.0;
+		float slip = smoothstep(lerp(0.62, 0.38, saturate(calm_in.x * 1.2)), 1.0, frac(t));
+		float y = glmod((floor(t) + slip) * 0.11 + hc * 1.6, 1.7) - 0.3;
+		float R = w * (0.12 + 0.07 * hs);
+		float2 d = p - float2(rg_path(y, x0, w, hc), y);
+		/* sliding, it sags: round and heavy below, drawn out a little above */
+		float up = saturate(-d.y / R);
+		float2 dd = float2(d.x * (1.0 + 0.22 * up * up), d.y * lerp(1.0, 0.76, step(d.y, 0.0)));
+		float m = (1.0 - smoothstep(R - px, R + px, length(dd))) * present;
+		float4 drop = float4(dd / R, m, R * present);
 
-	/* bigger drops sliding down, each leaving a trail */
-	for (int i = 0; i < 7; i++) {
-		float fi = float(i);
-		float h1 = hash11(fi * 5.11 + 0.3);
-		float h2 = hash11(fi * 2.73 + 0.7);
-		float sx = (0.06 + 0.88 * h1) * aspect;
-		float sy = frac(time * (0.035 + 0.05 * h2) + h2) * 1.3 - 0.15;
-		sx += 0.006 * sin(sy * 40.0 + fi);
-		float R = 0.012 + 0.008 * h2;
-		float2 dv = (p - float2(sx, sy)) * float2(1.0, 0.8);
-		float d = length(dv);
-		float in_big = 1.0 - smoothstep(R - px, R + px, d);
-		q = lerp(q, float2(sx, sy) - (p - float2(sx, sy)) * 4.0, in_big);
-		drop_a = max(drop_a, in_big);
-		shine += exp(-length(dv - float2(-0.3, -0.4) * R) / (px * 1.3)) * in_big;
-		/* the trail: a thin wet line and tiny beads */
-		float above = sy - p.y;
-		float trail = exp(-abs(p.x - sx) / (px * 1.2)) * step(0.0, above) * exp(-above / 0.25);
-		float bead_y = glmod(above, 0.035);
-		float bead = (1.0 - smoothstep(0.0025 - px, 0.0025 + px, length(float2(p.x - sx, bead_y - 0.017)))) *
-			     step(0.0, above) * exp(-above / 0.18);
-		drop_a = max(drop_a, max(trail * 0.25, bead));
+		/* behind it the glass is wiped clear for a while ... */
+		float tl = 0.26 + 0.2 * hs;
+		float above = y - p.y;
+		float fade = step(0.0, above) * (1.0 - smoothstep(0.0, tl, above)) * present;
+		float off_path = abs(p.x - rg_path(p.y, x0, w, hc));
+		float band = 1.0 - smoothstep(R * 0.65, R * 1.15, off_path);
+		clear = max(clear, band * fade);
+		/* the wet edges of the trail catch a little light */
+		film = max(film, exp(-abs(off_path - R * 0.9) / (px * 1.5)) * fade * (1.0 - smoothstep(0.0, tl * 0.7, above)));
+
+		/* ... and dotted with the beads it left, drying smaller */
+		float sp = R * 2.3;
+		float bk = floor(p.y / sp);
+		float hb = hash21(float2(bk, colx + fk * 31.0));
+		float by = (bk + 0.5) * sp;
+		float b_above = y - by;
+		float br = R * (0.16 + 0.24 * hb) * step(0.0, b_above) * (1.0 - smoothstep(0.0, tl, b_above)) *
+			   step(0.35, hb) * present;
+		float bx = rg_path(by, x0, w, hc) + (hash21(float2(bk, colx + 7.0)) - 0.5) * R * 0.5;
+		float2 bd = p - float2(bx, by);
+		float brr = max(br, 0.00001);
+		float bm = (1.0 - smoothstep(br - px, br + px, length(bd))) * step(0.00001, br);
+		float4 bead = float4(bd / brr, bm, br);
+
+		shade = max(shade, max(rg_shadow(drop), rg_shadow(bead) * 0.7));
+		float4 pick = lerp(bead, drop, m);
+		pick.z = max(m, bm);
+		slide = lerp(slide, pick, pick.z);
+		slide.z = max(slide.z, pick.z);
 	}
 
-	/* through a drop the lights are sharper and brighter; the glass catches a glint */
-	float3 light = rg_bokeh(q, aspect) * (1.0 + 0.8 * drop_a);
-	light += float3(1.0, 1.0, 1.0) * shine * 0.45;
-	light += float3(0.6, 0.7, 0.9) * drop_a * 0.02;
-	return finish_dither(light, uv, pix);
+	/* drops resting on the glass, from mist-fine to fat ones, except where
+	 * a sliding drop just swept through */
+	float keep = 1.0 - clear;
+	float4 lens = float4(0.0, 0.0, 0.0, 0.0);
+	float4 l3 = rg_static(p, 0.011 / sd, 3.7, saturate(0.38 * dens), px);
+	float4 l2 = rg_static(p + float2(0.31, 0.17), 0.023 / sd, 11.3, saturate(0.42 * dens), px);
+	float4 l1 = rg_static(p + float2(0.13, 0.53), 0.047 / sd, 23.9, saturate(0.3 * dens), px);
+	l3.z *= keep;
+	l2.z *= keep;
+	l1.z *= keep;
+	shade = max(shade, max(rg_shadow(l1), rg_shadow(l2) * 0.8) * keep);
+	lens = lerp(lens, l3, l3.z);
+	lens.z = l3.z;
+	lens = lerp(lens, l2, l2.z);
+	lens.z = max(lens.z, l2.z);
+	lens = lerp(lens, l1, l1.z);
+	lens.z = max(lens.z, l1.z);
+	float sz = lens.z;
+	lens = lerp(lens, slide, slide.z);
+	lens.z = max(sz, slide.z);
+
+	/* each drop is a clear lens: a slightly magnified, slightly sharper,
+	 * upside-down window onto the lights just behind it */
+	float2 n = lens.xy;
+	float m = lens.z;
+	float r = lens.w;
+	float nl2 = dot(n, n);
+	float mag = clamp(0.012 / max(r, 0.001), 0.4, 1.5);
+	float2 q = p - n * r * (1.0 + mag * (1.0 + 0.5 * nl2)) * m;
+	/* softer than in focus, so lights crossing a drop stay smooth */
+	float3 col = rg_bokeh(q, aspect, max(m * 0.15, clear * 0.3));
+
+	/* the glass itself: a fine mist of condensation, wiped where the drops
+	 * ran */
+	float fog = 0.1 * (1.0 - max(clear, m));
+	float grain = hash21(floor(pix) + 17.0) - 0.5;
+	col = col * (1.0 - fog * 0.12) + (float3(0.035, 0.04, 0.052) + grain * 0.06) * fog;
+	col *= 1.0 + 0.1 * clear * (1.0 - m);
+	col += float3(0.05, 0.055, 0.065) * film * (1.0 - m);
+
+	/* light on the drops: brighter through the middle, a dark refracting
+	 * rim, light pooling at the bottom, a highlight up top-left */
+	float nl = sqrt(nl2);
+	float hgt = sqrt(saturate(1.0 - nl2));
+	float3 drop_col = col * (1.12 + 0.12 * hgt) + float3(0.012, 0.013, 0.016) * hgt;
+	/* only a thin darker refracting band near the edge */
+	drop_col *= 1.0 - 0.18 * smoothstep(0.78, 0.94, nl) * (1.0 - smoothstep(0.94, 1.0, nl));
+	/* a crisp bright rim where the drop catches the room's light */
+	drop_col += float3(0.06, 0.065, 0.08) * smoothstep(0.9, 0.985, nl);
+	drop_col += col * 0.45 * smoothstep(0.4, 0.88, n.y) * (1.0 - smoothstep(0.88, 1.0, nl));
+	float2 hl = n - float2(-0.34, -0.42);
+	float big = smoothstep(1.5 * px, 6.0 * px, r);
+	float spec = exp(-dot(hl, hl) / 0.016) * (0.1 + 0.9 * big) + exp(-dot(hl, hl) / 0.12) * 0.025 * big;
+	drop_col += float3(1.0, 0.98, 0.95) * spec * 0.85;
+
+	col = lerp(col * (1.0 - 0.12 * shade), drop_col, m);
+	return finish_dither(col, uv, pix);
 }
 
 /* ------------------------------------------------------------------ */
