@@ -18,6 +18,7 @@
 
 #include <obs-module.h>
 #include <graphics/graphics.h>
+#include <graphics/matrix4.h>
 #include <util/platform.h>
 #include <util/threading.h>
 #include <util/bmem.h>
@@ -203,6 +204,7 @@ struct spazz_viz {
 	uint64_t fb_tick;        /* the tick fb was last advanced on */
 	float fb_dt;             /* seconds of the last tick */
 	float fb_idle;           /* seconds without a feedback style on screen */
+	int fb_logged;           /* the style whose trail path was last logged */
 	gs_texture_t *dummy_tex; /* 1x1 clear, for "prev" outside feedback */
 
 	/* settings */
@@ -1125,6 +1127,7 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 	struct spazz_viz *v = bzalloc(sizeof(struct spazz_viz));
 	v->source = source;
 	vec4_set(&v->react_mix, 1.0f, 1.0f, 1.0f, 1.0f);
+	v->fb_logged = -1;
 
 	if (pthread_mutex_init(&v->mutex, NULL) != 0) {
 		bfree(v);
@@ -1163,6 +1166,63 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 		v->dummy_tex = gs_texture_create(1, 1, GS_RGBA, 1, levels, 0);
 	}
 	v->band_tex = gs_texture_create(SPAZZ_NUM_BANDS, 1, GS_RGBA, 1, NULL, GS_DYNAMIC);
+	/* Give every parameter of every effect a value up front. D3D11 refuses
+	 * a whole draw ("Not all shader parameters were set") if any parameter a
+	 * shader uses was never set, so nothing may ever be left empty, whatever
+	 * path a frame takes. The real values are set before each draw. */
+	for (int i = 0; i < NUM_FX; i++) {
+		gs_effect_t *e = v->fx[i].effect;
+		if (!e) {
+			continue;
+		}
+		const size_t n = gs_effect_get_num_params(e);
+		for (size_t k = 0; k < n; k++) {
+			gs_eparam_t *p = gs_effect_get_param_by_idx(e, k);
+			struct gs_effect_param_info info;
+			gs_effect_get_param_info(p, &info);
+			if (strcmp(info.name, "ViewProj") == 0) {
+				continue;
+			}
+			switch (info.type) {
+			case GS_SHADER_PARAM_FLOAT:
+				gs_effect_set_float(p, 0.0f);
+				break;
+			case GS_SHADER_PARAM_INT:
+			case GS_SHADER_PARAM_BOOL:
+				gs_effect_set_int(p, 0);
+				break;
+			case GS_SHADER_PARAM_VEC2: {
+				struct vec2 z;
+				vec2_zero(&z);
+				gs_effect_set_vec2(p, &z);
+				break;
+			}
+			case GS_SHADER_PARAM_VEC3: {
+				struct vec3 z;
+				vec3_zero(&z);
+				gs_effect_set_vec3(p, &z);
+				break;
+			}
+			case GS_SHADER_PARAM_VEC4: {
+				struct vec4 z;
+				vec4_zero(&z);
+				gs_effect_set_vec4(p, &z);
+				break;
+			}
+			case GS_SHADER_PARAM_MATRIX4X4: {
+				struct matrix4 m;
+				matrix4_identity(&m);
+				gs_effect_set_matrix4(p, &m);
+				break;
+			}
+			case GS_SHADER_PARAM_TEXTURE:
+				gs_effect_set_texture(p, v->dummy_tex);
+				break;
+			default:
+				break;
+			}
+		}
+	}
 	{
 		uint8_t *atlas = bzalloc(FONT_TEX_W * FONT_TEX_H);
 		for (int g = 0; g < 95; g++) {
@@ -1711,7 +1771,7 @@ static void set_prev(struct spazz_viz *v, struct viz_fx *fx, gs_texture_t *tex, 
  * with last frame as "prev" (ungraded, no backdrop, blending off), swap;
  * then show the buffer through the pack's FeedbackShow, graded and over
  * the backdrop like any other style. */
-static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *tech, float alpha)
+static bool draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *tech, float alpha)
 {
 	const uint32_t w = v->width, h = v->height;
 	if (!v->fb[0]) {
@@ -1720,7 +1780,7 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 		v->fb_valid = false;
 	}
 	if (!v->fb[0] || !v->fb[1]) {
-		return;
+		return false;
 	}
 	if (v->fb_w != w || v->fb_h != h) {
 		v->fb_w = w;
@@ -1736,7 +1796,18 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 		gs_texture_t *last = v->fb_valid ? gs_texrender_get_texture(v->fb[v->fb_cur]) : NULL;
 
 		gs_texrender_reset(dst);
-		if (gs_texrender_begin(dst, w, h)) {
+		const bool began = gs_texrender_begin(dst, w, h);
+		/* once per style switch: what the trail path is doing (to find out
+		 * from a log why one might draw nothing) */
+		if (v->fb_logged != v->shown) {
+			v->fb_logged = v->shown;
+			blog(LOG_INFO,
+			     "[spazz-visualizer] trails '%s': %ux%u, buffer %s, technique %s, last frame %s, srgb %s",
+			     tech, w, h, began ? "ok" : "FAILED",
+			     gs_effect_get_technique(fx->effect, tech) ? "found" : "MISSING", last ? "yes" : "no",
+			     gs_framebuffer_srgb_enabled() ? "on" : "off");
+		}
+		if (began) {
 			struct vec4 clear;
 			vec4_zero(&clear);
 			gs_clear(GS_CLEAR_COLOR, &clear, 0.0f, 0);
@@ -1757,7 +1828,7 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 		}
 	}
 	if (!v->fb_valid) {
-		return;
+		return false;
 	}
 
 	set_grade(fx, v->brightness, v->saturation, alpha);
@@ -1765,6 +1836,7 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 	while (gs_effect_loop(fx->effect, "FeedbackShow")) {
 		gs_draw_sprite(NULL, 0, w, h);
 	}
+	return true;
 }
 
 /* per style: its Movement baseline, and which "classic look" switch
@@ -1796,8 +1868,9 @@ static void draw_style(struct spazz_viz *v, int idx, float alpha)
 	}
 	set_react(v, fx, idx);
 
-	if ((st->flags & VZ_FEEDBACK) && idx == fb_owner(v)) {
-		draw_feedback(v, fx, st->tech, alpha);
+	/* trails through the buffers; if they can't be used, the style is
+	 * still drawn, just without its trails */
+	if ((st->flags & VZ_FEEDBACK) && idx == fb_owner(v) && draw_feedback(v, fx, st->tech, alpha)) {
 		return;
 	}
 	set_grade(fx, v->brightness, v->saturation, alpha);
