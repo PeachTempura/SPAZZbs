@@ -100,6 +100,48 @@ jobs:
           git tag "${env:SPAZZBS_BASE_VERSION}" HEAD
           git describe --tags --long
 
+      # OBS's dependency archives come from GitHub release downloads, which
+      # sometimes fail or cut off. Keep them between builds, and fetch any
+      # missing ones up front with resumable retries and a hash check, so the
+      # build itself never has to download them.
+      - name: Cache Dependencies 💾
+        uses: actions/cache@v4
+        with:
+          path: |
+            .deps/*.zip
+          key: spazzbs-deps-${{ hashFiles('CMakePresets.json') }}
+
+      - name: Fetch Dependencies 📦
+        run: |
+          $Presets = Get-Content CMakePresets.json -Raw | ConvertFrom-Json
+          $Deps = ($Presets.configurePresets | Where-Object name -eq 'dependencies').vendor.'obsproject.com/obs-studio'.dependencies
+          New-Item -ItemType Directory -Force .deps | Out-Null
+          $Wanted = @(
+            @{ Url = "$($Deps.prebuilt.baseUrl)/$($Deps.prebuilt.version)/windows-deps-$($Deps.prebuilt.version)-x64.zip"; Hash = $Deps.prebuilt.hashes.'windows-x64' },
+            @{ Url = "$($Deps.prebuilt.baseUrl)/$($Deps.prebuilt.version)/windows-deps-$($Deps.prebuilt.version)-x86.zip"; Hash = $Deps.prebuilt.hashes.'windows-x86' },
+            @{ Url = "$($Deps.qt6.baseUrl)/$($Deps.qt6.version)/windows-deps-qt6-$($Deps.qt6.version)-x64.zip"; Hash = $Deps.qt6.hashes.'windows-x64' }
+          )
+          foreach ( $W in $Wanted ) {
+            $Out = ".deps/" + [IO.Path]::GetFileName($W.Url)
+            if ( Test-Path $Out ) {
+              if ( (Get-FileHash $Out -Algorithm SHA256).Hash -eq $W.Hash ) { Write-Host "cached: $Out"; continue }
+              Remove-Item $Out
+            }
+            $Ok = $false
+            for ( $i = 1; $i -le 12 -and -not $Ok; $i++ ) {
+              curl.exe -L --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 -C - -o "$Out.part" $W.Url
+              if ( $LASTEXITCODE -eq 0 -and (Get-FileHash "$Out.part" -Algorithm SHA256).Hash -eq $W.Hash ) {
+                Move-Item "$Out.part" $Out -Force; $Ok = $true
+              } else {
+                Write-Host "attempt $i for $($W.Url) failed, retrying"
+                if ( $LASTEXITCODE -eq 0 ) { Remove-Item "$Out.part" -ErrorAction SilentlyContinue }
+                Start-Sleep -Seconds 20
+              }
+            }
+            if ( -not $Ok ) { throw "Could not download $($W.Url)" }
+            Write-Host "fetched: $Out"
+          }
+
       # Same as the build-obs action, but the output is saved so errors can
       # be shown as annotations below.
       - name: Build SPAZZbs 🧱
