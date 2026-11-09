@@ -48,14 +48,17 @@ float md_stars(float2 p, float scale, float seed)
 	float d = length(f - o * 0.7) / scale;
 	float tw = 0.55 + 0.45 * sin(time * (0.8 + 2.0 * h) + h * 40.0);
 	float px = 1.0 / res.y;
-	return step(0.86, h) * exp(-d * d / (px * px * 1.3)) * tw * (0.4 + 0.8 * hash21(id + seed + 1.3));
+	return step(0.94, h) * exp(-d * d / (px * px * 1.3)) * tw * (0.4 + 0.8 * hash21(id + seed + 1.3));
 }
 
 /* palette colour for the style's own warm/cool tint: base when the rainbow
  * palette is on, the chosen palette otherwise */
 float3 md_tint(float3 base, float h)
 {
-	return lerp(base, prism(h), 0.25 + 0.75 * pal_mix);
+	float3 pc = prism(h);
+	float lb = dot(base, float3(0.299, 0.587, 0.114));
+	float lp = max(dot(pc, float3(0.299, 0.587, 0.114)), 0.05);
+	return lerp(base, pc * (lb / lp), 0.12 + 0.75 * pal_mix);
 }
 
 /* ================================================================== */
@@ -130,7 +133,7 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 		float h = hash21(id + fk * 13.0);
 		float2 o = float2(hash21(id + 3.1), hash21(id + 7.7)) - 0.5;
 		float d = length(f - o * 0.7) / s;
-		light += md3(0.22 + 0.15 * fk) * step(0.72, h) * exp(-d * d / (px * px * (1.2 + 1.6 * (1.0 - fk))));
+		light += md3(0.12 + 0.1 * fk) * step(0.88, h) * exp(-d * d / (px * px * (1.2 + 1.6 * (1.0 - fk))));
 	}
 
 	float n = clamp(floor(3.0 + 2.5 * density), 1.0, 7.0);
@@ -139,7 +142,7 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 		if (fi < n) {
 			float h1 = hash11(fi * 3.7 + 0.3);
 			float h2 = hash11(fi * 9.1 + 2.0);
-			float size = 0.06 + 0.075 * h2; /* bell radius; bigger = nearer */
+			float size = 0.075 + 0.09 * h2; /* bell radius; bigger = nearer */
 			float rise = 0.008 + 0.01 * h1;
 			float y = 1.5 - frac(time * rise + h1 * 1.7) * 2.3;
 			float x = (0.1 + 0.8 * hash11(fi * 5.3 + 1.1)) * aspect + 0.06 * sin(time * 0.17 + fi * 2.0);
@@ -189,7 +192,7 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 
 			float hcol = cm_hue(hue + h1 * 0.55 + react_mix.z * 0.12 * calm_in.z, uv, saturate(q.y * 0.25 + 0.3), fi);
 			float3 col = prism(hcol);
-			float near = smoothstep(0.06, 0.135, size);
+			float near = smoothstep(0.075, 0.165, size);
 			float glow = (0.35 + 0.65 * near) * (0.55 + 0.8 * react_mix.y * calm_e(h1, 0.6));
 			light += col * (bell + tent * 0.55) * glow;
 			/* a soft halo in the water around the bell */
@@ -221,38 +224,44 @@ float4 PSModernGlowTide(VertData v_in) : TARGET
 	light += glowc * 0.05 * exp(-abs(uv.y - horizon) * 30.0);
 
 	/* sea, in perspective */
-	float sea = step(horizon, uv.y) * (1.0 - smoothstep(shore - 0.01, shore + 0.02, uv.y));
+	float sea = step(horizon, uv.y) * (1.0 - smoothstep(shore - 0.02, shore + 0.01, uv.y));
 	float dy = max(uv.y - horizon, 0.0005);
-	float z = 0.22 / dy;                        /* distance */
+	float z = 0.18 / dy;                        /* distance: large far away */
 	float wx = (p.x - aspect * 0.5) * z;
 	float swell = 0.6 + 0.9 * react_mix.x * calm_in.y;
-	float3 water = float3(0.006, 0.014, 0.03) * (0.6 + 0.5 * vnoise(float2(wx * 2.0, z * 6.0 - time * 0.3)));
+	float far_k = saturate((z - 1.0) / 4.0);    /* far water blurs into a sheen */
+	float rip = vnoise(float2(wx * 1.5, z * 4.0 - time * 0.35)) * 0.6 + vnoise(float2(wx * 4.0 + 3.0, z * 10.0 - time * 0.6)) * 0.4;
+	float3 water = float3(0.006, 0.014, 0.03) * (0.7 + 0.6 * lerp(rip, 0.5, far_k));
 	light += water * sea;
-	/* the wave crests: rows that roll towards us and break near the shore */
-	float rows = z * 1.6 + time * 0.22;
-	float crest = pow(0.5 + 0.5 * cos(6.2831853 * rows), 10.0 + 6.0 * saturate(z / 6.0));
-	float breakn = fbm4(float2(wx * 2.5 + time * 0.1, floor(rows) * 3.1));
-	float nearness = 1.0 - smoothstep(0.0, 1.0, (z - 0.35) / 2.5); /* close rows break harder */
-	float glowwave = crest * smoothstep(0.35, 0.75, breakn) * nearness * swell;
-	light += glowc * glowwave * sea * (0.8 + 0.8 * react_mix.y * calm_in.x);
-	/* sparkling plankton where the water is stirred */
-	float2 sq = float2(wx * 6.0, z * 14.0 + time * 0.4);
+	/* glowing crests rolling in: soft lines that thicken and break near us */
+	float rows = z * 1.3 + time * 0.18;
+	float wave = 0.5 + 0.5 * cos(6.2831853 * (rows + 0.15 * vnoise(float2(wx * 0.6, 3.0))));
+	float crest = pow(wave, 6.0 + 30.0 * far_k);
+	float breakn = smoothstep(0.35, 0.8, fbm4(float2(wx * 1.1 + time * 0.05, z * 0.8 - time * 0.05)));
+	float near = 1.0 - far_k;
+	float glowwave = crest * breakn * (0.25 + 0.75 * near) * swell;
+	float bright = 0.8 + 0.8 * react_mix.y * calm_in.x;
+	light += glowc * glowwave * sea * bright;
+	/* the soft glow the waves leave in the water */
+	light += glowc * 0.08 * breakn * near * sea * (0.6 + 0.4 * wave);
+	/* sparkling plankton, more where the water breaks */
+	float2 sq = float2(wx * 9.0, z * 18.0 + time * 0.3);
 	float sh = hash21(floor(sq));
-	float spark = step(1.0 - 0.06 * clamp(density, 0.0, 3.0), sh) *
-		      (0.5 + 0.5 * sin(time * (2.0 + 4.0 * sh) + sh * 60.0));
-	light += glowc * spark * (0.3 + glowwave * 2.0) * sea * nearness * 0.9;
+	float2 sf = frac(sq) - 0.5;
+	float sp = step(1.0 - 0.05 * clamp(density, 0.0, 3.0), sh) * exp(-dot(sf, sf) * 30.0) *
+		   (0.5 + 0.5 * sin(time * (2.0 + 4.0 * sh) + sh * 60.0));
+	light += glowc * sp * (0.2 + 1.5 * glowwave) * sea * near;
 
-	/* the wash running up the sand, with its glowing edge */
-	float wash = shore + 0.06 + 0.05 * sin(time * 0.35) * swell + 0.015 * sin(p.x * 9.0 + time * 0.7);
-	float wet = step(shore, uv.y) * (1.0 - smoothstep(wash - px, wash + px, uv.y));
-	float edge = exp(-pow((uv.y - wash) / (0.004 + px), 2.0)) * step(shore, uv.y) *
-		     (0.6 + 0.4 * vnoise(float2(p.x * 30.0, time)));
-	float3 sand = float3(0.035, 0.03, 0.04) * (0.7 + 0.3 * vnoise(p * 140.0));
-	float sandm = step(shore, uv.y);
-	light += sand * sandm * (1.0 - wet * 0.5);
-	light += glowc * (edge * 1.2 + wet * 0.12 * (1.0 + calm_in.w)) * swell;
-	/* reflected glow on the wet sand */
-	light += glowc * wet * 0.15 * exp(-(wash - uv.y) * 12.0);
+	/* the wash running up the sand: a ragged glowing foam edge */
+	float wash = shore + 0.045 + 0.035 * sin(time * 0.3) * swell + 0.02 * (fbm4(float2(p.x * 3.0, time * 0.15)) - 0.5);
+	float sandm = smoothstep(shore - 0.02, shore + 0.01, uv.y);
+	float wet = sandm * (1.0 - smoothstep(wash - px, wash + px, uv.y));
+	float foam = exp(-pow((uv.y - wash) / (0.006 + px), 2.0)) * (0.4 + 0.6 * vnoise(float2(p.x * 40.0, time * 0.5)));
+	float3 sand = float3(0.03, 0.026, 0.035) * (0.75 + 0.25 * vnoise(p * 140.0));
+	light = lerp(light, sand, sandm * (1.0 - wet * 0.6));
+	light += glowc * (foam * 1.1 * sandm + wet * 0.1 * (1.0 + calm_in.w)) * swell * bright;
+	/* wet sand reflects the glow */
+	light += glowc * wet * 0.12 * exp(-(wash - uv.y) * 10.0);
 	return finish_dither(light, uv, v_in.uv * res);
 }
 
@@ -269,7 +278,7 @@ float3 md_lanterns(float2 p, float aspect, float px, float n, float3 warm)
 			float h1 = hash11(fi * 4.13 + 0.7);
 			float h2 = hash11(fi * 8.71 + 3.3);
 			float depth = h2;                         /* 0 far, 1 near */
-			float size = 0.012 + 0.03 * depth;
+			float size = 0.018 + 0.042 * depth;
 			float speed = 0.006 + 0.012 * depth;
 			float y = 0.72 - frac(time * speed + h1 * 3.0) * 0.95;
 			float x = (0.05 + 0.9 * hash11(fi * 2.9 + 5.5)) * aspect + 0.03 * sin(time * 0.15 + fi * 1.7);
@@ -285,7 +294,7 @@ float3 md_lanterns(float2 p, float aspect, float px, float n, float3 warm)
 			float fade = smoothstep(0.72, 0.6, y) * smoothstep(-0.25, -0.05, y);
 			float lum = (0.35 + 0.65 * depth) * fade;
 			light += col * body * (0.55 + 1.3 * inner) * flick * lum;
-			light += col * exp(-length(q) / 2.4) * 0.12 * lum * flick;
+			light += col * exp(-length(q) / 2.2) * 0.22 * lum * flick;
 		}
 	}
 	return light;
@@ -392,7 +401,7 @@ float4 PSModernSunbeams(VertData v_in) : TARGET
 		float h = hash21(id + fk * 31.0);
 		float2 o = float2(hash21(id + 1.7), hash21(id + 5.3)) - 0.5;
 		float d = length(f - o * 0.7) / s;
-		float on = step(1.0 - 0.18 * nm, h);
+		float on = step(1.0 - 0.07 * nm, h);
 		light += sun * on * exp(-d * d / (px * px * (1.0 + 2.0 * fk))) * (0.25 + 0.6 * ray) * 0.9;
 	}
 	return finish_dither(light, uv, v_in.uv * res);
@@ -507,7 +516,7 @@ float4 PSModernSnowfall(VertData v_in) : TARGET
 		float2 id = floor(q);
 		float2 f = frac(q) - 0.5;
 		float h = hash21(id + fl * 23.0);
-		float on = step(1.0 - 0.45 * heavy * (0.6 + 0.4 * depth), h);
+		float on = step(1.0 - 0.22 * heavy * (0.6 + 0.4 * depth), h);
 		float2 o = (float2(hash21(id + 1.3), hash21(id + 8.1)) - 0.5) * 0.6;
 		float d = length(f - o) / s;
 		float r = (0.0025 + 0.004 * depth * depth) * (0.7 + 0.6 * hash21(id + 3.3));
@@ -602,7 +611,8 @@ float3 md_signs(float2 p, float aspect, float px, float stretch)
 		float on = 0.55 + 0.45 * react_mix.y * e + 0.5 * md_beat() * step(0.6, h1);
 		/* the odd sign buzzes */
 		on *= 1.0 - 0.6 * step(0.86, h2) * step(0.7, hash11(floor(time * 12.0) + fi));
-		float tube = exp(-d * d / ((px * 1.5) * (px * 1.5))) + exp(-d / (0.012 + 0.006 * e)) * 0.35;
+		float inside = 1.0 - smoothstep(-px, px, md_box(d2, sz));
+		float tube = exp(-d * d / ((px * 1.5) * (px * 1.5))) + exp(-d / (0.012 + 0.006 * e)) * 0.35 + inside * 0.12;
 		float3 c3 = prism(cm_hue(hue + fi * 0.13 + react_mix.z * 0.15 * mid, p / float2(aspect, 1.0), fi / 8.0, fi));
 		col += c3 * tube * on;
 	}
@@ -619,12 +629,14 @@ float4 PSModernCityRain(VertData v_in) : TARGET
 	float3 light = float3(0.0, 0.0, 0.0);
 
 	/* sky glow and building silhouettes */
-	float3 haze = prism(hue + 0.75) * 0.06;
-	light += lerp(float3(0.01, 0.01, 0.025), haze, smoothstep(0.0, street, uv.y)) * step(uv.y, street);
+	float3 haze = md_tint(float3(0.12, 0.06, 0.16), hue + 0.8);
+	light += lerp(float3(0.006, 0.006, 0.018), haze, pow(smoothstep(0.0, street, uv.y), 1.5)) * step(uv.y, street);
 	float bx = floor(p.x * 9.0);
 	float bh = 0.05 + 0.22 * hash11(bx * 1.7 + 3.0);
 	float bld = step(bh, uv.y) * step(uv.y, street);
-	light *= 1.0 - bld * 0.8;
+	/* the buildings: dark faces with a faint edge of city glow */
+	float edgeb = exp(-abs(uv.y - bh) / (px * 1.5)) * 0.4 + exp(-abs(frac(p.x * 9.0) - 0.0) * 300.0) * 0.1;
+	light = lerp(light, float3(0.012, 0.012, 0.022) + haze * 0.1 * (1.0 - uv.y), bld) + haze * edgeb * bld;
 	/* lit windows */
 	float2 wq = float2(p.x * 90.0, uv.y * 60.0);
 	float2 wid = floor(wq);
@@ -661,9 +673,9 @@ float4 PSModernCityRain(VertData v_in) : TARGET
 		float2 id = floor(q);
 		float2 f = frac(q);
 		float h = hash21(id + fl * 7.0);
-		float drop = step(1.0 - 0.18 * heavy, h) * smoothstep(0.5, 0.0, abs(f.x - 0.5)) * smoothstep(0.0, 0.3, f.y) *
+		float drop = step(1.0 - 0.08 * heavy, h) * smoothstep(0.25, 0.0, abs(f.x - 0.5)) * smoothstep(0.0, 0.3, f.y) *
 			     smoothstep(1.0, 0.6, f.y);
-		light += md3(0.18 + 0.08 * fl) * drop;
+		light += md3(0.06 + 0.04 * fl) * drop;
 	}
 	return finish_dither(light, uv, v_in.uv * res);
 }
@@ -789,32 +801,33 @@ float4 PSModernLiquidMetal(VertData v_in) : TARGET
 			grad += -2.0 * f / d2 * d;
 		}
 	}
-	/* a beat sends a ripple across the surface */
-	field += 0.06 * md_beat() * sin(length(p) * 60.0 - time * 12.0);
 	float th = 1.0;
-	float gl = length(grad);
-	float sd = (field - th) / max(gl, 0.0001); /* ~ distance inside the surface */
+	float gl = length(grad) + 0.0001;
+	float sd = (field - th) / gl; /* ~ distance inside the surface */
 	float m = smoothstep(-px * 1.2, px * 1.2, sd);
-	/* a normal from the field's slope: steep at the rim, flat in the middle */
-	float2 nxy = -grad / (gl + 6.0);
-	float3 nrm = normalize(float3(nxy * 1.6, 1.0));
-	/* the studio it reflects: a dark room with coloured light strips */
+	/* treat the field as a height: steep at the rim like a drop of mercury */
+	float over_t = max(field - th, 0.0);
+	float dhdf = 0.5 / sqrt(over_t + 0.02);
+	float2 gh = grad * dhdf * 0.045;
+	/* a beat sends a ripple over it */
+	float rr = length(p);
+	gh += p / max(rr, 0.001) * cos(rr * 50.0 - time * 10.0) * 0.25 * md_beat() * exp(-rr * 3.0);
+	float3 nrm = normalize(float3(-gh, 1.0));
+	/* the studio it reflects: coloured walls, a bright horizon and two
+	 * soft boxes, looked up by the surface's tilt */
 	float h = cm_hue(hue + react_mix.z * 0.2 * mid, uv, nrm.x * 0.5 + 0.5, 0.0);
 	float3 ca = prism(h);
 	float3 cb = prism(h + 0.45);
-	float sky = nrm.y * 0.5 + 0.5;
-	float3 env = lerp(ca * 0.9, cb * 0.5, smoothstep(0.2, 0.8, sky));
-	env = lerp(env, md3(0.05), smoothstep(0.45, 0.55, sky) * 0.85);
-	float strip = exp(-pow((nrm.x - 0.35) / 0.06, 2.0)) + exp(-pow((nrm.y + 0.55) / 0.05, 2.0)) * 0.8;
-	env += md3(1.2) * strip;
-	float fres = pow(1.0 - nrm.z, 3.0);
-	float3 metal = env * (0.35 + 0.65 * fres) + md3(0.06);
-	float3 spec = md3(1.0) * pow(saturate(dot(nrm, normalize(float3(-0.4, -0.5, 0.75)))), 60.0);
+	float ty = -nrm.y; /* tilted up = sees the ceiling */
+	float3 env = lerp(cb * 0.35, ca * 0.8, smoothstep(-0.6, 0.6, ty));
+	env += md3(0.9) * exp(-pow((ty - 0.05) / 0.07, 2.0)) * 0.6;     /* horizon line */
+	env += md3(1.6) * exp(-dot(nrm.xy - float2(-0.45, -0.45), nrm.xy - float2(-0.45, -0.45)) / 0.02);
+	env += ca * 1.2 * exp(-dot(nrm.xy - float2(0.5, 0.2), nrm.xy - float2(0.5, 0.2)) / 0.03);
+	float fres = 0.55 + 0.45 * pow(1.0 - nrm.z, 2.0);
 	float bright = 0.8 + 0.5 * react_mix.y * level;
-	float3 surf = (metal + spec) * bright;
-	/* glow of the coloured light around the blobs */
+	float3 surf = (env * fres + md3(0.03)) * bright;
 	float halo = saturate(field) * (1.0 - m);
-	float3 light = surf * m + ca * pow(halo, 3.0) * 0.25;
+	float3 light = surf * m + ca * pow(halo, 3.0) * 0.2 * bright;
 	return finish_dither(light, uv, v_in.uv * res);
 }
 
@@ -828,8 +841,9 @@ float md_ferro_r(float a, float n, float t)
 	float k = floor(ai);
 	float fk = frac(ai) - 0.5;
 	float e = band_level(abs(glmod(k, n) / n * 2.0 - 1.0));
-	float spike = pow(saturate(1.0 - abs(fk) * 2.0), 2.2) * (0.05 + 0.32 * e * (0.5 + 0.7 * react_mix.x));
-	return 0.2 + 0.012 * sin(a * 3.0 + t) + spike;
+	float sh = saturate(1.0 - abs(fk) * 2.0);
+	float spike = (sh * sh * (3.0 - 2.0 * sh)) * sh * (0.03 + 0.2 * e * (0.5 + 0.7 * react_mix.x));
+	return 0.17 + 0.01 * sin(a * 3.0 + t) + spike;
 }
 
 float4 PSModernFerrofluid(VertData v_in) : TARGET
@@ -838,7 +852,7 @@ float4 PSModernFerrofluid(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5);
 	float px = 1.0 / res.y;
-	float n = clamp(floor(16.0 + 10.0 * density), 8.0, 48.0);
+	float n = clamp(floor(10.0 + 6.0 * density), 6.0, 30.0);
 	float rot = time * 0.08;
 	float a = atan2(p.y, p.x) + rot;
 	float r = length(p);
@@ -849,23 +863,30 @@ float4 PSModernFerrofluid(VertData v_in) : TARGET
 	float slope = (Rp - Rm) / (2.0 * da);
 	float sd = r - R;
 	float m = 1.0 - smoothstep(-px * 1.2, px * 1.2, sd / sqrt(1.0 + slope * slope / max(r * r, 0.0001)));
-	/* the surface leans out along the spikes: shade with a fake normal */
+	/* height: a dome that rises into each spike */
 	float inner = saturate(r / max(R, 0.0001));
 	float2 radial = p / max(r, 0.0001);
 	float2 tang = float2(-radial.y, radial.x);
-	float2 n2 = radial * pow(inner, 4.0) - tang * slope / max(r, 0.05) * 0.4;
-	float3 nrm = normalize(float3(n2, 0.7));
+	/* surface slope: outwards near the rim, sideways on a spike's flanks */
+	float2 g2 = radial * (0.3 + 2.2 * pow(inner, 3.0)) + tang * clamp(-slope / max(R, 0.05), -3.0, 3.0) * 0.5 * inner;
+	float3 nrm = normalize(float3(g2, 1.0));
 	float h = cm_hue(hue + react_mix.z * 0.15 * mid, uv, a / 6.2831853, 0.0);
 	float3 c1 = prism(h);
 	float3 c2 = prism(h + 0.33);
-	float spec = pow(saturate(dot(nrm, normalize(float3(-0.5, -0.6, 0.6)))), 40.0);
-	float rim = pow(saturate(dot(nrm.xy, normalize(float2(0.4, 0.6))) * 0.5 + 0.5), 6.0);
-	float3 fluid = md3(0.015) + c1 * rim * 0.6 + c2 * pow(1.0 - nrm.z, 2.0) * 0.25 + md3(1.0) * spec;
+	/* glossy black: mostly the reflection of two coloured lights and a window */
+	float3 ref = float3(nrm.xy, nrm.z);
+	float k1 = pow(saturate(dot(ref, normalize(float3(-0.55, -0.55, 0.6)))), 30.0);
+	float k2 = pow(saturate(dot(ref, normalize(float3(0.6, 0.3, 0.5)))), 12.0);
+	float k3 = pow(saturate(dot(ref, normalize(float3(0.0, 0.7, 0.7)))), 8.0);
+	float fres = pow(1.0 - nrm.z, 2.0);
+	float3 fluid = md3(0.008) + md3(1.4) * k1 + c1 * k2 * 0.9 + c2 * k3 * 0.5 + (c1 + c2) * fres * 0.12;
 	float bright = 0.8 + 0.5 * react_mix.y * level;
 	float3 light = fluid * m * bright;
-	/* coloured light behind it and its reflection on the dish */
-	light += c1 * exp(-max(sd, 0.0) * 9.0) * 0.18 * (1.0 - m) * bright;
-	light += c2 * 0.06 * exp(-abs(r - 0.42) * 30.0) * (1.0 - m);
+	/* the dish it sits in: a soft lit gradient, with the fluid's shadow */
+	float dish = (1.0 - smoothstep(0.32, 0.5, r)) * 0.11;
+	float3 dishc = lerp(md3(0.2), c2, 0.35) * dish * (1.0 - 0.7 * exp(-max(sd, 0.0) * 14.0));
+	light += dishc * (1.0 - m);
+	light += c1 * exp(-max(sd, 0.0) * 10.0) * 0.12 * (1.0 - m) * bright;
 	return finish_dither(light, uv, v_in.uv * res);
 }
 
@@ -875,10 +896,14 @@ float4 PSModernFerrofluid(VertData v_in) : TARGET
 /* Amount = how many contour lines.                                      */
 float md_terrain(float2 q)
 {
-	float h = fbm4(q * 1.4 + float2(time * 0.04, 0.0));
-	float x = saturate(q.x / 6.0 + 0.5);
-	h += 0.45 * band_level(x) * react_mix.x * exp(-pow(q.y * 0.6, 2.0));
-	h += 0.15 * bass * react_mix.x * exp(-dot(q, q) * 0.15);
+	float h = 0.75 * fbm4(q * 0.55 + float2(time * 0.03, 0.0));
+	/* eight hills, one per stretch of the spectrum, wandering slowly */
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float2 c = float2((fi / 7.0 - 0.5) * 7.0 + 0.6 * sin(time * 0.07 + fi), 1.4 * sin(time * 0.05 + fi * 2.3));
+		float e = band_level((fi + 0.5) / 8.0);
+		h += (0.08 + 0.45 * e * react_mix.x) * exp(-dot(q - c, q - c) * 0.55);
+	}
 	return h;
 }
 
@@ -888,7 +913,7 @@ float4 PSModernSoundMap(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float2 q = float2((uv.x - 0.5) * aspect, uv.y - 0.5) * 5.0;
 	float px = 5.0 / res.y;
-	float lines = 10.0 + 8.0 * clamp(density, 0.2, 3.0);
+	float lines = 6.0 + 5.0 * clamp(density, 0.2, 3.0);
 	float h = md_terrain(q);
 	float hx = md_terrain(q + float2(px, 0.0));
 	float hy = md_terrain(q + float2(0.0, px));
@@ -921,7 +946,7 @@ float4 PSModernHoloFoil(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
 	float px = 1.0 / res.y;
-	float k = 2.0 + 3.0 * clamp(density, 0.2, 3.0);
+	float k = 1.2 + 1.6 * clamp(density, 0.2, 3.0);
 	float t = time * 0.12;
 	/* height of the foil: big soft folds plus sharp crinkles */
 	float2 w = p * k + float2(t, -t * 0.7);
@@ -941,7 +966,9 @@ float4 PSModernHoloFoil(VertData v_in) : TARGET
 	float spec = pow(saturate(ndl), 28.0);
 	float glint = pow(saturate(ndl), 300.0) * step(0.6, hash21(floor(p * 160.0)));
 	float bright = 0.55 + 0.6 * react_mix.y * level + 0.35 * md_beat();
-	float3 light = irid * (0.35 + 0.65 * saturate(ndl)) * bright + md3(1.0) * (spec * 0.6 + glint * 2.0) * bright;
+	float3 silver = md3(0.35 + 0.45 * saturate(ndl));
+	float sheen = 0.35 + 0.45 * pow(1.0 - abs(dot(nrm.xy, float2(0.6, -0.8))), 2.0);
+	float3 light = lerp(silver, irid * (0.4 + 0.7 * saturate(ndl)), sheen) * bright + md3(1.0) * (spec * 0.6 + glint * 2.0) * bright;
 	/* sparkle drifting over it on the beat */
 	float sp = step(0.995, hash21(floor(p * 240.0) + floor(time * 8.0))) * md_beat();
 	light += md3(1.5) * sp;

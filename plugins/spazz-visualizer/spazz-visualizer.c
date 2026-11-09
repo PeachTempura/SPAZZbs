@@ -180,7 +180,8 @@ static const struct viz_palette palettes[] = {
 struct viz_fx {
 	gs_effect_t *effect;
 	gs_eparam_t *bands, *res, *time, *flow, *bass, *mid, *treble, *level, *beat, *hue, *density, *bg, *pal_a,
-		*pal_b, *pal_c, *pal_mix, *grade, *bg_col, *bg_flat, *view, *flip_x, *cmotion, *calm, *react, *prev, *prev_on;
+		*pal_b, *pal_c, *pal_mix, *grade, *bg_col, *bg_flat, *view, *flip_x, *cmotion, *calm, *react, *prev,
+		*prev_on;
 };
 
 struct spazz_viz {
@@ -556,7 +557,8 @@ static void viz_update(void *data, obs_data_t *settings)
 	/* music reaction: x movement, y brightness & glow, z colour, w beat */
 	v->react_amount = (float)obs_data_get_double(settings, "react_amount");
 	vec4_set(&v->react_mix, (float)obs_data_get_double(settings, "react_move"),
-		 (float)obs_data_get_double(settings, "react_glow"), (float)obs_data_get_double(settings, "react_color"),
+		 (float)obs_data_get_double(settings, "react_glow"),
+		 (float)obs_data_get_double(settings, "react_color"),
 		 (float)obs_data_get_double(settings, "react_beat"));
 	v->react_calm = obs_data_get_bool(settings, "react_calm");
 	const char *rt = obs_data_get_string(settings, "react_to");
@@ -1561,7 +1563,8 @@ static void viz_tick(void *data, float seconds)
 		v->tex_data[i * 4 + 0] = (uint8_t)(v->bands[i] * 255.0f + 0.5f);
 		v->tex_data[i * 4 + 1] = (uint8_t)(v->peaks[i] * 255.0f + 0.5f);
 		v->tex_data[i * 4 + 2] =
-			(uint8_t)(fminf(a->flash[i] * v->beat_punch * ov * (v->react_calm ? 0.4f : 1.0f), 1.0f) * 255.0f +
+			(uint8_t)(fminf(a->flash[i] * v->beat_punch * ov * (v->react_calm ? 0.4f : 1.0f), 1.0f) *
+					  255.0f +
 				  0.5f);
 		v->tex_data[i * 4 + 3] = 255;
 	}
