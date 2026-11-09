@@ -153,10 +153,19 @@ function(_check_dependencies)
 
     if(NOT EXISTS "${dependencies_dir}/${file}")
       message(STATUS "Downloading ${url}")
-      file(DOWNLOAD "${url}" "${dependencies_dir}/${file}.tmp" STATUS download_status EXPECTED_HASH SHA256=${hash})
-
-      list(GET download_status 0 error_code)
-      list(GET download_status 1 error_message)
+      # SPAZZbs: GitHub's release downloads sometimes fail for a while (504s);
+      # try a few times before giving up
+      foreach(attempt RANGE 1 10)
+        file(DOWNLOAD "${url}" "${dependencies_dir}/${file}.tmp" STATUS download_status EXPECTED_HASH SHA256=${hash})
+        list(GET download_status 0 error_code)
+        list(GET download_status 1 error_message)
+        if(NOT error_code)
+          break()
+        endif()
+        file(REMOVE "${dependencies_dir}/${file}.tmp")
+        message(STATUS "Downloading ${url} - attempt ${attempt} failed (${error_message}), retrying")
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 20)
+      endforeach()
       if(error_code)
         file(REMOVE "${dependencies_dir}/${file}.tmp")
         message(STATUS "Downloading ${url} - Failure")
