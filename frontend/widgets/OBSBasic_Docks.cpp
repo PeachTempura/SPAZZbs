@@ -91,6 +91,10 @@ void OBSBasic::on_resetDocks_triggered(bool force)
 			{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock, controlsDock});
 		PlaceSpazzMusicDock();
 		PlaceSpazzSponsorDock();
+		if (spazzChatDock) {
+			spazzTabs->PlaceInTab(spazzChatDock, QTStr("SPAZZ.DockTabs.Chat"), SpazzDockTabs::Area::Right);
+			config_set_bool(App()->GetUserConfig(), "SPAZZbs", "ChatDockPlaced", true);
+		}
 	}
 
 	activateWindow();
@@ -113,9 +117,12 @@ void OBSBasic::on_lockDocks_toggled(bool lock)
 	controlsDock->setFeatures(mainFeatures);
 	statsDock->setFeatures(features);
 
-	/* The tab strip itself never moves */
+	/* The tab strips themselves never move */
 	if (spazzTabs) {
 		spazzTabs->setFeatures(QDockWidget::NoDockWidgetFeatures);
+		if (SpazzDockTabs *side = spazzTabs->AreaDock(SpazzDockTabs::Area::Right)) {
+			side->setFeatures(QDockWidget::NoDockWidgetFeatures);
+		}
 	}
 
 	for (int i = extraDocks.size() - 1; i >= 0; i--) {
@@ -202,15 +209,8 @@ void OBSBasic::RemoveDockWidget(const QString &name)
 bool OBSBasic::IsDockObjectNameUsed(const QString &name)
 {
 	QStringList list;
-	list << "scenesDock"
-	     << "sourcesDock"
-	     << "mixerDock"
-	     << "transitionsDock"
-	     << "controlsDock"
-	     << "statsDock"
-	     << "spazzTabsDock"
-	     << "spazzMusicDock"
-	     << "spazzSponsorDock";
+	list << "scenesDock" << "sourcesDock" << "mixerDock" << "transitionsDock" << "controlsDock" << "statsDock"
+	     << "spazzTabsDock" << "spazzRightTabsDock" << "spazzMusicDock" << "spazzSponsorDock";
 	list << extraDockNames;
 	list << extraCustomDockNames;
 
@@ -277,7 +277,7 @@ void OBSBasic::SetupSpazzTabs()
 	}
 
 	SpazzDockTabs::DefaultDocks defaults{ui->scenesDock, ui->sourcesDock, ui->mixerDock, ui->transitionsDock,
-					      controlsDock};
+					     controlsDock};
 
 	for (QDockWidget *dock : findChildren<QDockWidget *>()) {
 		spazzTabs->TrackDock(dock);
@@ -288,6 +288,10 @@ void OBSBasic::SetupSpazzTabs()
 		spazzTabs->ResetToDefault(defaults);
 		PlaceSpazzMusicDock();
 		PlaceSpazzSponsorDock();
+		/* a fresh layout always gets the chat in the right side's Chat tab */
+		if (spazzChatDock) {
+			config_set_bool(App()->GetUserConfig(), "SPAZZbs", "ChatDockPlaced", false);
+		}
 	} else {
 		/* saved tabs from before the music player / SPONSORCENTER tab existed */
 		if (!config_get_bool(App()->GetUserConfig(), "SPAZZbs", "MusicDockPlaced")) {
@@ -297,6 +301,9 @@ void OBSBasic::SetupSpazzTabs()
 			PlaceSpazzSponsorDock();
 		}
 	}
+
+	/* the chat viewer, if it was made before the tabs were set up */
+	PlaceSpazzChatDock();
 
 	/* Docks menu: "Dock Tabs" submenu, rebuilt every time it opens */
 	QMenu *tabsMenu = new QMenu(QTStr("SPAZZ.DockTabs.Menu"), ui->menuDocks);
@@ -313,6 +320,31 @@ void OBSBasic::PlaceSpazzSponsorDock()
 
 	spazzTabs->PlaceInTab(spazzSponsorDock, QTStr("Sponsorcenter.TabName"));
 	config_set_bool(App()->GetUserConfig(), "SPAZZbs", "SponsorDockPlaced", true);
+}
+
+void OBSBasic::PlaceSpazzChatDock(QDockWidget *dock)
+{
+	if (dock) {
+		spazzChatDock = dock;
+	}
+	if (!spazzTabs || !spazzChatDock) {
+		return;
+	}
+
+	spazzTabs->TrackDock(spazzChatDock);
+
+	/* SetupSpazzTabs places it once the saved tabs are loaded; until then
+	 * a load would just undo it */
+	if (!spazzTabs->IsSetUp()) {
+		return;
+	}
+	/* after the first time it stays where you put it (saved with the tabs) */
+	if (config_get_bool(App()->GetUserConfig(), "SPAZZbs", "ChatDockPlaced")) {
+		return;
+	}
+
+	spazzTabs->PlaceInTab(spazzChatDock, QTStr("SPAZZ.DockTabs.Chat"), SpazzDockTabs::Area::Right);
+	config_set_bool(App()->GetUserConfig(), "SPAZZbs", "ChatDockPlaced", true);
 }
 
 void OBSBasic::PlaceSpazzMusicDock()

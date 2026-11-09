@@ -460,9 +460,15 @@ private:
 	QPointer<OBSDock> controlsDock;
 	QPointer<OBSDock> mixerDock;
 
-	/* SPAZZbs: tabbed bottom area */
+	/* SPAZZbs: tabbed bottom area (it owns the right-side tab area too) */
 	QPointer<SpazzDockTabs> spazzTabs;
 	void SetupSpazzTabs();
+
+	/* SPAZZbs: the chat viewer's dock. Call after creating (and adding)
+	 * it: it lands in the right side's Chat tab the first time, and keeps
+	 * wherever you put it after that. */
+	QPointer<QDockWidget> spazzChatDock;
+	void PlaceSpazzChatDock(QDockWidget *dock = nullptr);
 
 	/* SPAZZbs: SPAZZamp music player */
 	QPointer<SpazzMusicPlayer> spazzMusic;
