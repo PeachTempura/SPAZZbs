@@ -180,7 +180,7 @@ static const struct viz_palette palettes[] = {
 struct viz_fx {
 	gs_effect_t *effect;
 	gs_eparam_t *bands, *res, *time, *flow, *bass, *mid, *treble, *level, *beat, *hue, *density, *bg, *pal_a,
-		*pal_b, *pal_c, *pal_mix, *grade, *bg_col, *bg_flat, *view, *flip_x, *cmotion, *calm, *prev, *prev_on;
+		*pal_b, *pal_c, *pal_mix, *grade, *bg_col, *bg_flat, *view, *flip_x, *cmotion, *calm, *react, *prev, *prev_on;
 };
 
 struct spazz_viz {
@@ -222,6 +222,9 @@ struct spazz_viz {
 	float cm_clock, beat_hue, beat_hue_to, beat_prev;
 	/* the slow music for the calm styles */
 	float calm_level, calm_bass, calm_treble, calm_swell, calm_swell_to;
+	/* how much each kind of reaction follows the music (react_mix):
+	 * x movement/bounce, y brightness/glow, z colour, w beat pulses */
+	struct vec4 react_mix;
 	float bg_opacity, bg_flat;
 	struct vec3 bg_col;
 	float auto_secs, fade_secs;
@@ -1050,6 +1053,7 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 {
 	struct spazz_viz *v = bzalloc(sizeof(struct spazz_viz));
 	v->source = source;
+	vec4_set(&v->react_mix, 1.0f, 1.0f, 1.0f, 1.0f);
 
 	if (pthread_mutex_init(&v->mutex, NULL) != 0) {
 		bfree(v);
@@ -1134,6 +1138,7 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 		fx->view = gs_effect_get_param_by_name(e, "view");
 		fx->flip_x = gs_effect_get_param_by_name(e, "flip_x");
 		fx->cmotion = gs_effect_get_param_by_name(e, "cmotion");
+		fx->react = gs_effect_get_param_by_name(e, "react_mix");
 		fx->calm = gs_effect_get_param_by_name(e, "calm_in");
 		fx->prev = gs_effect_get_param_by_name(e, "prev");
 		fx->prev_on = gs_effect_get_param_by_name(e, "prev_on");
@@ -1755,6 +1760,9 @@ static void set_common(struct spazz_viz *v, struct viz_fx *fx, const struct vec2
 	vec4_set(&calm, v->calm_level, v->calm_bass, v->calm_treble, v->calm_swell);
 	if (fx->calm) {
 		gs_effect_set_vec4(fx->calm, &calm);
+	}
+	if (fx->react) {
+		gs_effect_set_vec4(fx->react, &v->react_mix);
 	}
 	SETF(fx->density, v->density);
 	SETF(fx->bg, v->bg_opacity);

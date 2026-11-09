@@ -54,6 +54,7 @@ uniform float3 pl_accent2;   /* a colour scheme's second colour */
 uniform float4 pl_glitch;    /* x glitch amount, y music drive (with the amount), z glitch clock (holds on hits), w garbage letters */
 uniform float4 cmotion;      /* x colour motion, y its 0..1 clock, z aurora look (1 classic), w beat colour step */
 uniform float4 calm_in;      /* the slow music for the calm styles: x level, y bass, z treble, w a gentle swell */
+uniform float4 react_mix;    /* how much each reaction follows the music: x movement/bounce, y brightness/glow, z colour, w beat pulses (0 = none, 1 = normal, 2 = double) */
 
 sampler_state band_sampler {
 	Filter   = Linear;

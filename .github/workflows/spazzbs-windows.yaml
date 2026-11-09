@@ -37,6 +37,8 @@ jobs:
           done
           ./fxparse plugins/spazz-crt/data/spazz-crt.effect hlsl/crt 2> >(report)
           ./fxparse plugins/spazz-stinger/data/spazz-stinger.effect hlsl/stinger 2> >(report)
+          mkdir -p hlsl/motion
+          ./fxparse plugins/spazz-motion/data/spazz-motion.effect hlsl/motion 2> >(report)
           ./fxparse libobs/data/default.effect hlsl/control 2> >(report)
 
       - name: Upload HLSL 📡

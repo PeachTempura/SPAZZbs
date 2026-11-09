@@ -5,7 +5,14 @@ add_library(OBS::spazz-visualizer ALIAS spazz-visualizer)
 
 target_sources(
   spazz-visualizer
-  PRIVATE pack-feedback.h pack-modern.h pack-retro.h spazz-analyzer.c spazz-analyzer.h spazz-pixel-font.h spazz-visualizer.c
+  PRIVATE
+    pack-feedback.h
+    pack-modern.h
+    pack-retro.h
+    spazz-analyzer.c
+    spazz-analyzer.h
+    spazz-pixel-font.h
+    spazz-visualizer.c
 )
 
 target_link_libraries(spazz-visualizer PRIVATE OBS::libobs $<$<PLATFORM_ID:Windows>:OBS::w32-pthreads>)

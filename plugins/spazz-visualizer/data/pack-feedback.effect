@@ -45,6 +45,7 @@ uniform float4 view;     /* x zoom, y mirror left-right, z mirror top-bottom, w 
 uniform float flip_x;
 uniform float4 cmotion;  /* x colour motion, y its 0..1 clock, z aurora look (1 classic), w beat colour step */
 uniform float4 calm_in;  /* the slow music for the calm styles: x level, y bass, z treble, w a gentle swell */
+uniform float4 react_mix;    /* how much each reaction follows the music: x movement/bounce, y brightness/glow, z colour, w beat pulses (0 = none, 1 = normal, 2 = double) */
 
 /* feedback styles (MilkDrop-like): last frame, and
  * prev_on: x 1 when prev holds last frame (0 on the first frame / after a
