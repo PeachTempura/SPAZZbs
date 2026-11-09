@@ -243,8 +243,8 @@ TwitchLine ParseTwitchLine(const std::string &rawLine)
 		out.type = TwitchLine::Joined;
 		return out;
 	}
-	if (command == "NOTICE" && (trailing.find("Login") != std::string::npos ||
-				    trailing.find("auth") != std::string::npos)) {
+	if (command == "NOTICE" &&
+	    (trailing.find("Login") != std::string::npos || trailing.find("auth") != std::string::npos)) {
 		out.type = TwitchLine::Error;
 		out.msg.text = trailing;
 		return out;
@@ -265,7 +265,8 @@ TwitchLine ParseTwitchLine(const std::string &rawLine)
 	TwitchBadges(tag("badges"), m);
 
 	/* /me: \x01ACTION text\x01 */
-	if (StartsWith(trailing, "\x01" "ACTION ")) {
+	if (StartsWith(trailing, "\x01"
+				 "ACTION ")) {
 		trailing = trailing.substr(8);
 		if (!trailing.empty() && trailing.back() == '\x01') {
 			trailing.pop_back();
@@ -382,7 +383,8 @@ KickEvent ParseKickFrame(const std::string &frame)
 	}
 
 	const bool chat = event == "App\\Events\\ChatMessageEvent" || event == "App\\Events\\ChatMessageSentEvent";
-	const bool sub = event == "App\\Events\\SubscriptionEvent" || event == "App\\Events\\GiftedSubscriptionsEvent" ||
+	const bool sub = event == "App\\Events\\SubscriptionEvent" ||
+			 event == "App\\Events\\GiftedSubscriptionsEvent" ||
 			 event == "App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent";
 	if (!chat && !sub) {
 		return out;
@@ -412,7 +414,7 @@ KickEvent ParseKickFrame(const std::string &frame)
 	const Json &msgObj = d["message"].is_object() ? d["message"] : d; /* older ChatMessageSentEvent nests */
 	const Json &sender = d["sender"].is_object() ? d["sender"] : d["user"];
 	m.id = msgObj["id"].is_string() ? msgObj["id"].string_value()
-					 : std::to_string(int64_t(msgObj["id"].number_value()));
+					: std::to_string(int64_t(msgObj["id"].number_value()));
 	m.user = sender["username"].string_value();
 	m.color = sender["identity"]["color"].string_value();
 	m.text = KickStripEmotes(msgObj["content"].is_string() ? msgObj["content"].string_value()
@@ -455,7 +457,7 @@ static void RumbleMessage(const Json &jm, bool rant, std::vector<Message> &out)
 	if (rant) {
 		m.kind = KindPaid;
 		const double dollars = jm["amount_dollars"].is_number() ? jm["amount_dollars"].number_value()
-									 : jm["amount_cents"].number_value() / 100.0;
+									: jm["amount_cents"].number_value() / 100.0;
 		char buf[32];
 		snprintf(buf, sizeof(buf), "$%.2f", dollars);
 		m.amount = buf;
@@ -779,8 +781,8 @@ YouTubeChat ParseYouTubeChat(const std::string &json)
 	}
 	out.ok = true;
 	for (const Json &c : lc["continuations"].array_items()) {
-		for (const char *kind : {"invalidationContinuationData", "timedContinuationData",
-					 "reloadContinuationData"}) {
+		for (const char *kind :
+		     {"invalidationContinuationData", "timedContinuationData", "reloadContinuationData"}) {
 			const Json &cd = c[kind];
 			if (cd.is_object() && cd["continuation"].is_string()) {
 				out.continuation = cd["continuation"].string_value();

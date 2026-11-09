@@ -73,8 +73,8 @@ void SpazzWebSocket::Open(const QUrl &url_)
 		}
 		QByteArray req = "GET " + path + " HTTP/1.1\r\nHost: " + url.host().toUtf8() +
 				 "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key +
-				 "\r\nSec-WebSocket-Version: 13\r\nUser-Agent: " + kUserAgent +
-				 "\r\nOrigin: https://" + url.host().toUtf8() + "\r\n\r\n";
+				 "\r\nSec-WebSocket-Version: 13\r\nUser-Agent: " + kUserAgent + "\r\nOrigin: https://" +
+				 url.host().toUtf8() + "\r\n\r\n";
 		socket->write(req);
 	});
 	connect(socket, &QSslSocket::readyRead, this, &SpazzWebSocket::OnReadable);
@@ -524,12 +524,12 @@ void SpazzKickChat::Start()
 		}
 		const std::string id = KickChatroomId(body.toStdString());
 		if (id.empty()) {
-			RetryLater(status == 403 || status == 429 ? QStringLiteral("Kick blocked the channel lookup. Put your "
-										   "chatroom id in Chat settings.")
-				   : status == 404           ? QStringLiteral("No Kick channel with that name")
-							     : QStringLiteral("Couldn't look up the Kick channel (%1)")
-								       .arg(err.isEmpty() ? QStringLiteral("no chatroom")
-											  : err));
+			RetryLater(status == 403 || status == 429
+					   ? QStringLiteral("Kick blocked the channel lookup. Put your "
+							    "chatroom id in Chat settings.")
+				   : status == 404 ? QStringLiteral("No Kick channel with that name")
+						   : QStringLiteral("Couldn't look up the Kick channel (%1)")
+							     .arg(err.isEmpty() ? QStringLiteral("no chatroom") : err));
 			return;
 		}
 		chatroom = QString::fromStdString(id);
@@ -636,7 +636,8 @@ void SpazzRumbleChat::Poll()
 			return;
 		}
 		if (body.isEmpty()) {
-			RetryLater(QStringLiteral("Rumble API: %1").arg(err.isEmpty() ? QStringLiteral("no answer") : err));
+			RetryLater(
+				QStringLiteral("Rumble API: %1").arg(err.isEmpty() ? QStringLiteral("no answer") : err));
 			return;
 		}
 		const RumbleResult res = ParseRumble(body.toStdString());
@@ -726,8 +727,7 @@ void SpazzYouTubeChat::FindVideo()
 
 void SpazzYouTubeChat::OpenChat()
 {
-	QNetworkReply *r =
-		Get(QUrl(QStringLiteral("https://www.youtube.com/live_chat?is_popout=1&v=") + videoId));
+	QNetworkReply *r = Get(QUrl(QStringLiteral("https://www.youtube.com/live_chat?is_popout=1&v=") + videoId));
 	if (!r) {
 		return;
 	}

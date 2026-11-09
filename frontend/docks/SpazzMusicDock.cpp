@@ -16,6 +16,8 @@
 
 #include <obs-frontend-api.h>
 
+#include <cmath>
+
 #include <QItemSelection>
 #include <QItemSelectionModel>
 #include <QBoxLayout>
@@ -41,7 +43,6 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
-#include <cmath>
 
 #include "moc_SpazzMusicDock.cpp"
 
@@ -1906,6 +1907,55 @@ static void StepVizStyle(obs_source_t *src, int dir)
 	VizSet(src, "style", styles[next].second);
 }
 
+/* Music reaction quick setups: overall, movement, glow, colour, beat, calm */
+struct VizReactPreset {
+	const char *label;
+	double amount, move, glow, color, beat;
+	bool calm;
+};
+static const VizReactPreset kReactPresets[] = {
+	{"SPAZZ.Music.Vis.React.Full", 1.0, 1.0, 1.0, 1.0, 1.0, false},
+	{"SPAZZ.Music.Vis.React.Gentle", 0.6, 0.5, 0.8, 0.6, 0.4, false},
+	{"SPAZZ.Music.Vis.React.GlowOnly", 1.0, 0.0, 1.3, 1.0, 0.5, false},
+	{"SPAZZ.Music.Vis.React.NoBounce", 1.0, 0.0, 1.0, 1.0, 0.3, false},
+	{"SPAZZ.Music.Vis.React.Calm", 1.0, 0.6, 1.0, 0.6, 0.5, true},
+	{"SPAZZ.Music.Vis.React.Off", 0.0, 1.0, 1.0, 1.0, 1.0, false},
+};
+
+static void AddVizReactPresets(QMenu *menu, obs_source_t *src)
+{
+	OBSDataAutoRelease s = obs_source_get_settings(src);
+	auto near = [&s](const char *key, double want) {
+		return std::abs(obs_data_get_double(s, key) - want) < 0.001;
+	};
+	OBSWeakSourceAutoRelease weak = obs_source_get_weak_source(src);
+	OBSWeakSource w = weak.Get();
+	for (const VizReactPreset &p : kReactPresets) {
+		QAction *a = menu->addAction(QTStr(p.label));
+		a->setCheckable(true);
+		a->setChecked(near("react_amount", p.amount) &&
+			      (p.amount == 0.0 || (near("react_move", p.move) && near("react_glow", p.glow) &&
+						   near("react_color", p.color) && near("react_beat", p.beat) &&
+						   obs_data_get_bool(s, "react_calm") == p.calm)));
+		QObject::connect(a, &QAction::triggered, menu, [w, p]() {
+			OBSSourceAutoRelease live = obs_weak_source_get_source(w);
+			if (!live) {
+				return;
+			}
+			OBSDataAutoRelease d = obs_data_create();
+			obs_data_set_double(d, "react_amount", p.amount);
+			obs_data_set_double(d, "react_move", p.move);
+			obs_data_set_double(d, "react_glow", p.glow);
+			obs_data_set_double(d, "react_color", p.color);
+			obs_data_set_double(d, "react_beat", p.beat);
+			obs_data_set_bool(d, "react_calm", p.calm);
+			obs_source_update(live, d);
+		});
+	}
+	menu->addSeparator();
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.ReactTo")), src, "react_to", VizChoices("react_to"));
+}
+
 static void FillVizMenu(QMenu *menu, obs_source_t *src)
 {
 	OBSWeakSourceAutoRelease weak = obs_source_get_weak_source(src);
@@ -1927,6 +1977,7 @@ static void FillVizMenu(QMenu *menu, obs_source_t *src)
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Colors")), src, "palette", VizChoices("palette"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.ColorMotion")), src, "color_motion",
 		      VizChoices("color_motion"));
+	AddVizReactPresets(menu->addMenu(QTStr("SPAZZ.Music.Vis.React")), src);
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Mirror")), src, "mirror", VizChoices("mirror"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Background")), src, "background", VizChoices("background"));
 	/* the SPAZZamp player styles' own screen */

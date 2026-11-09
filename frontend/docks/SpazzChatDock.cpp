@@ -361,7 +361,8 @@ private:
 			fr.format.setFont(bold);
 			fr.format.setForeground(Readable(e.color, base));
 			formats << fr;
-			full += e.m.kind == KindChat || e.m.kind == KindPaid ? QStringLiteral(": ") : QStringLiteral(" ");
+			full += e.m.kind == KindChat || e.m.kind == KindPaid ? QStringLiteral(": ")
+									     : QStringLiteral(" ");
 		}
 		const int msgStart = int(full.size());
 		full += e.text;
@@ -442,8 +443,12 @@ SpazzChatView::SpazzChatView(QWidget *parent) : QWidget(parent)
 		if (!c) {
 			continue;
 		}
-		c->onMessage = [this](const Message &m) { Receive(m); };
-		c->onStatus = [this, c]() { StatusChanged(c->Platform()); };
+		c->onMessage = [this](const Message &m) {
+			Receive(m);
+		};
+		c->onStatus = [this, c]() {
+			StatusChanged(c->Platform());
+		};
 	}
 
 	QVBoxLayout *layout = new QVBoxLayout(this);
