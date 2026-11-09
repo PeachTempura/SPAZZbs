@@ -535,7 +535,8 @@ float4 PSModernGlowTide(VertData v_in) : TARGET
 	light += glowc * 0.05 * exp(-abs(uv.y - horizon) * 30.0);
 
 	/* sea, in perspective */
-	float sea = step(horizon, uv.y) * (1.0 - smoothstep(shore - 0.02, shore + 0.01, uv.y));
+	float shorey = shore + 0.012 * sin(p.x * 1.7 + 0.5);
+	float sea = step(horizon, uv.y) * (1.0 - smoothstep(shorey - 0.02, shorey + 0.01, uv.y));
 	float dy = max(uv.y - horizon, 0.0005);
 	float z = 0.18 / dy;                        /* distance: large far away */
 	float wx = (p.x - aspect * 0.5) * z;
@@ -545,14 +546,14 @@ float4 PSModernGlowTide(VertData v_in) : TARGET
 	float3 water = float3(0.006, 0.014, 0.03) * (0.7 + 0.6 * lerp(rip, 0.5, far_k));
 	light += water * sea;
 	/* glowing crests rolling in: soft lines that thicken and break near us */
-	float rows = z * 1.3 + time * 0.18;
+	float rows = z * 1.3 + time * 0.18 + 0.35 * sin(wx * 0.45 + z * 0.3) + 0.2 * vnoise(float2(wx * 0.3, z * 0.2));
 	float wave = 0.5 + 0.5 * cos(6.2831853 * (rows + 0.15 * vnoise(float2(wx * 0.6, 3.0))));
 	float crest = pow(wave, 6.0 + 30.0 * far_k);
-	float breakn = smoothstep(0.35, 0.8, fbm4(float2(wx * 1.1 + time * 0.05, z * 0.8 - time * 0.05)));
+	float breakn = smoothstep(0.45, 0.85, fbm4(float2(wx * 1.1 + time * 0.05, z * 0.8 - time * 0.05)));
 	float near = 1.0 - far_k;
-	float glowwave = crest * breakn * (0.25 + 0.75 * near) * swell;
+	float glowwave = crest * breakn * (0.1 + 0.9 * near * near) * swell;
 	float bright = 0.8 + 0.8 * react_mix.y * calm_in.x;
-	light += glowc * glowwave * sea * bright;
+	light += glowc * glowwave * sea * bright * 1.6;
 	/* the soft glow the waves leave in the water */
 	light += glowc * 0.08 * breakn * near * sea * (0.6 + 0.4 * wave);
 	/* sparkling plankton, more where the water breaks */
@@ -564,8 +565,9 @@ float4 PSModernGlowTide(VertData v_in) : TARGET
 	light += glowc * sp * (0.2 + 1.5 * glowwave) * sea * near;
 
 	/* the wash running up the sand: a ragged glowing foam edge */
-	float wash = shore + 0.045 + 0.035 * sin(time * 0.3) * swell + 0.02 * (fbm4(float2(p.x * 3.0, time * 0.15)) - 0.5);
-	float sandm = smoothstep(shore - 0.02, shore + 0.01, uv.y);
+	float wash = shore + 0.045 + 0.03 * sin(time * 0.3) * swell + 0.025 * sin(p.x * 2.1 + time * 0.25) +
+		     0.03 * (fbm4(float2(p.x * 2.5, time * 0.12)) - 0.5);
+	float sandm = smoothstep(shorey - 0.02, shorey + 0.01, uv.y);
 	float wet = sandm * (1.0 - smoothstep(wash - px, wash + px, uv.y));
 	float foam = exp(-pow((uv.y - wash) / (0.006 + px), 2.0)) * (0.4 + 0.6 * vnoise(float2(p.x * 40.0, time * 0.5)));
 	float3 sand = float3(0.03, 0.026, 0.035) * (0.75 + 0.25 * vnoise(p * 140.0));
@@ -589,14 +591,14 @@ float3 md_lanterns(float2 p, float aspect, float px, float n, float3 warm)
 			float h1 = hash11(fi * 4.13 + 0.7);
 			float h2 = hash11(fi * 8.71 + 3.3);
 			float depth = h2;                         /* 0 far, 1 near */
-			float size = 0.018 + 0.042 * depth;
+			float size = 0.022 + 0.05 * depth;
 			float speed = 0.006 + 0.012 * depth;
 			float y = 0.72 - frac(time * speed + h1 * 3.0) * 0.95;
 			float x = (0.05 + 0.9 * hash11(fi * 2.9 + 5.5)) * aspect + 0.03 * sin(time * 0.15 + fi * 1.7);
 			float2 q = (p - float2(x, y)) / size;
 			/* a slightly tapered paper lantern, wider at the top */
 			float w = 0.62 - 0.12 * q.y;
-			float d = md_box(float2(q.x * (0.6 / w), q.y), float2(0.6, 0.85));
+			float d = md_box(float2(q.x * (0.6 / w), q.y), float2(0.45, 0.7)) - 0.15;
 			float body = 1.0 - smoothstep(-px / size, px / size * 1.5, d);
 			/* the flame glows through the paper, brightest near the bottom */
 			float inner = exp(-length(q - float2(0.0, 0.55)) * 1.4);
@@ -903,6 +905,17 @@ float4 PSModernCrystalCave(VertData v_in) : TARGET
 /* Neon · City Rain: a wet street at night, neon signs on dark          */
 /* buildings pulsing with the music, their glow smeared across the      */
 /* puddles, rain slanting down. Amount = rain.                           */
+/* bit k of a small integer stored in a float (p2 = 2^k) */
+float md_bit(float bits, float p2)
+{
+	return step(0.5, frac(floor(bits / p2) * 0.5));
+}
+
+float md_segon(float2 g, float2 a, float2 b, float on)
+{
+	return md_seg(g, a, b) + (1.0 - on) * 10.0;
+}
+
 float3 md_signs(float2 p, float aspect, float px, float stretch)
 {
 	float3 col = float3(0.0, 0.0, 0.0);
@@ -923,7 +936,29 @@ float3 md_signs(float2 p, float aspect, float px, float stretch)
 		/* the odd sign buzzes */
 		on *= 1.0 - 0.6 * step(0.86, h2) * step(0.7, hash11(floor(time * 12.0) + fi));
 		float inside = 1.0 - smoothstep(-px, px, md_box(d2, sz));
-		float tube = exp(-d * d / ((px * 1.5) * (px * 1.5))) + exp(-d / (0.012 + 0.006 * e)) * 0.35 + inside * 0.12;
+		/* neon lettering inside: made-up glyphs from seven strokes */
+		float horiz = step(sz.y, sz.x);
+		float2 lp = lerp(float2(d2.y, -d2.x), d2, horiz);
+		float2 lsz = lerp(sz.yx, sz, horiz);
+		float ch = lsz.y * 1.25;
+		float cw = ch * 0.72;
+		float nchar = max(floor((lsz.x * 2.0 - lsz.y * 0.6) / cw), 1.0);
+		float cx = (lp.x + nchar * cw * 0.5) / cw;
+		float ci = floor(cx);
+		float2 g = float2((frac(cx) - 0.5) * cw, lp.y);
+		float valid = step(0.0, ci) * step(ci, nchar - 1.0) * inside;
+		float bits = floor(hash11(ci * 3.7 + fi * 11.0) * 127.0) + 1.0;
+		float sw = cw * 0.3;
+		float shh = ch * 0.36;
+		float ds = md_segon(g, float2(-sw, -shh), float2(sw, -shh), md_bit(bits, 1.0));
+		ds = min(ds, md_segon(g, float2(-sw, 0.0), float2(sw, 0.0), md_bit(bits, 2.0)));
+		ds = min(ds, md_segon(g, float2(-sw, shh), float2(sw, shh), md_bit(bits, 4.0)));
+		ds = min(ds, md_segon(g, float2(-sw, -shh), float2(-sw, 0.0), md_bit(bits, 8.0)));
+		ds = min(ds, md_segon(g, float2(-sw, 0.0), float2(-sw, shh), md_bit(bits, 16.0)));
+		ds = min(ds, md_segon(g, float2(sw, -shh), float2(sw, 0.0), md_bit(bits, 32.0)));
+		ds = min(ds, md_segon(g, float2(sw, 0.0), float2(sw, shh), md_bit(bits, 64.0)));
+		float glyph = (exp(-ds * ds / ((px * 1.3) * (px * 1.3))) + exp(-ds / (0.004 + px)) * 0.25) * valid;
+		float tube = exp(-d * d / ((px * 1.5) * (px * 1.5))) + exp(-d / (0.012 + 0.006 * e)) * 0.35 + inside * 0.08 + glyph * 0.9;
 		float3 c3 = prism(cm_hue(hue + fi * 0.13 + react_mix.z * 0.15 * mid, p / float2(aspect, 1.0), fi / 8.0, fi));
 		col += c3 * tube * on;
 	}
@@ -953,7 +988,7 @@ float4 PSModernCityRain(VertData v_in) : TARGET
 	float2 wid = floor(wq);
 	float2 wf = frac(wq);
 	float win = step(0.72, hash21(wid + bx)) * step(0.25, wf.x) * step(wf.x, 0.75) * step(0.3, wf.y) * step(wf.y, 0.7);
-	light += float3(0.25, 0.2, 0.12) * win * bld * 0.25 * (0.7 + 0.3 * hash21(wid));
+	light += float3(0.25, 0.2, 0.12) * win * bld * 0.7 * (0.5 + 0.5 * hash21(wid));
 
 	light += md_signs(p, aspect, px, 1.0) * step(uv.y, street);
 
@@ -1266,7 +1301,7 @@ float4 PSModernHoloFoil(VertData v_in) : TARGET
 	float hx = fbm4(w + float2(e, 0.0)) + 0.35 * abs(vnoise((w + float2(e, 0.0)) * 3.1 + 7.0) - 0.5);
 	float hy = fbm4(w + float2(0.0, e)) + 0.35 * abs(vnoise((w + float2(0.0, e)) * 3.1 + 7.0) - 0.5);
 	float sway = 0.5 + 0.8 * react_mix.x * (0.5 * bass + 0.5 * mid);
-	float3 nrm = normalize(float3((hh - hx) / e * 0.06 * sway, (hh - hy) / e * 0.06 * sway, 1.0));
+	float3 nrm = normalize(float3((hh - hx) / e * 0.32 * sway, (hh - hy) / e * 0.32 * sway, 1.0));
 	/* a light sweeping slowly across */
 	float3 ldir = normalize(float3(sin(time * 0.3) * 0.6, cos(time * 0.23) * 0.5, 0.8));
 	float ndl = dot(nrm, ldir);
@@ -1277,9 +1312,11 @@ float4 PSModernHoloFoil(VertData v_in) : TARGET
 	float spec = pow(saturate(ndl), 28.0);
 	float glint = pow(saturate(ndl), 300.0) * step(0.6, hash21(floor(p * 160.0)));
 	float bright = 0.55 + 0.6 * react_mix.y * level + 0.35 * md_beat();
-	float3 silver = md3(0.35 + 0.45 * saturate(ndl));
-	float sheen = 0.35 + 0.45 * pow(1.0 - abs(dot(nrm.xy, float2(0.6, -0.8))), 2.0);
-	float3 light = lerp(silver, irid * (0.4 + 0.7 * saturate(ndl)), sheen) * bright + md3(1.0) * (spec * 0.6 + glint * 2.0) * bright;
+	/* foil: a mirror-silver sheet tinted rainbow by the film, light and dark
+	 * across its folds */
+	float shade = 0.06 + 1.25 * pow(saturate(ndl), 3.0);
+	float3 foil = lerp(md3(0.7), irid, 0.45) * shade + irid * 0.05;
+	float3 light = foil * bright + md3(1.0) * (spec * 0.7 + glint * 2.0) * bright;
 	/* sparkle drifting over it on the beat */
 	float sp = step(0.995, hash21(floor(p * 240.0) + floor(time * 8.0))) * md_beat();
 	light += md3(1.5) * sp;

@@ -220,6 +220,7 @@ struct spazz_viz {
 	/* how the colours travel (see cm_hue in the effect), and the aurora's look */
 	int color_motion;
 	bool aurora_classic;
+	bool dna_classic;
 	float cm_clock, beat_hue, beat_hue_to, beat_prev;
 	/* the slow music for the calm styles */
 	float calm_level, calm_bass, calm_treble, calm_swell, calm_swell_to;
@@ -553,6 +554,7 @@ static void viz_update(void *data, obs_data_t *settings)
 		}
 	}
 	v->aurora_classic = is(obs_data_get_string(settings, "aurora_look"), "classic");
+	v->dna_classic = is(obs_data_get_string(settings, "dna_look"), "classic");
 
 	/* music reaction: x movement, y brightness & glow, z colour, w beat */
 	v->react_amount = (float)obs_data_get_double(settings, "react_amount");
@@ -631,6 +633,7 @@ static void viz_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "palette", "prism");
 	obs_data_set_default_string(settings, "color_motion", "gradient");
 	obs_data_set_default_string(settings, "aurora_look", "deluxe");
+	obs_data_set_default_string(settings, "dna_look", "ethereal");
 	obs_data_set_default_double(settings, "react_amount", 1.0);
 	obs_data_set_default_double(settings, "react_move", 1.0);
 	obs_data_set_default_double(settings, "react_glow", 1.0);
@@ -813,9 +816,9 @@ static const char *const styles_no_density[] = {
 	"DiscoFloor",  "Synthwave",   "OceanSunset",   "VHSTape",      "NorthernLake",  "MoonlitSea",
 	"InkBloom",    "SilkRibbons", "DreamGradient", "LiquidChrome", "NeonRidges",    NULL};
 /* styles whose colours follow Colour motion */
-static const char *const styles_color_motion[] = {"PrismAurora",  "PrismWaves",     "NorthernLake",  "InkBloom",
-						  "NebulaDrift",  "SilkRibbons",    "DreamGradient", "RainGlass",
-						  "LiquidChrome", "ParticleVortex", "NeonRidges",    NULL};
+static const char *const styles_color_motion[] = {
+	"PrismAurora", "PrismWaves",   "NorthernLake",   "InkBloom",   "NebulaDrift", "SilkRibbons", "DreamGradient",
+	"RainGlass",   "LiquidChrome", "ParticleVortex", "NeonRidges", "DNAHelix",    NULL};
 static const char *const styles_no_speed[] = {"SpectrumGlass", "CandyBars", "PixelEQ", NULL};
 
 static bool in_list(const char *name, const char *const *list)
@@ -839,6 +842,7 @@ static void style_controls(obs_properties_t *props, obs_data_t *settings)
 	obs_property_set_visible(obs_properties_get(props, "speed"), all || (flags & VZ_SPEED));
 	obs_property_set_visible(obs_properties_get(props, "color_motion"), all || (flags & VZ_CMOTION));
 	obs_property_set_visible(obs_properties_get(props, "aurora_look"), all || is(style, "PrismAurora"));
+	obs_property_set_visible(obs_properties_get(props, "dna_look"), all || is(style, "DNAHelix"));
 }
 
 static bool auto_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
@@ -1034,6 +1038,9 @@ static obs_properties_t *viz_properties(void *data)
 	p = add_list(color, "aurora_look", T_("AuroraLook"));
 	obs_property_list_add_string(p, T_("AuroraLook.deluxe"), "deluxe");
 	obs_property_list_add_string(p, T_("AuroraLook.classic"), "classic");
+	p = add_list(color, "dna_look", T_("DnaLook"));
+	obs_property_list_add_string(p, T_("DnaLook.ethereal"), "ethereal");
+	obs_property_list_add_string(p, T_("DnaLook.classic"), "classic");
 	obs_properties_add_float_slider(color, "hue_shift", T_("HueShift"), 0.0, 1.0, 0.01);
 	obs_properties_add_float_slider(color, "color_speed", T_("ColorSpeed"), 0.0, 4.0, 0.05);
 	obs_properties_add_float_slider(color, "brightness", T_("Brightness"), 0.2, 3.0, 0.05);
@@ -1760,12 +1767,20 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 	}
 }
 
+/* per style: its Movement baseline, and which "classic look" switch
+ * (cmotion.z) applies to it: the aurora's or the DNA helix's */
 static void set_react(struct spazz_viz *v, struct viz_fx *fx, int idx)
 {
 	if (fx->react) {
 		struct vec4 m = v->react_mix;
 		m.x *= style_move_base(idx);
 		gs_effect_set_vec4(fx->react, &m);
+	}
+	if (fx->cmotion) {
+		const bool classic = is(styles[idx].key, "DNAHelix") ? v->dna_classic : v->aurora_classic;
+		struct vec4 cmv;
+		vec4_set(&cmv, (float)v->color_motion, v->cm_clock, classic ? 1.0f : 0.0f, v->beat_hue);
+		gs_effect_set_vec4(fx->cmotion, &cmv);
 	}
 }
 

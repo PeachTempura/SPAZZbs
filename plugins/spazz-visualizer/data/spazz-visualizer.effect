@@ -1868,17 +1868,14 @@ float4 PSPixelEQ(VertData v_in) : TARGET
 }
 
 /* ------------------------------------------------------------------ */
-/* DNA helix: two strands of beads twisting, the rungs light up with   */
-/* their band                                                           */
+/* DNA helix, Classic: two strands of beads twisting, the rungs light  */
+/* up with their band                                                   */
 
-float4 PSDNAHelix(VertData v_in) : TARGET
+float4 dna_classic(float2 uv, float aspect, float px)
 {
-	float2 uv = view_uv(v_in.uv);
-	float aspect = res.x / res.y;
-	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
 	float spacing = 0.045 / max(density, 0.3);
-	float A = 0.15 + 0.03 * bass + 0.02 * beat;
+	float A = 0.15 + 0.03 * bass * react_mix.x + 0.02 * beat * react_mix.w;
 	float k = 6.2831853 / 0.9;
 	/* 2 turns per flow wrap */
 	float phase = flow * 0.19634954;
@@ -1903,23 +1900,23 @@ float4 PSDNAHelix(VertData v_in) : TARGET
 				float ra = (1.0 - smoothstep(px * 1.2, px * 2.4, abs(p.x - x))) * step(min(ya, yb), p.y) *
 					   step(p.y, max(ya, yb));
 				float3 rc = p.y < 0.5 ? (ya < yb ? c1 : c2) : (ya < yb ? c2 : c1);
-				col = over(col, rc * (0.35 + 0.9 * e), ra * (0.35 + 0.6 * e));
-				glowl += rc * exp(-abs(p.x - x) / (px * 3.0)) * step(min(ya, yb), p.y) * step(p.y, max(ya, yb)) * e * 0.5;
+				col = over(col, rc * (0.35 + 0.9 * e * react_mix.y), ra * (0.35 + 0.6 * e * react_mix.y));
+				glowl += rc * exp(-abs(p.x - x) / (px * 3.0)) * step(min(ya, yb), p.y) * step(p.y, max(ya, yb)) * e * react_mix.y * 0.5;
 			} else {
 				for (int s = 0; s < 2; s++) {
 					float z = s == 0 ? za : -za;
 					float front = z > 0.0 ? 1.0 : 0.0;
 					if ((pass_i == 2) == (front > 0.5)) {
 						float y = s == 0 ? ya : yb;
-						float br = spacing * (0.26 + 0.1 * z) * (1.0 + 0.5 * e);
+						float br = spacing * (0.26 + 0.1 * z) * (1.0 + 0.5 * e * react_mix.x);
 						float d = length(p - float2(x, y));
 						float a = 1.0 - smoothstep(br - px, br + px, d);
 						float3 c = s == 0 ? c1 : c2;
 						float shade = 0.7 + 0.3 * z;
 						float2 hl = (p - float2(x, y)) / br + float2(0.35, 0.35);
 						float3 bead = lerp(c * shade, float3(1.0, 1.0, 1.0), exp(-dot(hl, hl) * 4.0) * 0.6 * (0.5 + 0.5 * z));
-						col = over(col, bead * (0.85 + 0.4 * e), a);
-						glowl += c * exp(-d / (br * 1.8)) * (0.15 + 0.6 * e + 0.3 * beat) * (0.6 + 0.4 * z);
+						col = over(col, bead * (0.85 + 0.4 * e * react_mix.y), a);
+						glowl += c * exp(-d / (br * 1.8)) * (0.15 + 0.6 * e * react_mix.y + 0.3 * beat * react_mix.w) * (0.6 + 0.4 * z);
 					}
 				}
 			}
@@ -1929,6 +1926,149 @@ float4 PSDNAHelix(VertData v_in) : TARGET
 	float4 base = finish(glowl, uv);
 	float3 rgb = min(graded(col.rgb), float3(1.0, 1.0, 1.0));
 	return over(base, rgb, col.a * grade.z);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* DNA helix, Ethereal: translucent strands of light with depth, glass */
+/* beads, rungs of shimmering filament, haze, drifting motes            */
+
+/* the helix's axis: it sways gently, more with the mids */
+float dna_axis(float x, float t, float sway_amt)
+{
+	return 0.5 + sway_amt * sin(x * 1.3 + t * 0.35) + 0.012 * sin(x * 3.1 - t * 0.5);
+}
+
+float4 PSDNAHelix(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float px = 1.0 / res.y;
+	if (cmotion.z > 0.5) {
+		return dna_classic(uv, aspect, px);
+	}
+	float2 pix = v_in.uv * res;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float t = time;
+	float mv = react_mix.x;
+	float gw = react_mix.y;
+	float bt = react_mix.w;
+
+	float spacing = 0.062 / max(density, 0.3);
+	float k = 6.2831853 / 1.05;
+	/* 2 turns per flow wrap, like the classic */
+	float phase = flow * 0.19634954;
+	float sway_amt = 0.018 + 0.03 * mid * mv;
+	float axis = dna_axis(p.x, t, sway_amt);
+	float A = 0.13 + 0.03 * bass * mv + 0.012 * beat * bt;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* soft haze around the helix, drifting */
+	float2 hq = float2(p.x * 1.4 - t * 0.04, (p.y - axis) * 3.0 + t * 0.03);
+	float neb = fbm4(hq);
+	float haze = exp(-abs(p.y - axis) / (0.16 + 0.05 * bass * gw)) * (0.3 + 0.7 * neb);
+	light += prism(cm_hue(hue + uv.x * 0.4 + 0.1, uv, uv.x, 0.0)) * haze *
+		 (0.05 + 0.1 * level * gw + 0.05 * calm_in.w * bt);
+
+	/* a far echo of the helix, bigger, slower and out of focus */
+	for (int s2 = 0; s2 < 2; s2++) {
+		float th2 = p.x * k * 0.55 - phase * 0.5 + 1.3 + float(s2) * 3.14159265;
+		float A2 = A * 1.9;
+		float sl2 = A2 * k * 0.55 * cos(th2);
+		float d2 = abs(p.y - (axis + A2 * sin(th2))) / sqrt(1.0 + sl2 * sl2);
+		float3 ec = prism(cm_hue(hue + 0.25 + uv.x * 0.3 + float(s2) * 0.5, uv, uv.x, 2.0 + float(s2)));
+		light += ec * exp(-d2 / 0.022) * (0.035 + 0.025 * cos(th2));
+	}
+
+	/* the two strands: glowing threads, sharp in front, soft behind */
+	float eb = band_level(saturate(abs(uv.x - 0.5) * 2.0));
+	for (int s = 0; s < 2; s++) {
+		float sf = float(s);
+		float th = p.x * k - phase + sf * 3.14159265;
+		float slope = A * k * cos(th);
+		float d = abs(p.y - (axis + A * sin(th))) / sqrt(1.0 + slope * slope);
+		float zf = 0.5 + 0.5 * cos(th);
+		float w = px * (1.1 + 5.0 * (1.0 - zf));
+		float3 c = prism(cm_hue(hue + uv.x * 0.45 + sf * 0.5, uv, uv.x, sf));
+		float bright = lerp(0.3, 1.0, zf) * (0.7 + 0.6 * eb * gw);
+		/* light travelling along each strand, brighter on the beat */
+		float pq = (frac(uv.x * 0.6 - t * 0.12 + sf * 0.5) - 0.5) * 7.0;
+		float pulse = exp(-pq * pq) * (0.25 + 1.6 * beat * bt + 0.6 * calm_in.w * bt);
+		light += lerp(c, float3(1.0, 1.0, 1.0), 0.4 * zf) * exp(-d / w) * bright * (0.8 + pulse);
+		light += c * exp(-d / (w * 6.0 + 0.012)) * bright * 0.22 * (1.0 + pulse);
+	}
+
+	/* rungs and beads at the nearest few positions */
+	float ci = floor(p.x / spacing + 0.5);
+	for (int o = -1; o <= 1; o++) {
+		float i = ci + float(o);
+		float x = i * spacing;
+		float xs = x / aspect;
+		float th = x * k - phase;
+		float ax = dna_axis(x, t, sway_amt);
+		float ya = ax + A * sin(th);
+		float yb = ax - A * sin(th);
+		float za = cos(th);
+		float e = band_level(saturate(abs(xs - 0.5) * 2.0));
+		float3 c1 = prism(cm_hue(hue + xs * 0.45, uv, xs, 0.0));
+		float3 c2 = prism(cm_hue(hue + 0.5 + xs * 0.45, uv, xs, 1.0));
+
+		/* the rung: a fine filament of light shimmering with its band */
+		float lo = min(ya, yb);
+		float hi = max(ya, yb);
+		float dxr = abs(p.x - x);
+		float inside = smoothstep(lo - px, lo + px * 2.0, p.y) * (1.0 - smoothstep(hi - px * 2.0, hi + px, p.y));
+		float tt = saturate((p.y - ya) / (yb - ya + (yb >= ya ? 0.0001 : -0.0001)));
+		float3 rc = lerp(c1, c2, tt);
+		float shimmer = 0.55 + 0.45 * sin(p.y * 180.0 - t * 7.0 + i * 1.7);
+		light += rc * inside *
+			 (exp(-dxr / (px * 0.9)) * (0.1 + 0.9 * e * gw) * shimmer + exp(-dxr / (px * 5.0)) * 0.05 * (0.4 + e * gw));
+
+		/* glass beads: a bright rim, a faint body, a highlight; the back
+		 * ones out of focus */
+		for (int s = 0; s < 2; s++) {
+			float z = s == 0 ? za : -za;
+			float zf = 0.5 + 0.5 * z;
+			float y = s == 0 ? ya : yb;
+			float3 c = s == 0 ? c1 : c2;
+			float br = spacing * (0.2 + 0.07 * z) * (1.0 + 0.35 * e * mv);
+			float2 q = (p - float2(x, y)) / br;
+			float r = length(q);
+			float soft = (1.0 + (1.0 - zf) * 5.0) * px / br;
+			float disc = 1.0 - smoothstep(1.0 - soft, 1.0 + soft, r);
+			float rim = exp(-abs(r - 0.9) / (0.09 + soft));
+			float body_l = 0.16 * disc * (1.0 - 0.6 * r * r);
+			float2 hl = q + float2(0.38, 0.38);
+			float spec = exp(-dot(hl, hl) * 18.0) * disc * zf;
+			float amt = lerp(0.3, 1.0, zf) * (0.75 + 0.6 * e * gw);
+			light += (c * (body_l + rim * 0.85) + float3(1.0, 1.0, 1.0) * spec * 1.3) * amt;
+			light += c * exp(-r * 1.4) * 0.1 * amt;
+		}
+	}
+
+	/* drifting motes of light, two depths */
+	float nearh = exp(-abs(p.y - axis) / 0.35);
+	for (int m = 0; m < 2; m++) {
+		float mf = float(m);
+		float cs = 0.09 + 0.07 * mf;
+		float2 mp = p + float2(t * (0.02 + 0.015 * mf), -t * (0.015 + 0.01 * mf));
+		float2 cell = floor(mp / cs);
+		float h = hash21(cell + mf * 13.0);
+		float2 off = float2(hash21(cell + 2.3), hash21(cell + 5.1));
+		float2 cpos = (cell + 0.2 + 0.6 * off) * cs + 0.01 * float2(sin(t * 0.7 + h * 30.0), cos(t * 0.5 + h * 20.0));
+		float dd = length(mp - cpos);
+		float rr = px * (1.4 + 2.6 * mf);
+		float tw = 0.6 + 0.4 * sin(t * (1.0 + h * 2.0) + h * 40.0);
+		light += prism(hue + h * 0.6) * step(0.55, h) * tw * exp(-dd * dd / (rr * rr)) * (0.35 + 0.3 * mf) *
+			 (0.6 + 0.6 * treble * gw) * (0.35 + 0.65 * nearh);
+	}
+
+	/* sparkles around the strands with the treble */
+	float g = hash21(floor(pix / 3.0) + floor(t * 10.0) * 0.37);
+	light += float3(1.0, 0.97, 0.95) * smoothstep(0.985, 1.0, g) * exp(-abs(p.y - axis) / (A + 0.04)) *
+		 (0.15 + 1.4 * treble * gw);
+
+	return finish_dither(light, uv, pix);
 }
 
 /* ------------------------------------------------------------------ */
