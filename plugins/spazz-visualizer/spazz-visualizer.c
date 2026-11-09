@@ -107,6 +107,60 @@ struct viz_style {
 static struct viz_style styles[MAX_STYLES];
 static size_t num_styles;
 
+/* ---- per-style knobs ("Style settings") ----------------------------
+ * A style can have its own controls. Each row adds one to the "Style
+ * settings" group, shown only while that style is picked, and feeds one
+ * slot of the shader's style knobs:
+ *   slots 0-3  style_a.xyzw   4-7  style_b.xyzw   8-11  style_c.xyzw
+ *   slot 12    style_col.rgb (a colour knob)      slot 15  style_col.w
+ * Sliders and checkboxes (0/1) put their value in the slot, lists the
+ * index of the chosen item. Anything a style doesn't set is 0.
+ * To add a knob: a row here, its label (and list items "<label>.<id>")
+ * in the locale, and read the slot in the shader. Setting names are saved
+ * in scenes, so never rename a shipped one. */
+enum knob_type { KNOB_SLIDER, KNOB_LIST, KNOB_BOOL, KNOB_COLOR };
+struct style_knob {
+	const char *style;   /* style key */
+	const char *setting; /* settings key, unique */
+	const char *label;   /* locale key (tooltip: "<label>.Tip" if present) */
+	enum knob_type type;
+	double min, max, step; /* slider range */
+	double def;            /* default: slider value, list index, bool 0/1, colour 0xRRGGBB */
+	const char *items;     /* list: comma-separated ids, labels "<label>.<id>" */
+	const char *suffix;    /* slider suffix, or NULL */
+	int slot;
+};
+static const struct style_knob knobs[] = {
+	/* Calm · Jellyfish */
+	{"ModernJellyfish", "jelly_count", "Knob.JellyCount", KNOB_SLIDER, 1, 9, 1, 5, NULL, NULL, 0},
+	{"ModernJellyfish", "jelly_size", "Knob.JellySize", KNOB_SLIDER, 0.4, 2.0, 0.05, 1.0, NULL, "x", 1},
+	{"ModernJellyfish", "jelly_drift", "Knob.JellyDrift", KNOB_SLIDER, 0.0, 3.0, 0.05, 1.0, NULL, "x", 2},
+	{"ModernJellyfish", "jelly_species", "Knob.JellySpecies", KNOB_LIST, 0, 0, 0, 3, "moon,nettle,comb,mixed", NULL,
+	 3},
+	{"ModernJellyfish", "jelly_pulse", "Knob.JellyPulse", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 4},
+	{"ModernJellyfish", "jelly_color_beat", "Knob.JellyColorBeat", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 5},
+	{"ModernJellyfish", "jelly_tentacles", "Knob.JellyTentacles", KNOB_SLIDER, 0.3, 2.0, 0.05, 1.0, NULL, "x", 6},
+	{"ModernJellyfish", "jelly_glow", "Knob.JellyGlow", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 7},
+	/* Calm · Blossom Breeze */
+	{"ModernBlossoms", "blossom_from", "Knob.BlossomFrom", KNOB_LIST, 0, 0, 0, 0,
+	 "topleft,topright,left,right,top,everywhere", NULL, 0},
+	{"ModernBlossoms", "blossom_wind_angle", "Knob.BlossomWindAngle", KNOB_SLIDER, -90, 90, 1, 0, NULL, "\xC2\xB0",
+	 1},
+	{"ModernBlossoms", "blossom_wind", "Knob.BlossomWind", KNOB_SLIDER, 0.0, 3.0, 0.05, 1.0, NULL, "x", 2},
+	{"ModernBlossoms", "blossom_gust", "Knob.BlossomGust", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 3},
+	{"ModernBlossoms", "blossom_count", "Knob.BlossomCount", KNOB_SLIDER, 0.2, 3.0, 0.05, 1.0, NULL, "x", 4},
+	{"ModernBlossoms", "blossom_size", "Knob.BlossomSize", KNOB_SLIDER, 0.4, 2.5, 0.05, 1.0, NULL, "x", 5},
+	{"ModernBlossoms", "blossom_kind", "Knob.BlossomKind", KNOB_LIST, 0, 0, 0, 0, "cherry,plum,rose,maple,hearts",
+	 NULL, 6},
+	{"ModernBlossoms", "blossom_tumble", "Knob.BlossomTumble", KNOB_SLIDER, 0.0, 3.0, 0.05, 1.0, NULL, "x", 7},
+	{"ModernBlossoms", "blossom_bokeh", "Knob.BlossomBokeh", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 8},
+	{"ModernBlossoms", "blossom_color_beat", "Knob.BlossomColorBeat", KNOB_SLIDER, 0.0, 1.0, 0.05, 0.0, NULL, NULL,
+	 9},
+	{"ModernBlossoms", "blossom_color", "Knob.BlossomColor", KNOB_COLOR, 0, 0, 0, 0xffb3c8, NULL, NULL, 12},
+	{"ModernBlossoms", "blossom_use_palette", "Knob.BlossomUsePalette", KNOB_BOOL, 0, 0, 0, 0, NULL, NULL, 15},
+};
+#define NUM_KNOBS (sizeof(knobs) / sizeof(knobs[0]))
+
 /* colour motion, in the order the effect's cm_hue numbers them */
 static const char *color_motions[] = {"gradient", "falling", "rising", "ribbons", "drift", "ripple", "beat", "flow"};
 #define NUM_COLOR_MOTIONS ((int)(sizeof(color_motions) / sizeof(color_motions[0])))
@@ -182,7 +236,7 @@ struct viz_fx {
 	gs_effect_t *effect;
 	gs_eparam_t *bands, *res, *time, *flow, *bass, *mid, *treble, *level, *beat, *hue, *density, *bg, *pal_a,
 		*pal_b, *pal_c, *pal_mix, *grade, *bg_col, *bg_flat, *view, *flip_x, *cmotion, *calm, *react, *prev,
-		*prev_on;
+		*prev_on, *style_a, *style_b, *style_c, *style_col, *music_ease;
 };
 
 struct spazz_viz {
@@ -229,6 +283,12 @@ struct spazz_viz {
 	/* how much each kind of reaction follows the music (react_mix):
 	 * x movement/bounce, y brightness/glow, z colour, w beat pulses */
 	struct vec4 react_mix;
+	/* per-style knobs (see knobs[]): each knob's value, colours as rgb */
+	float knob_val[NUM_KNOBS][3];
+	/* smooth music helpers for styles (music_ease): x a count of beats that
+	 * glides up by one on each beat (wraps at 64), y a soft pulse that
+	 * swells on each beat and fades, z the bass, smoothed slowly */
+	float beat_glide, beat_glide_to, beat_pulse, beat_pulse_to, slow_bass;
 	/* the "Music reaction" settings: how hard everything reacts, whether it
 	 * follows the slow calm version of the music, and which part of it */
 	float react_amount;
@@ -606,6 +666,31 @@ static void viz_update(void *data, obs_data_t *settings)
 	v->show_buttons = obs_data_get_bool(settings, "player_buttons");
 	v->marquee_speed = (float)obs_data_get_double(settings, "marquee_speed");
 
+	for (size_t k = 0; k < NUM_KNOBS; k++) {
+		const struct style_knob *kn = &knobs[k];
+		float *out = v->knob_val[k];
+		out[0] = out[1] = out[2] = 0.0f;
+		switch (kn->type) {
+		case KNOB_SLIDER:
+			out[0] = (float)obs_data_get_double(settings, kn->setting);
+			break;
+		case KNOB_LIST:
+			out[0] = (float)obs_data_get_int(settings, kn->setting);
+			break;
+		case KNOB_BOOL:
+			out[0] = obs_data_get_bool(settings, kn->setting) ? 1.0f : 0.0f;
+			break;
+		case KNOB_COLOR: {
+			struct vec3 c;
+			color_from_obs(&c, obs_data_get_int(settings, kn->setting));
+			out[0] = c.x;
+			out[1] = c.y;
+			out[2] = c.z;
+			break;
+		}
+		}
+	}
+
 	v->auto_secs = (float)obs_data_get_double(settings, "auto_switch");
 	v->auto_shuffle = obs_data_get_bool(settings, "auto_shuffle");
 	v->fade_secs = (float)obs_data_get_double(settings, "crossfade");
@@ -674,6 +759,23 @@ static void viz_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "player_seek", true);
 	obs_data_set_default_bool(settings, "player_buttons", true);
 	obs_data_set_default_double(settings, "marquee_speed", 1.0);
+	for (size_t k = 0; k < NUM_KNOBS; k++) {
+		const struct style_knob *kn = &knobs[k];
+		switch (kn->type) {
+		case KNOB_SLIDER:
+			obs_data_set_default_double(settings, kn->setting, kn->def);
+			break;
+		case KNOB_LIST:
+			obs_data_set_default_int(settings, kn->setting, (long long)kn->def);
+			break;
+		case KNOB_BOOL:
+			obs_data_set_default_bool(settings, kn->setting, kn->def > 0.5);
+			break;
+		case KNOB_COLOR:
+			obs_data_set_default_int(settings, kn->setting, obs_color((uint32_t)kn->def));
+			break;
+		}
+	}
 }
 
 static bool add_audio_source(void *param, obs_source_t *src)
@@ -845,6 +947,14 @@ static void style_controls(obs_properties_t *props, obs_data_t *settings)
 	obs_property_set_visible(obs_properties_get(props, "color_motion"), all || (flags & VZ_CMOTION));
 	obs_property_set_visible(obs_properties_get(props, "aurora_look"), all || is(style, "PrismAurora"));
 	obs_property_set_visible(obs_properties_get(props, "dna_look"), all || is(style, "DNAHelix"));
+	/* the style's own knobs */
+	bool any = false;
+	for (size_t k = 0; k < NUM_KNOBS; k++) {
+		const bool mine = is(style, knobs[k].style);
+		obs_property_set_visible(obs_properties_get(props, knobs[k].setting), mine);
+		any = any || mine;
+	}
+	obs_property_set_visible(obs_properties_get(props, "grp_style"), any);
 }
 
 static bool auto_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
@@ -978,6 +1088,49 @@ static obs_properties_t *viz_properties(void *data)
 	obs_property_float_set_suffix(p, "x");
 	p = obs_properties_add_group(props, "grp_player", T_("Group.Player"), OBS_GROUP_NORMAL, pl);
 	obs_property_set_long_description(p, T_("Group.Player.Tip"));
+
+	/* the chosen style's own knobs */
+	obs_properties_t *own = obs_properties_create();
+	for (size_t k = 0; k < NUM_KNOBS; k++) {
+		const struct style_knob *kn = &knobs[k];
+		obs_property_t *kp = NULL;
+		switch (kn->type) {
+		case KNOB_SLIDER:
+			kp = obs_properties_add_float_slider(own, kn->setting, T_(kn->label), kn->min, kn->max,
+							     kn->step);
+			if (kn->suffix) {
+				obs_property_float_set_suffix(kp, kn->suffix);
+			}
+			break;
+		case KNOB_LIST: {
+			kp = obs_properties_add_list(own, kn->setting, T_(kn->label), OBS_COMBO_TYPE_LIST,
+						     OBS_COMBO_FORMAT_INT);
+			const char *it = kn->items;
+			long long idx = 0;
+			while (it && *it) {
+				const char *end = strchr(it, ',');
+				const size_t len = end ? (size_t)(end - it) : strlen(it);
+				snprintf(key, sizeof(key), "%s.%.*s", kn->label, (int)len, it);
+				obs_property_list_add_int(kp, T_(key), idx++);
+				it = end ? end + 1 : NULL;
+			}
+			break;
+		}
+		case KNOB_BOOL:
+			kp = obs_properties_add_bool(own, kn->setting, T_(kn->label));
+			break;
+		case KNOB_COLOR:
+			kp = obs_properties_add_color(own, kn->setting, T_(kn->label));
+			break;
+		}
+		snprintf(key, sizeof(key), "%s.Tip", kn->label);
+		const char *tip = obs_module_text(key);
+		if (kp && tip && strcmp(tip, key) != 0) {
+			obs_property_set_long_description(kp, tip);
+		}
+	}
+	p = obs_properties_add_group(props, "grp_style", T_("Group.Style"), OBS_GROUP_NORMAL, own);
+	obs_property_set_long_description(p, T_("Group.Style.Tip"));
 
 	/* how it moves with the music */
 	obs_properties_t *motion = obs_properties_create();
@@ -1273,6 +1426,11 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 		fx->calm = gs_effect_get_param_by_name(e, "calm_in");
 		fx->prev = gs_effect_get_param_by_name(e, "prev");
 		fx->prev_on = gs_effect_get_param_by_name(e, "prev_on");
+		fx->style_a = gs_effect_get_param_by_name(e, "style_a");
+		fx->style_b = gs_effect_get_param_by_name(e, "style_b");
+		fx->style_c = gs_effect_get_param_by_name(e, "style_c");
+		fx->style_col = gs_effect_get_param_by_name(e, "style_col");
+		fx->music_ease = gs_effect_get_param_by_name(e, "music_ease");
 	}
 
 	if (v->fx[0].effect) {
@@ -1701,6 +1859,21 @@ static void viz_tick(void *data, float seconds)
 	if (v->o_beat > 0.6f && v->beat_prev <= 0.6f) {
 		v->beat_hue_to += (0.09f + 0.06f * (float)(rand() % 100) / 100.0f) * v->react_mix.z;
 	}
+	/* music_ease: a beat count that glides up by one per beat, and a soft
+	 * pulse (rises in ~0.1 s, fades over ~0.8 s) for styles that move in
+	 * time with the beat without jumping */
+	if (v->o_beat > 0.6f && v->beat_prev <= 0.6f) {
+		v->beat_glide_to += 1.0f;
+		v->beat_pulse_to = 1.0f;
+	}
+	v->beat_glide += (v->beat_glide_to - v->beat_glide) * (1.0f - expf(-seconds / 0.3f));
+	if (v->beat_glide >= 64.0f && v->beat_glide_to >= 64.0f) {
+		v->beat_glide -= 64.0f;
+		v->beat_glide_to -= 64.0f;
+	}
+	v->beat_pulse_to *= expf(-seconds / 0.45f);
+	v->beat_pulse += (v->beat_pulse_to - v->beat_pulse) * (1.0f - expf(-seconds / 0.1f));
+	v->slow_bass += (fminf(v->o_bass, 1.5f) - v->slow_bass) * (1.0f - expf(-seconds / 0.9f));
 	v->beat_prev = v->o_beat;
 	v->beat_hue += (v->beat_hue_to - v->beat_hue) * (1.0f - expf(-seconds / 0.35f));
 	{
@@ -1841,8 +2014,47 @@ static bool draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 
 /* per style: its Movement baseline, and which "classic look" switch
  * (cmotion.z) applies to it: the aurora's or the DNA helix's */
+/* the style's own knobs into style_a/b/c/col (0 where it has none) */
+static void set_knobs(struct spazz_viz *v, struct viz_fx *fx, int idx)
+{
+	float slots[16] = {0};
+	for (size_t k = 0; k < NUM_KNOBS; k++) {
+		if (!is(styles[idx].key, knobs[k].style)) {
+			continue;
+		}
+		const int slot = knobs[k].slot;
+		if (knobs[k].type == KNOB_COLOR) {
+			if (slot >= 0 && slot + 2 < 16) {
+				slots[slot] = v->knob_val[k][0];
+				slots[slot + 1] = v->knob_val[k][1];
+				slots[slot + 2] = v->knob_val[k][2];
+			}
+		} else if (slot >= 0 && slot < 16) {
+			slots[slot] = v->knob_val[k][0];
+		}
+	}
+	struct vec4 q;
+	if (fx->style_a) {
+		vec4_set(&q, slots[0], slots[1], slots[2], slots[3]);
+		gs_effect_set_vec4(fx->style_a, &q);
+	}
+	if (fx->style_b) {
+		vec4_set(&q, slots[4], slots[5], slots[6], slots[7]);
+		gs_effect_set_vec4(fx->style_b, &q);
+	}
+	if (fx->style_c) {
+		vec4_set(&q, slots[8], slots[9], slots[10], slots[11]);
+		gs_effect_set_vec4(fx->style_c, &q);
+	}
+	if (fx->style_col) {
+		vec4_set(&q, slots[12], slots[13], slots[14], slots[15]);
+		gs_effect_set_vec4(fx->style_col, &q);
+	}
+}
+
 static void set_react(struct spazz_viz *v, struct viz_fx *fx, int idx)
 {
+	set_knobs(v, fx, idx);
 	if (fx->react) {
 		struct vec4 m = v->react_mix;
 		m.x *= style_move_base(idx);
@@ -1966,6 +2178,11 @@ static void set_common(struct spazz_viz *v, struct viz_fx *fx, const struct vec2
 	}
 	if (fx->react) {
 		gs_effect_set_vec4(fx->react, &v->react_mix);
+	}
+	if (fx->music_ease) {
+		struct vec4 me;
+		vec4_set(&me, v->beat_glide, v->beat_pulse, v->slow_bass, 0.0f);
+		gs_effect_set_vec4(fx->music_ease, &me);
 	}
 	SETF(fx->density, v->density);
 	SETF(fx->bg, v->bg_opacity);

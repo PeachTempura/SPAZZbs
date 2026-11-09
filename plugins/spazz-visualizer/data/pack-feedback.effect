@@ -46,6 +46,17 @@ uniform float flip_x;
 uniform float4 cmotion;  /* x colour motion, y its 0..1 clock, z aurora look (1 classic), w beat colour step */
 uniform float4 calm_in;  /* the slow music for the calm styles: x level, y bass, z treble, w a gentle swell */
 uniform float4 react_mix;    /* how much each reaction follows the music: x movement/bounce, y brightness/glow, z colour, w beat pulses (0 = none, 1 = normal, 2 = double) */
+/* the chosen style's own knobs ("Style settings"; see knobs[] in the C
+ * code): sliders/checkboxes/list indices in style_a/b/c, a colour in
+ * style_col.rgb (+ style_col.w). 0 where a style has no knob. */
+uniform float4 style_a;
+uniform float4 style_b;
+uniform float4 style_c;
+uniform float4 style_col;
+/* smooth music helpers: x a beat count that glides up by one on each beat
+ * (wraps at 64), y a soft pulse on each beat (rises ~0.1 s, fades ~0.8 s),
+ * z the bass smoothed slowly */
+uniform float4 music_ease;
 
 /* feedback styles (MilkDrop-like): last frame, and
  * prev_on: x 1 when prev holds last frame (0 on the first frame / after a

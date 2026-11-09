@@ -46,6 +46,17 @@ uniform float flip_x;
 uniform float4 cmotion;  /* x colour motion, y its 0..1 clock, z aurora look (1 classic), w beat colour step */
 uniform float4 calm_in;  /* the slow music for the calm styles: x level, y bass, z treble, w a gentle swell */
 uniform float4 react_mix;    /* how much each reaction follows the music: x movement/bounce, y brightness/glow, z colour, w beat pulses (0 = none, 1 = normal, 2 = double) */
+/* the chosen style's own knobs ("Style settings"; see knobs[] in the C
+ * code): sliders/checkboxes/list indices in style_a/b/c, a colour in
+ * style_col.rgb (+ style_col.w). 0 where a style has no knob. */
+uniform float4 style_a;
+uniform float4 style_b;
+uniform float4 style_c;
+uniform float4 style_col;
+/* smooth music helpers: x a beat count that glides up by one on each beat
+ * (wraps at 64), y a soft pulse on each beat (rises ~0.1 s, fades ~0.8 s),
+ * z the bass smoothed slowly */
+uniform float4 music_ease;
 
 /* feedback styles (MilkDrop-like): last frame, and
  * prev_on: x 1 when prev holds last frame (0 on the first frame / after a
@@ -414,100 +425,246 @@ float4 PSModernSoftOrbs(VertData v_in) : TARGET
 }
 
 /* ------------------------------------------------------------------ */
-/* Calm · Jellyfish: translucent jellyfish drifting up through deep    */
-/* water, bells breathing, frilled rims and long trailing tentacles,   */
-/* soft light from the surface and drifting marine snow.               */
-/* Amount = how many (up to 7).                                         */
+/* Calm · Jellyfish: moon jellies, sea nettles and comb jellies         */
+/* drifting through deep water. A bell swims by pulsing: a quick        */
+/* squeeze, then a long glide while it relaxes, and the tentacles and   */
+/* oral arms trail behind its path. On a beat the bell gives a stronger */
+/* (eased) pulse and the colours step on; the bass swells the glow.     */
+/* Style settings (style_a/b): x count, y size, z drift, w species      */
+/* (moon, nettle, comb, mixed); b.x beat pulse, b.y colour on beat,     */
+/* b.z tentacle length, b.w glow.                                        */
+
+/* where jellyfish fi is at time t (aspect units, y down), before the
+ * beat kick; sp = drift speed, rr = bell size, span = wrap height */
+float2 jf_path(float fi, float t, float sp, float aspect, float span)
+{
+	float h1 = hash11(fi * 39.59 + 0.3);
+	float h2 = hash11(fi * 97.37 + 2.0);
+	float f = 0.22 + 0.12 * h2; /* pulses per second */
+	float u = t * f * (0.4 + 0.6 * sp);
+	/* a surge after each squeeze, then coasting */
+	float rise = (0.35 * u + 0.65 * (floor(u) + smoothstep(0.08, 0.6, frac(u)))) * 0.05 * (0.25 + sp);
+	float y = 1.0 - frac(rise / span + h1) * span;
+	float x = (0.12 + 0.76 * hash11(fi * 56.71 + 1.1)) * aspect + 0.16 * sin(t * 0.037 * (0.3 + sp) + fi * 2.1) +
+		  0.06 * sin(t * 0.083 * (0.3 + sp) + fi * 4.7);
+	return float2(x, y);
+}
+
+/* the squeeze: quick in, slow out (0 relaxed .. 1 squeezed) */
+float jf_squeeze(float fi, float t, float sp)
+{
+	float h2 = hash11(fi * 97.37 + 2.0);
+	float u = frac(t * (0.22 + 0.12 * h2) * (0.4 + 0.6 * sp));
+	return smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.12, 0.75, u));
+}
+
 float4 PSModernJellyfish(VertData v_in) : TARGET
 {
 	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
 	float px = 1.0 / res.y;
-	float e = calm_in.x;
+
+	float count = clamp(floor(style_a.x + 0.5), 1.0, 9.0);
+	float ksize = style_a.y;
+	float drift = style_a.z;
+	float species = style_a.w;
+	float kpulse = style_b.x * react_mix.w;
+	float kglow = style_b.w;
+	float tlen = style_b.z;
+	/* colour steps on with each beat; whole 1/64 steps so the 64-beat wrap
+	 * of the glide never jumps */
+	float cstep = floor(style_b.y * react_mix.z * 8.0 + 0.5) / 64.0;
+	float beatshift = music_ease.x * cstep;
+	float bpulse = saturate(music_ease.y) * kpulse;
+	float swell = (0.85 + 0.5 * react_mix.y * (music_ease.z * 0.6 + calm_in.x * 0.5)) * kglow;
 
 	/* deep water, lighter towards the surface */
-	float3 water = md_tint(float3(0.03, 0.16, 0.24), hue + 0.5);
-	float3 light = lerp(water * 0.55, water * 0.06, smoothstep(0.0, 1.0, uv.y)) * (0.8 + 0.4 * react_mix.y * e);
+	float3 water = md_tint(float3(0.03, 0.15, 0.23), hue + 0.5);
+	float3 light = lerp(water * 0.6, water * 0.05, smoothstep(0.0, 1.0, uv.y));
 	/* slow shafts of light from above */
 	float rx = p.x + uv.y * 0.3;
-	float shafts = fbm4(float2(rx * 3.2 + time * 0.02, time * 0.04));
-	light += water * 0.9 * pow(saturate(shafts * 1.25 - 0.15), 3.0) * (1.0 - uv.y) * (1.0 + 0.5 * calm_in.w);
-
-	/* marine snow, two depths */
+	float shafts = fbm4(float2(rx * 3.0 + time * 0.015, time * 0.03));
+	light += water * 0.8 * pow(saturate(shafts * 1.25 - 0.15), 3.0) * (1.0 - uv.y) * (1.0 + 0.4 * calm_in.w);
+	/* marine snow, two depths, sinking slowly */
 	for (int k = 0; k < 2; k++) {
 		float fk = float(k);
-		float s = 16.0 + 20.0 * fk;
-		float2 q = p * s + float2(sin(time * 0.1 + fk) * 0.5, -time * (0.25 + 0.2 * fk));
+		float s = 18.0 + 22.0 * fk;
+		float2 q = p * s + float2(sin(time * 0.08 + fk) * 0.5, -time * (0.12 + 0.1 * fk));
 		float2 id = floor(q);
 		float2 f = frac(q) - 0.5;
 		float h = hash21(id + fk * 13.0);
 		float2 o = float2(hash21(id + 3.1), hash21(id + 7.7)) - 0.5;
 		float d = length(f - o * 0.7) / s;
-		light += md3(0.12 + 0.1 * fk) * step(0.88, h) * exp(-d * d / (px * px * (1.2 + 1.6 * (1.0 - fk))));
+		light += md3(0.1 + 0.08 * fk) * step(0.9, h) * exp(-d * d / (px * px * (1.2 + 1.8 * (1.0 - fk))));
 	}
 
-	float n = clamp(floor(3.0 + 2.5 * density), 1.0, 7.0);
-	for (int i = 0; i < 7; i++) {
+	for (int i = 0; i < 9; i++) {
 		float fi = float(i);
-		if (fi < n) {
-			float h1 = hash11(fi * 3.7 + 0.3);
-			float h2 = hash11(fi * 9.1 + 2.0);
-			float size = 0.075 + 0.09 * h2; /* bell radius; bigger = nearer */
-			float rise = 0.008 + 0.01 * h1;
-			float y = 1.5 - frac(time * rise + h1 * 1.7) * 2.3;
-			float x = (0.1 + 0.8 * hash11(fi * 5.3 + 1.1)) * aspect + 0.06 * sin(time * 0.17 + fi * 2.0);
-			float ph = time * (1.1 + 0.7 * react_mix.x * calm_in.y) * (0.7 + 0.5 * h2) + fi * 1.9;
-			float pulse = 0.5 + 0.5 * sin(ph);
-			float2 q = (p - float2(x, y)) / size;
-			float upx = px / size;
+		if (fi < count) {
+			float h1 = hash11(fi * 39.59 + 0.3);
+			float h3 = hash11(fi * 24.61 + 7.0);
+			/* far ones first, so nearer ones sit in front */
+			float depth = saturate((fi + 0.25 + 0.5 * h3) / count);
+			float rr = (0.06 + 0.085 * depth) * ksize; /* bell radius */
+			/* species: moon, nettle, comb, or a mix */
+			float sp_k = species;
+			if (species > 2.5) {
+				float hs = hash11(fi * 65.27 + 4.4);
+				sp_k = hs < 0.45 ? 0.0 : (hs < 0.8 ? 1.0 : 2.0);
+			}
+			float is_moon = 1.0 - step(0.5, sp_k);
+			float is_nettle = step(0.5, sp_k) * (1.0 - step(1.5, sp_k));
+			float is_comb = step(1.5, sp_k);
 
-			/* the bell: a dome that squeezes as it swims */
-			float sx = 1.0 + 0.13 * pulse;
-			float sy = 1.0 - 0.1 * pulse;
-			float2 b = float2(q.x / sx, q.y / sy);
-			float r = length(float2(b.x, b.y * 1.18));
-			float cut = 0.22 + 0.04 * sin(b.x * 16.0 + ph * 1.5); /* the frilled open rim */
-			float inside = (1.0 - smoothstep(1.0 - 1.5 * upx, 1.0 + 1.5 * upx, r)) *
-				       (1.0 - smoothstep(cut - 1.5 * upx, cut + 1.5 * upx, b.y));
-			float rimlight = smoothstep(0.55, 1.0, r);           /* edges glow (seen edge-on) */
-			float frill = exp(-pow((b.y - cut) / 0.05, 2.0)) * (1.0 - smoothstep(0.95, 1.05, abs(b.x)));
-			float core = exp(-length(b - float2(0.0, -0.2)) * 3.2);
-			float lobes = pow(0.5 + 0.5 * cos(atan2(b.x, b.y + 0.15) * 4.0), 4.0) * exp(-r * r * 5.0);
-			float bell = inside * (0.18 + 0.9 * rimlight + 0.5 * lobes) + frill * 0.9 + core * 0.35 * inside;
+			float tl = rr * tlen * (1.2 * is_moon + 4.2 * is_nettle + 2.6 * is_comb);
+			float span = 1.0 + rr * 2.0 + tl + 0.1;
+			/* each beat kicks it up a little (whole steps of the wrap) */
+			float kq = floor(saturate(kpulse) * 2.0 + 0.5) / 64.0;
+			float2 c = jf_path(fi, time, drift, aspect, span);
+			c.y = 1.0 + rr - frac((1.0 + rr - c.y) / span + music_ease.x * kq) * span;
+			c.y += rr * 0.3;
+			float2 d0 = p - c;
+			float hc = cm_hue(hue + h1 * 0.85 + 0.08 * sp_k + beatshift, uv, saturate(d0.y / max(tl, 0.001)), fi);
+			float3 col = prism(hc);
+			float bright = (0.3 + 0.7 * depth) * swell;
+			/* a soft glow in the water around the bell */
+			float hd = length(float2(d0.x, d0.y + rr * 0.3)) / rr;
+			light += col * exp(-max(hd - 0.7, 0.0) * 2.2) * 0.05 * bright * (1.0 + 0.6 * bpulse);
+			/* outside its box (bell + trailing tentacles): nothing more to do */
+			if (abs(d0.x) < rr * 2.6 + tl * 0.35 && d0.y > -rr * 1.6 && d0.y < tl + rr * 0.6) {
+				float sq = jf_squeeze(fi, time, drift) * (1.0 - 0.6 * is_comb);
+				sq = saturate(sq * 0.8 + bpulse * 0.9 * (1.0 - is_comb));
+				/* lean a little into where it's going */
+				float2 cprev = jf_path(fi, time - 0.6, drift, aspect, span);
+				float tilt = clamp((c.x - cprev.x) * 6.0, -0.35, 0.35);
+				float upx = px / rr;
+				float aa = upx * (1.2 + 5.0 * (1.0 - depth)); /* far ones are soft */
 
-			/* tentacles, swaying in the bell's wake */
-			float tent = 0.0;
-			float len = 2.4 + 1.6 * h1;
-			for (int t = 0; t < 7; t++) {
-				float ft = float(t);
-				float yy = q.y - 0.24;
-				if (yy > 0.0 && yy < len) {
-					float tx = (ft / 6.0 - 0.5) * 1.5 * sx;
-					float k = yy / len;
-					float xx = tx * (1.0 - 0.35 * k) + (0.1 + 0.08 * hash11(ft + fi)) * sin(yy * 3.2 - ph * 1.2 + ft * 1.7) * yy;
-					float w = (0.035 + 0.02 * hash11(ft * 2.0 + fi)) * (1.0 - 0.6 * k) + upx;
-					float dd = (q.x - xx) / w;
-					tent += exp(-dd * dd) * (1.0 - k) * (1.0 - k) * (0.5 + 0.5 * hash11(ft + 3.0 * fi));
+				float3 pale = lerp(col, float3(1.0, 1.0, 1.0), 0.45);
+
+				/* ---- the bell (moon and nettle) / the body (comb) ---- */
+				float2 q = rot2(d0, -tilt) / rr; /* origin at the rim, y down */
+				float bw = (1.0 - 0.17 * sq) * (1.0 - 0.15 * is_nettle);
+				float bh = (0.55 + 0.3 * is_nettle) * (1.0 + 0.16 * sq);
+				/* the margin hangs a little lower at the edges and curls in when squeezed */
+				float xn = q.x / bw;
+				float rimy = (0.1 - 0.06 * sq) * pow(saturate(abs(xn)), 4.0) - 0.05 * (1.0 - xn * xn) * (0.4 + sq) +
+					     (0.012 * is_moon + 0.02 * is_nettle) * abs(sin(xn * (14.0 + 6.0 * is_moon) + fi));
+				float e = length(float2(xn, min(q.y, 0.0) / bh));
+				float body = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, e)) * (1.0 - smoothstep(rimy - aa, rimy + aa, q.y));
+				body *= 1.0 - is_comb;
+				float edge = smoothstep(0.55, 1.0, e) * body;
+				float inner = exp(-e * e * 2.2) * body;
+				/* radial canals (moon) / broad stripes (nettle), from the top of the bell */
+				float ang = atan2(q.x, -(q.y + bh * 0.95));
+				float canals = pow(abs(cos(ang * 9.0)), 24.0) * is_moon;
+				float stripes = (0.5 + 0.5 * cos(ang * 14.0)) * is_nettle;
+				/* moon jelly: four horseshoe gonads, seen through the bell */
+				float gon = 0.0;
+				for (int g = 0; g < 4; g++) {
+					float ga = (float(g) + 0.5) * 1.5707963;
+					float2 gc = float2(cos(ga) * 0.34 * bw, -bh * 0.5 + sin(ga) * 0.16 * bh);
+					float2 gq = float2(q.x - gc.x, (q.y - gc.y) / 0.6);
+					float rg = length(gq);
+					float2 outw = normalize(float2(gc.x, (gc.y + bh * 0.5) / 0.6) + float2(0.0001, 0.0001));
+					float open = smoothstep(-0.6, 0.3, -dot(gq / max(rg, 0.0001), outw));
+					float gr = (rg - 0.13) / 0.075;
+					gon += exp(-gr * gr) * (0.35 + 0.65 * open);
 				}
-			}
-			/* two long oral arms in the middle */
-			float yy2 = q.y - 0.1;
-			if (yy2 > 0.0 && yy2 < len * 0.6) {
-				float k2 = yy2 / (len * 0.6);
-				float xx2 = 0.12 * sin(yy2 * 2.2 - ph + fi) * (0.5 + k2);
-				float w2 = 0.09 * (1.0 - 0.7 * k2) + upx;
-				float d2 = (q.x - xx2) / w2;
-				tent += exp(-d2 * d2) * (1.0 - k2) * 0.6 * (0.6 + 0.4 * sin(yy2 * 14.0 - ph * 2.0));
-			}
+				gon *= is_moon * body;
+				float bell = inner * 0.2 + edge * 0.85 + canals * body * 0.2 + gon * 0.38;
+				bell *= 1.0 - 0.35 * stripes;
+				bell += 0.25 * smoothstep(-0.25 * bh, 0.0, q.y) * body; /* light inside the opening */
+				/* a soft sheen up on the dome */
+				bell += 0.35 * exp(-length(float2(q.x + 0.35 * bw, (q.y + 0.72 * bh) * 1.6)) * 7.0) * body;
 
-			float hcol = cm_hue(hue + h1 * 0.55 + react_mix.z * 0.12 * calm_in.z, uv, saturate(q.y * 0.25 + 0.3), fi);
-			float3 col = prism(hcol);
-			float near = smoothstep(0.075, 0.165, size);
-			float glow = (0.35 + 0.65 * near) * (0.55 + 0.8 * react_mix.y * calm_e(h1, 0.6));
-			light += col * (bell + tent * 0.55) * glow;
-			/* a soft halo in the water around the bell */
-			light += col * exp(-max(r - 0.9, 0.0) * 2.5) * 0.05 * glow;
+				/* comb jelly: a clear egg with eight rows of rainbow-shimmering combs */
+				float2 cq = float2(q.x / 0.62, (q.y + 0.55) / 0.85);
+				float ce = length(cq);
+				float cbody = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, ce)) * is_comb;
+				float combs = 0.0;
+				float spin = time * 0.25 + fi;
+				for (int r = 0; r < 4; r++) {
+					float th = float(r) * 0.785398 + spin;
+					float front = cos(th);
+					float wx = sin(th) * sqrt(saturate(1.0 - cq.y * cq.y));
+					float dd = abs(cq.x - wx) / (0.05 + upx * 1.5);
+					float row = exp(-dd * dd) * smoothstep(0.95, 0.75, abs(cq.y));
+					/* the cilia beat in waves that run down each row */
+					float wave = 0.5 + 0.5 * sin(cq.y * 18.0 - time * (4.0 + 6.0 * bpulse) + float(r));
+					combs += row * (0.35 + 0.65 * wave) * (0.4 + 0.6 * saturate(front + 0.4));
+					/* and the row behind, mirrored */
+					float dd2 = abs(cq.x + wx) / (0.05 + upx * 1.5);
+					combs += exp(-dd2 * dd2) * smoothstep(0.95, 0.75, abs(cq.y)) * 0.25 * wave;
+				}
+				combs *= cbody;
+				float cedge = smoothstep(0.6, 1.0, ce) * cbody;
+				float3 comb_col = prism(hc + cq.y * 0.6 - time * 0.3);
+				cedge *= 0.55;
+
+				/* ---- what trails behind: offset along the path it came by ---- */
+				float sdown = max(d0.y, 0.0);
+				float2 lagc = jf_path(fi, time - sdown / rr * 0.18 / (0.3 + drift), drift, aspect, span);
+				float lagx = (lagc.x - (c.x)) / rr;
+				float sn = sdown / max(tl, 0.0001);
+				float trail = 0.0;
+				float arms = 0.0;
+				if (sdown > 0.0 && sn < 1.0) {
+					float qx = d0.x / rr - lagx * (1.0 - 0.6 * is_comb);
+					float yq = sdown / rr;
+					float ph = time * 1.6 * (0.4 + 0.6 * drift) + fi;
+					/* moon: a fringe of many fine short tentacles along the margin */
+					float fr_len = 0.35 * tlen;
+					if (is_moon > 0.5 && yq < fr_len + 0.12) {
+						float fs = yq / max(fr_len, 0.01);
+						float sway = 0.06 * sin(yq * 9.0 - ph + qx * 2.0) * fs;
+						float lines = abs(frac((qx + sway) * 14.0 / bw) - 0.5);
+						float m = (1.0 - smoothstep(0.08, 0.2 + upx * 14.0, lines)) * (1.0 - smoothstep(0.0, 1.0, fs));
+						trail += m * (1.0 - smoothstep(bw * 0.95, bw * 1.05, abs(qx))) * 0.7;
+					}
+					/* long thin tentacles (nettle, comb) */
+					float nt = is_nettle * 8.0 + is_comb * 2.0;
+					for (int t = 0; t < 8; t++) {
+						float ft = float(t);
+						if (ft < nt) {
+							float side = is_comb > 0.5 ? (ft - 0.5) * 0.7 : (ft / 7.0 - 0.5) * 1.6 * bw;
+							float k = yq * rr / max(tl, 0.0001);
+							float amp = (0.25 + 0.3 * hash11(ft + fi * 3.0)) * k;
+							float xx = side * (1.0 + 0.3 * k) + amp * sin(yq * (1.1 + 0.5 * hash11(ft + 9.0)) - ph * 0.8 + ft * 1.9);
+							float w = 0.011 + upx * 1.1;
+							float dd = (qx - xx) / w;
+							trail += exp(-dd * dd) * pow(1.0 - k, 1.3) * (0.35 + 0.35 * hash11(ft * 2.0 + fi));
+						}
+					}
+					/* oral arms: ruffled curtains from the middle */
+					float na = 4.0 * (1.0 - is_comb);
+					float alen = rr * tlen * (0.9 * is_moon + 2.8 * is_nettle);
+					for (int a = 0; a < 4; a++) {
+						float fa = float(a);
+						if (fa < na && sdown < alen) {
+							float k = sdown / max(alen, 0.0001);
+							float x0 = (fa / 3.0 - 0.5) * 0.3 * bw;
+							float xx = x0 * (1.0 + k) + (0.08 + 0.1 * is_nettle) * sin(yq * 2.4 - ph * 0.7 + fa * 1.7) * (0.3 + k);
+							float ruffle = 0.65 + 0.35 * sin(yq * 22.0 - time * 1.2 + fa * 2.0);
+							float w = ((0.05 + 0.06 * is_nettle) * (1.0 - 0.55 * k) * ruffle) + upx;
+							float dd = abs(qx - xx) / w;
+							/* bright folded edges, softer middle */
+							float m = (1.0 - smoothstep(0.85, 1.0 + upx * 3.0 / w, dd)) * (0.35 + 0.65 * smoothstep(0.3, 0.95, dd));
+							arms += m * (1.0 - k * k) * 0.8;
+						}
+					}
+				}
+
+				/* far ones fade into the water */
+				float3 fogc = lerp(water * 2.5, col, 0.35 + 0.65 * depth);
+				float3 add = lerp(fogc, col, depth) * (bell * (1.0 + 0.5 * bpulse) + trail * 0.55) * bright;
+				add += pale * arms * 0.5 * bright;
+				add += (comb_col * combs * 1.3 + col * cedge * 0.5 + col * cbody * 0.06) * bright;
+				/* the bell shades what's behind it a little, glows into the water around it */
+				light *= 1.0 - 0.25 * (body + cbody) * depth;
+				light += add;
+			}
 		}
 	}
 	return finish_dither(light, uv, v_in.uv * res);
@@ -721,60 +878,253 @@ float4 PSModernSunbeams(VertData v_in) : TARGET
 }
 
 /* ------------------------------------------------------------------ */
-/* Calm · Blossom Breeze: cherry blossom petals tumbling on the wind at */
-/* four depths over a soft dusk with out-of-focus lights.               */
-/* Amount = how many petals.                                             */
+/* Calm · Blossom Breeze: petals (or leaves, or hearts) blown off a     */
+/* blossoming branch in a corner, tumbling on the wind at four depths  */
+/* over a soft dusk with out-of-focus lights.                           */
+/* Style settings: a.x where from (top-left, top-right, left, right,    */
+/* top, everywhere), a.y wind angle (degrees, 0 = away from the corner), */
+/* a.z wind strength, a.w gusts; b.x how many, b.y size, b.z kind       */
+/* (cherry, plum, rose, maple, hearts), b.w tumble; c.x bokeh, c.y      */
+/* colour shift on the beat; style_col rgb the colour, w "use palette". */
+/* Music: the bass swirls the gusts, each beat gives a puff of wind.    */
+
+/* turn a colour's hue by a (turns) */
+float3 bb_hue_turn(float3 c, float a)
+{
+	float ang = a * 6.2831853;
+	float cs = cos(ang);
+	float sn = sin(ang);
+	float3 k = float3(0.57735, 0.57735, 0.57735);
+	return c * cs + cross(k, c) * sn + k * dot(k, c) * (1.0 - cs);
+}
+
+/* the petal shape, signed distance in units of its size; lq local coords */
+float bb_petal(float2 lq, float kind)
+{
+	float d = 0.0;
+	if (kind < 0.5) {
+		/* cherry: a long rounded petal with a small notch at its tip */
+		d = length(float2(lq.x * 1.55, (lq.y - 0.05) * 0.95)) - 0.62;
+		d = max(d, -(length(lq - float2(0.0, 0.72)) - 0.17));
+		d = max(d, lq.y - 0.66);
+	} else if (kind < 1.5) {
+		/* plum: round and soft */
+		d = length(float2(lq.x * 1.15, lq.y)) - 0.6;
+	} else if (kind < 2.5) {
+		/* rose: broad and rounded, wider at its outer edge with a soft dip */
+		float2 rq = float2(lq.x * (1.15 - 0.3 * saturate(lq.y + 0.3)), lq.y * 1.1);
+		d = length(rq) - 0.62;
+		d = max(d, -(length(lq - float2(0.0, 0.95)) - 0.32));
+	} else if (kind < 3.5) {
+		/* maple: five pointed lobes and a little stem */
+		float ang = atan2(lq.x, -lq.y);
+		float r = length(lq);
+		float lobes = 0.38 + 0.3 * pow(abs(cos(ang * 2.5)), 1.5) + 0.05 * pow(abs(cos(ang * 7.5)), 4.0);
+		d = r - lobes * smoothstep(-1.0, 0.2, cos(ang * 0.5) * 1.2);
+		d = min(d, max(abs(lq.x) - 0.025, abs(lq.y - 0.5) - 0.22));
+	} else {
+		/* a heart */
+		float2 h = float2(abs(lq.x), -lq.y + 0.25) * 1.15;
+		d = (length(float2(h.x, h.y - sqrt(h.x) * 0.55)) - 0.55) * 0.9;
+	}
+	return d;
+}
+
+/* a blossoming branch from the top-left corner (mirrored for the right);
+ * returns x wood, y blossom, z glow */
+float3 bb_branch(float2 b, float sway, float px)
+{
+	float3 r = float3(0.0, 0.0, 0.0);
+	float2 pts[5];
+	pts[0] = float2(-0.08, -0.06);
+	pts[1] = float2(0.12, 0.06 + sway * 0.2);
+	pts[2] = float2(0.3, 0.1 + sway * 0.5);
+	pts[3] = float2(0.46, 0.16 + sway * 0.9);
+	pts[4] = float2(0.58, 0.17 + sway * 1.3);
+	for (int k = 0; k < 4; k++) {
+		float fk = float(k);
+		float w = 0.022 * (1.0 - fk * 0.21) + px;
+		float d = md_seg(b, pts[k], pts[k + 1]);
+		r.x = max(r.x, 1.0 - smoothstep(w - px, w + px, d));
+		/* a twig off each joint */
+		float2 tw = pts[k + 1] + float2(0.05 + 0.03 * fk, 0.09 + sway * (0.6 + fk * 0.3)) * (1.0 - fk * 0.15);
+		float dt = md_seg(b, pts[k + 1] * 0.97 + pts[k] * 0.03, tw);
+		float wt = 0.008 + px;
+		r.x = max(r.x, 1.0 - smoothstep(wt - px, wt + px, dt));
+	}
+	/* clusters of flowers along it */
+	for (int c = 0; c < 9; c++) {
+		float fc = float(c);
+		float t = fc / 8.0;
+		int seg = int(min(floor(t * 4.0), 3.0));
+		float2 pa = pts[0];
+		float2 pb = pts[1];
+		if (seg == 1) {
+			pa = pts[1];
+			pb = pts[2];
+		} else if (seg == 2) {
+			pa = pts[2];
+			pb = pts[3];
+		} else if (seg == 3) {
+			pa = pts[3];
+			pb = pts[4];
+		}
+		float2 cc = lerp(pa, pb, frac(t * 4.0)) + (float2(hash11(fc * 13.1), hash11(fc * 7.7 + 2.0)) - 0.5) * 0.07;
+		float rad = 0.022 + 0.014 * hash11(fc * 3.3 + 1.0);
+		float d = length(b - cc);
+		/* five soft petals round a brighter middle */
+		float ang = atan2(b.y - cc.y, b.x - cc.x) + fc;
+		float shape = rad * (0.75 + 0.25 * abs(cos(ang * 2.5)));
+		r.y = max(r.y, 1.0 - smoothstep(shape - px * 1.5, shape + px * 1.5, d));
+		r.z += exp(-d / (rad * 2.5)) * 0.25;
+	}
+	return r;
+}
+
 float4 PSModernBlossoms(VertData v_in) : TARGET
 {
 	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
 	float px = 1.0 / res.y;
-	float3 pink = md_tint(float3(1.0, 0.62, 0.75), cm_hue(hue + 0.92 + react_mix.z * 0.08 * calm_in.z, uv, uv.x, 0.0));
-	float3 skyA = md_tint(float3(0.16, 0.1, 0.22), hue + 0.75);
-	float3 skyB = md_tint(float3(0.32, 0.17, 0.25), hue + 0.95);
-	float3 light = lerp(skyA * 0.6, skyB * 0.8, smoothstep(0.0, 1.0, uv.y));
 
-	/* soft bokeh lights far behind */
-	for (int b = 0; b < 8; b++) {
+	float from = floor(style_a.x + 0.5);
+	float kind = floor(style_b.z + 0.5);
+	float count = style_b.x;
+	float psize = max(style_b.y, 0.2);
+	float tumble = style_b.w;
+	float gust_k = style_a.w;
+	float strength = style_a.z;
+
+	/* the colour: the picked one, or the palette */
+	float cshift = music_ease.x * floor(style_c.y * react_mix.z * 8.0 + 0.5) / 64.0;
+	float hp = cm_hue(hue + 0.92 + react_mix.z * 0.06 * calm_in.z + cshift, uv, uv.x, 0.0);
+	float3 picked = bb_hue_turn(style_col.rgb, cshift);
+	float3 pcol = style_col.w > 0.5 ? md_tint(float3(1.0, 0.62, 0.75), hp) : picked;
+	float3 leaf_lit = lerp(pcol, float3(1.0, 0.98, 0.97), 0.35);
+
+	/* dusk sky and soft lights far behind */
+	float3 skyA = md_tint(float3(0.15, 0.1, 0.22), hue + 0.75);
+	float3 skyB = md_tint(float3(0.34, 0.18, 0.25), hue + 0.95);
+	float3 light = lerp(skyA * 0.6, skyB * 0.8, smoothstep(0.0, 1.0, uv.y));
+	float bokeh = style_c.x;
+	for (int b = 0; b < 10; b++) {
 		float fb = float(b);
-		float2 c = float2(hash11(fb * 3.3 + 1.0) * aspect, 0.25 + 0.6 * hash11(fb * 7.7 + 2.0));
-		c.x += 0.03 * sin(time * 0.05 + fb);
-		float r = 0.05 + 0.07 * hash11(fb * 1.9);
-		float d = length(p - c);
-		light += pink * 0.12 * (1.0 - smoothstep(r * 0.8, r, d)) * (0.6 + 0.4 * calm_e(fb / 8.0, 0.6));
+		if (fb < bokeh * 7.0) {
+			float2 c = float2(hash11(fb * 3.3 + 1.0) * aspect, 0.2 + 0.7 * hash11(fb * 7.7 + 2.0));
+			c.x += 0.03 * sin(time * 0.05 + fb);
+			float r = 0.04 + 0.08 * hash11(fb * 1.9);
+			float d = length(p - c);
+			float3 bc = lerp(pcol, float3(1.0, 0.85, 0.6), hash11(fb + 4.0) * 0.6);
+			light += bc * 0.1 * (1.0 - smoothstep(r * 0.8, r, d)) * (0.6 + 0.4 * calm_e(fb / 10.0, 0.6)) *
+				 saturate(bokeh);
+		}
 	}
 
-	float wind = 0.06 + 0.05 * react_mix.x * calm_in.y + 0.02 * sin(time * 0.13);
-	float amount = clamp(density, 0.2, 3.0);
+	/* the wind: away from the corner, turned by the angle knob */
+	float2 wdir = float2(0.94, 0.34);
+	float2 origin = float2(0.0, 0.0);
+	float mirror = 0.0;
+	if (from < 0.5) {
+		wdir = float2(0.92, 0.38);
+		origin = float2(0.06, 0.08);
+	} else if (from < 1.5) {
+		wdir = float2(-0.92, 0.38);
+		origin = float2(aspect - 0.06, 0.08);
+		mirror = 1.0;
+	} else if (from < 2.5) {
+		wdir = float2(0.97, 0.24);
+		origin = float2(0.0, 0.32);
+	} else if (from < 3.5) {
+		wdir = float2(-0.97, 0.24);
+		origin = float2(aspect, 0.32);
+		mirror = 1.0;
+	} else if (from < 4.5) {
+		wdir = float2(0.25, 0.97);
+	}
+	float wa = style_a.y * 0.0174533 * (mirror > 0.5 ? -1.0 : 1.0);
+	wdir = normalize(rot2(wdir, wa));
+	float2 wn = float2(-wdir.y, wdir.x);
+	bool corner = from < 3.5;
+
+	/* gusts: slow surges every few seconds, and the bass swirling them */
+	float gt = time * 0.13;
+	float surge = (floor(gt) + smoothstep(0.25, 0.75, frac(gt))) * 0.6 * gust_k;
+	float swirl = gust_k * (0.25 + 0.6 * react_mix.x * music_ease.z);
+	/* each beat a puff: whole quarter cells, so the 64-beat wrap lands on the same petals */
+	float puff = music_ease.x * floor(saturate(react_mix.w) + 0.5) * 0.25;
+
 	for (int l = 0; l < 4; l++) {
 		float fl = float(l);
-		float depth = (fl + 1.0) / 4.0;             /* far .. near */
-		float s = 9.0 - 5.0 * depth;                /* cells per unit: near cells are bigger */
-		float2 q = p * s + float2(-time * wind * s * (0.6 + depth), -time * 0.05 * s * (0.5 + depth));
-		q.y += sin(q.x * 0.7 + time * 0.3 + fl) * 0.3;
+		float depth = (fl + 1.0) / 4.0; /* far .. near */
+		float s = (9.0 - 5.0 * depth) / psize; /* cells per unit */
+		/* in the wind's frame: along it and across it */
+		float2 rel = p - origin;
+		float along = dot(rel, wdir);
+		float across = dot(rel, wn);
+		/* they sink as they go */
+		across -= 0.12 * along * along * (wdir.x * wdir.x) * (mirror > 0.5 ? -1.0 : 1.0);
+		float travel = time * (0.05 + 0.06 * strength) * (0.6 + 0.6 * depth) * s + surge * (0.7 + 0.6 * depth) + puff;
+		float2 q = float2(along * s - travel, across * s);
+		/* the gusts bend the whole stream softly */
+		float2 wq = float2(along, across) * 1.7 + float2(time * 0.07, fl * 3.1);
+		q += (float2(vnoise(wq), vnoise(wq + 5.2)) - 0.5) * swirl * 1.6;
+		/* period of 16 cells, so the 64-beat wrap of the puffs is seamless */
+		q.y += sin(q.x * 0.3927 + time * 0.4 + fl) * 0.25 * (0.4 + gust_k);
 		float2 id = floor(q);
 		float2 f = frac(q) - 0.5;
-		float h = hash21(id + fl * 17.0);
-		if (h < 0.35 * amount) {
-			float2 o = (float2(hash21(id + 2.1), hash21(id + 4.7)) - 0.5) * 0.5;
-			float ang = time * (0.4 + 1.2 * hash21(id + 9.3)) + h * 30.0;
-			float2 lq = rot2(f - o, ang);
-			/* flutter: the petal turns, so it squashes */
-			float flip = 0.35 + 0.65 * abs(sin(time * (0.7 + h) + h * 12.0));
-			lq.y /= flip;
-			float sz = 0.18 + 0.08 * hash21(id + 6.6);
-			/* petal: an ellipse with a small notch at its tip */
-			float d = length(float2(lq.x * 1.6, lq.y)) - sz;
-			d = max(d, -(length(lq - float2(0.0, sz * 1.05)) - sz * 0.22));
-			float upx = px * s;
-			float blur = upx * (1.0 + 7.0 * pow(depth, 3.0) + 3.0 * (1.0 - depth));
-			float m = 1.0 - smoothstep(-blur, blur, d);
-			float shade = 0.75 + 0.25 * lq.y / sz + 0.2 * flip;
-			float3 pc = lerp(pink, float3(1.0, 0.95, 0.97), 0.25 * (1.0 - abs(lq.x) / sz));
-			light = lerp(light, pc * shade * (0.45 + 0.45 * depth) * (0.85 + 0.35 * react_mix.y * calm_in.x),
-				     m * (0.55 + 0.4 * depth));
+		float2 hid = float2(glmod(id.x, 16.0), id.y);
+		float h = hash21(hid + fl * 17.0);
+		/* from a corner they spread out in a cone; elsewhere, everywhere */
+		float dens = 1.0;
+		if (corner) {
+			float a_c = (id.x + 0.5 + travel) / s;
+			float b_c = (id.y + 0.5) / s;
+			float spread = 0.05 + 0.3 * max(a_c, 0.0);
+			float bs = b_c / spread;
+			dens = exp(-bs * bs) * smoothstep(-0.05, 0.08, a_c) * (1.6 - 0.5 * saturate(a_c));
 		}
+		if (h < 0.35 * count * dens) {
+			float2 o = (float2(hash21(hid + 2.1), hash21(hid + 4.7)) - 0.5) * 0.3;
+			float spin = time * (0.3 + 1.0 * hash21(hid + 9.3)) * (0.3 + tumble) + h * 30.0;
+			float2 lq = rot2(f - o, spin);
+			/* tumbling in 3D: it turns over, so it narrows and shows its back */
+			float flipa = time * (0.5 + 0.9 * h) * (0.2 + tumble) + h * 12.0;
+			float fc = cos(flipa);
+			float squash = max(abs(fc), 0.22);
+			lq.y /= squash;
+			float sz = 0.36;
+			float d = bb_petal(lq / sz, kind) * sz * squash;
+			float upx = px * s;
+			float blur = upx * (0.8 + 2.5 * pow(depth, 3.0) + 2.0 * (1.0 - depth));
+			float m = 1.0 - smoothstep(-blur, blur, d);
+			/* shading: lighter to the middle, a faint vein, darker underside */
+			float inner = saturate(-d / sz * 2.5);
+			float vx = lq.x / (0.02 + upx);
+			float vein = exp(-vx * vx) * 0.07 * step(kind, 3.5);
+			float under = fc < 0.0 ? 0.72 : 1.0;
+			float3 pc = lerp(pcol, leaf_lit, 0.45 * inner) * under * (1.0 - vein);
+			/* light through the petal when it faces the sky */
+			pc += pcol * 0.25 * pow(saturate(fc), 4.0);
+			float glow = (0.6 + 0.55 * depth) * (0.85 + 0.3 * react_mix.y * calm_in.x);
+			light = lerp(light, pc * glow, m * (0.75 + 0.23 * depth));
+		}
+	}
+
+	/* the branch they come from */
+	if (from < 4.5) {
+		float sway = 0.03 * sin(time * 0.6) * (0.4 + gust_k) + 0.02 * swirl * sin(time * 1.3);
+		float3 br = float3(0.0, 0.0, 0.0);
+		if (from < 3.5) {
+			float2 bp = float2(mirror > 0.5 ? aspect - p.x : p.x, p.y - (from > 1.5 ? 0.25 : 0.0));
+			br = bb_branch(bp, sway, px);
+		} else {
+			br = max(bb_branch(p, sway, px), bb_branch(float2(aspect - p.x, p.y), -sway, px));
+		}
+		float3 wood = md_tint(float3(0.09, 0.05, 0.06), hue + 0.8);
+		light = lerp(light, wood, br.x * 0.95);
+		light = lerp(light, lerp(pcol, leaf_lit, 0.35) * 0.95, br.y);
+		light += pcol * br.z * 0.12;
 	}
 	return finish_dither(light, uv, v_in.uv * res);
 }

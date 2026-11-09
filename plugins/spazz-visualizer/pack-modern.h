@@ -7,11 +7,11 @@
  * See tools/PACKS.md. */
 /* calm: slow, smoothed reactions, nothing flashes */
 PACK_STYLE("ModernSoftOrbs", "ModernSoftOrbs", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
-PACK_STYLE("ModernJellyfish", "ModernJellyfish", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
+PACK_STYLE("ModernJellyfish", "ModernJellyfish", VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernGlowTide", "ModernGlowTide", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernSkyLanterns", "ModernSkyLanterns", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernSunbeams", "ModernSunbeams", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
-PACK_STYLE("ModernBlossoms", "ModernBlossoms", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
+PACK_STYLE("ModernBlossoms", "ModernBlossoms", VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernSnowfall", "ModernSnowfall", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernCrystalCave", "ModernCrystalCave", VZ_SPEED | VZ_CMOTION | VZ_CALM)
 /* lively */

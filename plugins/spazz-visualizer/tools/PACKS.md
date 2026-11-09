@@ -113,6 +113,31 @@ See `PSMilkZoomTunnel` in `packs/feedback.fx`.
 - Don't declare new uniforms: the plugin only sets the ones in `common.fxh`
   (an unset uniform makes D3D11 skip the draw).
 
+## Style settings (per-style knobs)
+
+A style can have its own controls, shown in a "Style settings" group only
+while that style is picked. Add rows to the `knobs[]` table in
+`spazz-visualizer.c`: style key, setting name, locale label, type (slider,
+list, bool or colour), range, default, and a slot. The shader reads the slot:
+
+| slots | uniform |
+|-------|---------|
+| 0-3   | `style_a.xyzw` |
+| 4-7   | `style_b.xyzw` |
+| 8-11  | `style_c.xyzw` |
+| 12    | `style_col.rgb` (a colour knob) |
+| 15    | `style_col.w` |
+
+Sliders and bools give their value, lists the item's index. List items are
+labelled `<label>.<item>` in the locale, and `<label>.Tip` (if present) is the
+tooltip. Unused slots are 0.
+
+`music_ease` carries smoothed music made for calm, flowing styles:
+`x` counts beats with a 0.3 s glide (wraps at 64, so use it in whole steps
+that repeat every 64 beats), `y` a soft pulse on each beat (eases up and
+back down over about half a second), `z` the bass, smoothed over a second.
+See `PSModernJellyfish` and `PSModernBlossoms` in `packs/modern.fx`.
+
 ## Checking a pack
 
 From the repo root:
