@@ -47,6 +47,10 @@ static const char *style_techniques[] = {
 	"SpectrumGlass", "CandyBars", "Bubbles", "Confetti", "BounceBuddies", "DiscoFloor", "LavaLamp", "GroovySwirl",
 	"StarWarp", "Fireflies", "Fireworks", "Galaxy", "Synthwave", "RainbowRipples", "NeonHeartbeat", "FlowerGarden",
 	"DiscoBall", "PixelEQ", "DNAHelix", "PlasmaGlobe", "OceanSunset",
+	/* calm ones: slow swells, nothing flashes */
+	"NorthernLake", "MoonlitSea", "InkBloom", "NebulaDrift", "SilkRibbons", "DreamGradient", "RainGlass",
+	/* and livelier ones */
+	"LiquidChrome", "ParticleVortex", "NeonRidges",
 	/* the SPAZZamp player on stream, in a few skins (keep these together,
 	 * in this order: the skin number is the offset from PlayerSpazz) */
 	"PlayerSpazz", "PlayerClassic", "PlayerNeon", "PlayerSynthwave", "PlayerCRT", "PlayerGlitch",
@@ -57,6 +61,10 @@ static const char *style_techniques[] = {
 	/* retro screens */
 	"NeonScope", "CRTSpectrum", "GlitchBars", "VHSTape"};
 #define NUM_STYLES (sizeof(style_techniques) / sizeof(style_techniques[0]))
+
+/* colour motion, in the order the effect's cm_hue numbers them */
+static const char *color_motions[] = {"gradient", "falling", "rising", "ribbons", "drift", "ripple", "beat", "flow"};
+#define NUM_COLOR_MOTIONS ((int)(sizeof(color_motions) / sizeof(color_motions[0])))
 #define NUM_SKINS 14
 #define FIRST_GLITCH_SKIN 5 /* PlayerGlitch */
 
@@ -132,7 +140,7 @@ struct spazz_viz {
 	gs_eparam_t *p_bands, *p_res, *p_time, *p_flow, *p_bass, *p_mid, *p_treble, *p_level, *p_beat, *p_hue,
 		*p_density, *p_bg, *p_pal_a, *p_pal_b, *p_pal_c, *p_pal_mix, *p_grade, *p_bg_col, *p_bg_flat, *p_view,
 		*p_flip_x, *p_font_tex, *p_text_tex, *p_pl_state, *p_pl_digits, *p_pl_info, *p_pl_look, *p_pl_accent,
-		*p_pl_show, *p_pl_accent2, *p_pl_glitch;
+		*p_pl_show, *p_pl_accent2, *p_pl_glitch, *p_cmotion, *p_calm;
 
 	/* settings */
 	uint32_t width, height;
@@ -146,6 +154,12 @@ struct spazz_viz {
 	float zoom, mirror_x, mirror_y, flip_y, flip_x;
 	struct vec3 pal_a, pal_b, pal_c;
 	float pal_mix;
+	/* how the colours travel (see cm_hue in the effect), and the aurora's look */
+	int color_motion;
+	bool aurora_classic;
+	float cm_clock, beat_hue, beat_hue_to, beat_prev;
+	/* the slow music for the calm styles */
+	float calm_level, calm_bass, calm_treble, calm_swell, calm_swell_to;
 	float bg_opacity, bg_flat;
 	struct vec3 bg_col;
 	float auto_secs, fade_secs;
@@ -442,6 +456,15 @@ static void viz_update(void *data, obs_data_t *settings)
 		}
 	}
 
+	const char *cm = obs_data_get_string(settings, "color_motion");
+	v->color_motion = 0;
+	for (int i = 0; i < NUM_COLOR_MOTIONS; i++) {
+		if (is(cm, color_motions[i])) {
+			v->color_motion = i;
+		}
+	}
+	v->aurora_classic = is(obs_data_get_string(settings, "aurora_look"), "classic");
+
 	const char *bg = obs_data_get_string(settings, "background");
 	const float opacity = (float)obs_data_get_double(settings, "bg_opacity");
 	v->bg_opacity = is(bg, "transparent") ? 0.0f : opacity;
@@ -507,6 +530,8 @@ static void viz_defaults(obs_data_t *settings)
 	obs_data_set_default_double(settings, "beat_punch", 1.0);
 	obs_data_set_default_double(settings, "smoothing", 0.0);
 	obs_data_set_default_string(settings, "palette", "prism");
+	obs_data_set_default_string(settings, "color_motion", "gradient");
+	obs_data_set_default_string(settings, "aurora_look", "deluxe");
 	obs_data_set_default_int(settings, "color_1", obs_color(0xff3f8e));
 	obs_data_set_default_int(settings, "color_2", obs_color(0x8a5cff));
 	obs_data_set_default_int(settings, "color_3", obs_color(0x2bd9ff));
@@ -673,9 +698,14 @@ static bool background_modified(obs_properties_t *props, obs_property_t *prop, o
 
 /* styles whose shader never reads "density" (Amount) or "time"/"flow"
  * (Speed); keep in step with spazz-visualizer.effect */
-static const char *const styles_no_density[] = {"PrismPetals",   "PrismAurora",   "PrismTunnel", "PrismWaves",
-						"SpectrumGlass", "BounceBuddies", "DiscoFloor",  "Synthwave",
-						"OceanSunset",   "VHSTape",       NULL};
+static const char *const styles_no_density[] = {
+	"PrismPetals", "PrismAurora", "PrismTunnel",   "PrismWaves",   "SpectrumGlass", "BounceBuddies",
+	"DiscoFloor",  "Synthwave",   "OceanSunset",   "VHSTape",      "NorthernLake",  "MoonlitSea",
+	"InkBloom",    "SilkRibbons", "DreamGradient", "LiquidChrome", "NeonRidges",    NULL};
+/* styles whose colours follow Colour motion */
+static const char *const styles_color_motion[] = {"PrismAurora",  "PrismWaves",     "NorthernLake",  "InkBloom",
+						  "NebulaDrift",  "SilkRibbons",    "DreamGradient", "RainGlass",
+						  "LiquidChrome", "ParticleVortex", "NeonRidges",    NULL};
 static const char *const styles_no_speed[] = {"SpectrumGlass", "CandyBars", "PixelEQ", NULL};
 
 static bool in_list(const char *name, const char *const *list)
@@ -696,6 +726,8 @@ static void style_controls(obs_properties_t *props, obs_data_t *settings)
 	const bool all = obs_data_get_double(settings, "auto_switch") > 0.0;
 	obs_property_set_visible(obs_properties_get(props, "density"), all || !in_list(style, styles_no_density));
 	obs_property_set_visible(obs_properties_get(props, "speed"), all || !in_list(style, styles_no_speed));
+	obs_property_set_visible(obs_properties_get(props, "color_motion"), all || in_list(style, styles_color_motion));
+	obs_property_set_visible(obs_properties_get(props, "aurora_look"), all || is(style, "PrismAurora"));
 }
 
 static bool auto_modified(obs_properties_t *props, obs_property_t *prop, obs_data_t *settings)
@@ -854,6 +886,15 @@ static obs_properties_t *viz_properties(void *data)
 	obs_properties_add_color(color, "color_1", T_("Color1"));
 	obs_properties_add_color(color, "color_2", T_("Color2"));
 	obs_properties_add_color(color, "color_3", T_("Color3"));
+	p = add_list(color, "color_motion", T_("ColorMotion"));
+	for (int i = 0; i < NUM_COLOR_MOTIONS; i++) {
+		snprintf(key, sizeof(key), "ColorMotion.%s", color_motions[i]);
+		obs_property_list_add_string(p, T_(key), color_motions[i]);
+	}
+	obs_property_set_long_description(p, T_("ColorMotion.Tip"));
+	p = add_list(color, "aurora_look", T_("AuroraLook"));
+	obs_property_list_add_string(p, T_("AuroraLook.deluxe"), "deluxe");
+	obs_property_list_add_string(p, T_("AuroraLook.classic"), "classic");
 	obs_properties_add_float_slider(color, "hue_shift", T_("HueShift"), 0.0, 1.0, 0.01);
 	obs_properties_add_float_slider(color, "color_speed", T_("ColorSpeed"), 0.0, 4.0, 0.05);
 	obs_properties_add_float_slider(color, "brightness", T_("Brightness"), 0.2, 3.0, 0.05);
@@ -1001,7 +1042,8 @@ static void *viz_create(obs_data_t *settings, obs_source_t *source)
 			P(p_pl_digits, "pl_digits"), P(p_pl_info, "pl_info"),
 			P(p_pl_look, "pl_look"),     P(p_pl_accent, "pl_accent"),
 			P(p_pl_show, "pl_show"),     P(p_pl_accent2, "pl_accent2"),
-			P(p_pl_glitch, "pl_glitch"),
+			P(p_pl_glitch, "pl_glitch"), P(p_cmotion, "cmotion"),
+			P(p_calm, "calm_in"),
 #undef P
 		};
 		for (size_t i = 0; i < sizeof(params) / sizeof(params[0]); i++) {
@@ -1343,6 +1385,36 @@ static void viz_tick(void *data, float seconds)
 	v->flow += dt * (0.3f + 1.1f * level + 0.5f * beat);
 	v->hue += seconds * v->color_speed * 0.08f;
 
+	/* colour motion's clock: whole turns only matter, so it wraps at 1 */
+	v->cm_clock += seconds * (0.02f + 0.06f * v->color_speed);
+	v->cm_clock -= floorf(v->cm_clock);
+	/* "shift on the beat": each beat steps the colours on, gliding there */
+	if (v->beat > 0.6f && v->beat_prev <= 0.6f) {
+		v->beat_hue_to += 0.09f + 0.06f * (float)(rand() % 100) / 100.0f;
+	}
+	v->beat_prev = v->beat;
+	v->beat_hue += (v->beat_hue_to - v->beat_hue) * (1.0f - expf(-seconds / 0.35f));
+	{
+		const float whole = floorf(v->beat_hue);
+		v->beat_hue -= whole;
+		v->beat_hue_to -= whole;
+	}
+
+	/* the calm styles follow the music slowly: rise in about half a second,
+	 * settle over two, and a swell that blooms gently on the beat */
+	{
+		const float up = 1.0f - expf(-seconds / 0.55f);
+		const float down = 1.0f - expf(-seconds / 2.0f);
+		const float lvl = fminf(v->level * 1.4f, 1.0f);
+		const float bs = fminf(v->bass, 1.0f);
+		const float tr = fminf(v->treble, 1.0f);
+		v->calm_level += (lvl - v->calm_level) * (lvl > v->calm_level ? up : down);
+		v->calm_bass += (bs - v->calm_bass) * (bs > v->calm_bass ? up : down);
+		v->calm_treble += (tr - v->calm_treble) * (tr > v->calm_treble ? up : down);
+		v->calm_swell_to = fmaxf(v->calm_swell_to * expf(-seconds / 1.3f), fminf(v->beat, 1.0f) * 0.8f);
+		v->calm_swell += (v->calm_swell_to - v->calm_swell) * (1.0f - expf(-seconds / 0.3f));
+	}
+
 	/* keep floats small so the shader stays precise on long streams */
 	if (v->time > 3600.0f) {
 		v->time -= 3600.0f;
@@ -1439,6 +1511,11 @@ static void viz_render(void *data, gs_effect_t *unused)
 	gs_effect_set_float(v->p_level, v->level);
 	gs_effect_set_float(v->p_beat, v->beat);
 	gs_effect_set_float(v->p_hue, v->hue + v->hue_shift);
+	struct vec4 cmv, calm;
+	vec4_set(&cmv, (float)v->color_motion, v->cm_clock, v->aurora_classic ? 1.0f : 0.0f, v->beat_hue);
+	gs_effect_set_vec4(v->p_cmotion, &cmv);
+	vec4_set(&calm, v->calm_level, v->calm_bass, v->calm_treble, v->calm_swell);
+	gs_effect_set_vec4(v->p_calm, &calm);
 	gs_effect_set_float(v->p_density, v->density);
 	gs_effect_set_float(v->p_bg, v->bg_opacity);
 	gs_effect_set_vec3(v->p_pal_a, &v->pal_a);

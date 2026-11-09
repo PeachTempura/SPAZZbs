@@ -1925,6 +1925,8 @@ static void FillVizMenu(QMenu *menu, obs_source_t *src)
 	menu->addSeparator();
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Style")), src, "style", VizChoices("style"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Colors")), src, "palette", VizChoices("palette"));
+	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.ColorMotion")), src, "color_motion",
+		      VizChoices("color_motion"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Mirror")), src, "mirror", VizChoices("mirror"));
 	AddVizChoices(menu->addMenu(QTStr("SPAZZ.Music.Vis.Background")), src, "background", VizChoices("background"));
 	/* the SPAZZamp player styles' own screen */
