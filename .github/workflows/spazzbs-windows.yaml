@@ -29,6 +29,12 @@ jobs:
           .github/spazzbs/fxcheck/build.sh ./fxparse 2>&1 | report; test -x ./fxparse
           mkdir -p hlsl/spazz hlsl/crt hlsl/stinger hlsl/control
           ./fxparse plugins/spazz-visualizer/data/spazz-visualizer.effect hlsl/spazz 2> >(report)
+          # the visualizer's style packs: generated effects must match their sources
+          node plugins/spazz-visualizer/tools/gen-packs.js --check 2> >(report)
+          for pack in retro feedback modern; do
+            mkdir -p "hlsl/pack-$pack"
+            ./fxparse "plugins/spazz-visualizer/data/pack-$pack.effect" "hlsl/pack-$pack" 2> >(report)
+          done
           ./fxparse plugins/spazz-crt/data/spazz-crt.effect hlsl/crt 2> >(report)
           ./fxparse plugins/spazz-stinger/data/spazz-stinger.effect hlsl/stinger 2> >(report)
           ./fxparse libobs/data/default.effect hlsl/control 2> >(report)
