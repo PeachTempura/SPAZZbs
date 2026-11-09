@@ -351,6 +351,10 @@ float2 fbk_mirror(float2 uv)
 float4 fbk_take(float2 uv, float keep_ps)
 {
 	float4 o = prev_at(uv);
+	/* soften the last few percent at the edges, so warps that pull from
+	 * past the edge don't leave hard seams or teeth */
+	float2 e = abs(uv - 0.5);
+	o.a *= smoothstep(0.5, 0.47, max(e.x, e.y));
 	o.a = max(o.a * fb_decay(keep_ps) - 0.9 / 255.0 * max(fbk_steps(), 0.5), 0.0);
 	return o;
 }
@@ -532,9 +536,9 @@ float4 PSMilkKaleidoDream(VertData v_in) : TARGET
 	float seg = 8.0 + 2.0 * sin(time * 0.05);
 	float n0 = floor(seg);
 	float twist = 0.002 * steps + time * 0.015;
-	float z = pow(1.005 + 0.004 * calm_in.y * rx, steps);
-	float4 a0 = fbk_take(fbk_unasp(fbk_kfold(p, n0, twist) * z), 0.6);
-	float4 a1 = fbk_take(fbk_unasp(fbk_kfold(p, n0 + 1.0, twist) * z), 0.6);
+	float z = pow(1.009 + 0.004 * calm_in.y * rx, steps);
+	float4 a0 = fbk_take(fbk_unasp(fbk_kfold(p, n0, twist) * z), 0.82);
+	float4 a1 = fbk_take(fbk_unasp(fbk_kfold(p, n0 + 1.0, twist) * z), 0.82);
 	float4 old = lerp(a0, a1, smoothstep(0.0, 1.0, frac(seg)));
 	old.rgb = fbk_huerot(old.rgb, 0.003 * steps * react_mix.z);
 
@@ -721,10 +725,10 @@ float4 PSMilkSpiralGalaxy(VertData v_in) : TARGET
 	float arm = pow(0.5 + 0.5 * cos(ph), 10.0) * smoothstep(0.46, 0.08, r) * smoothstep(0.02, 0.06, r);
 	float en = band_level(saturate(r * 2.2));
 	float3 col = prism(cm_hue(hue + r * 1.2 + time * 0.02, uv, r, 0.0));
-	float4 o = over(old, col, saturate(arm * (0.06 + 0.25 * en) * clamp(density, 0.3, 2.0)));
+	float4 o = over(old, col, saturate(arm * (0.1 + 0.35 * en) * clamp(density, 0.3, 2.0)));
 
 	/* star dust sparkling on the treble */
-	float dust = step(0.9985 - 0.004 * treble * rx, hash21(floor(v_in.uv * res * 0.5) + floor(time * 60.0))) * smoothstep(0.45, 0.1, r);
+	float dust = step(0.9993 - 0.003 * treble * rx, hash21(floor(v_in.uv * res * 0.5) + floor(time * 60.0))) * smoothstep(0.45, 0.1, r);
 	o = over(o, lerp(col, float3(1.0, 1.0, 1.0), 0.6), dust);
 
 	float core = fbk_blob(pv, float2(0.0, 0.0), 0.02 + 0.03 * level * react_mix.y);
@@ -820,19 +824,36 @@ float4 PSMilkInfiniteStars(VertData v_in) : TARGET
 	float steps = fbk_steps();
 	float rx = react_mix.x;
 
+	/* last frame zooms out a little for a soft afterglow */
 	float2 cc = fbk_asp(v_in.uv);
-	float z = pow(0.962 - 0.04 * saturate(bass) * rx, steps);
-	float4 old = fbk_take(fbk_unasp(rot2(cc * z, 0.001 * steps)), 0.45);
+	float4 old = fbk_take(fbk_unasp(cc * pow(0.988, steps)), 0.3);
 
+	/* stars fly out of the middle along their own direction, each drawn
+	 * as a streak from where it was a moment ago to where it is now;
+	 * three depths, the bass stretches the streaks */
 	float2 uv = view_uv(v_in.uv);
 	float2 pv = fbk_asp(uv);
 	float r = length(pv);
-	float2 cell = floor(v_in.uv * res * 0.5);
-	float chance = 1.0 - (0.003 + 0.004 * treble * rx) * clamp(density, 0.3, 2.0);
-	float h = hash21(cell + floor(time * 60.0) * 17.0);
-	float star = step(chance, h) * smoothstep(0.38, 0.04, r);
-	float3 col = lerp(float3(1.0, 1.0, 1.0), prism(cm_hue(hue + h * 3.0, uv, r, 0.0)), 0.5);
-	float4 o = over(old, col, star * (0.75 + 0.25 * level * react_mix.y));
+	float a = atan2(pv.y, pv.x) / 6.2831853 + 0.5;
+	float4 o = old;
+	for (int l = 0; l < 3; l++) {
+		float fl = float(l);
+		float k = 70.0 + 45.0 * fl;
+		float cell = floor(a * k);
+		float ca = (cell + 0.5) / k;
+		float h = hash11(cell * 1.37 + fl * 17.3);
+		float there = step(h, 0.45 * clamp(density, 0.3, 2.0));
+		float spd = 0.18 + 0.3 * hash11(cell * 3.1 + fl * 5.7);
+		float ph = frac(time * spd + h * 7.0);
+		float rs = 0.012 * exp(ph * 4.2);
+		float len = rs * (0.1 + 0.3 * saturate(bass) * rx);
+		float along = smoothstep(rs - len, rs, r) * step(r, rs + 0.002);
+		float side = abs(a - ca) * 6.2831853 * r * res.y;
+		float across = saturate(1.0 - side / (0.8 + 0.6 * ph));
+		float fade = smoothstep(0.0, 0.3, ph) * (0.6 + 0.4 * level * react_mix.y);
+		float3 col = lerp(float3(1.0, 1.0, 1.0), prism(cm_hue(hue + h * 3.0, uv, r, fl)), 0.45);
+		o = over(o, col, saturate(along * across * fade * there));
+	}
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
 }
 

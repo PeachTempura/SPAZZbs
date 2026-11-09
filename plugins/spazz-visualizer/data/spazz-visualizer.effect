@@ -2072,9 +2072,13 @@ float4 PSDNAHelix(VertData v_in) : TARGET
 	}
 
 	/* sparkles around the strands with the treble */
-	float g = hash21(floor(pix / 3.0) + floor(t * 10.0) * 0.37);
-	light += float3(1.0, 0.97, 0.95) * smoothstep(0.985, 1.0, g) * exp(-abs(p.y - axis) / (A + 0.04)) *
-		 (0.15 + 1.4 * treble * gw);
+	float2 gc = floor(pix / 7.0);
+	float g = hash21(gc + floor(t * 6.0) * 0.37);
+	float2 gq = pix - (gc + 0.5) * 7.0;
+	float glint = exp(-dot(gq, gq) / 1.6) + 0.35 * exp(-abs(gq.x) / 0.7 - abs(gq.y) / 2.6) +
+		      0.35 * exp(-abs(gq.y) / 0.7 - abs(gq.x) / 2.6);
+	light += lerp(float3(1.0, 0.97, 0.95), prism(hue + g * 3.0), 0.35) * smoothstep(0.988, 1.0, g) * glint *
+		 exp(-abs(p.y - axis) / (A + 0.04)) * (0.25 + 1.6 * treble * gw);
 
 	return finish_dither(light, uv, pix);
 }
