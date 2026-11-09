@@ -374,10 +374,12 @@ float fbk_dith(float2 pix)
 	return (hash21(pix + frac(time * 7.31) * 91.0) - 0.5) / 255.0;
 }
 
-/* the beat, as an event (0..1, scaled by react_mix.w) */
+/* the beat, as an event: beat is an envelope that jumps up on a beat and
+ * falls away, so only its top part counts as a hit (0..1, scaled by
+ * react_mix.w) */
 float fbk_hit()
 {
-	return saturate(beat * react_mix.w);
+	return saturate((beat - 0.55) * 2.5) * react_mix.w;
 }
 
 /* a waveform made from the spectrum, roughly -1..1 across x 0..1 */
@@ -475,12 +477,12 @@ float4 PSMilkKaleidoTrip(VertData v_in) : TARGET
 	float seg = 6.0 + 3.0 * sin(time * 0.11) + 3.0 * saturate(mid) * rx;
 	float n0 = floor(seg);
 	float twist = time * 0.05 + (0.01 + 0.03 * mid * rx) * steps + 0.5 * hit;
-	float z = pow(0.985 - 0.02 * saturate(bass) * rx - 0.04 * hit, steps);
+	float z = pow(0.978 - 0.025 * saturate(bass) * rx - 0.04 * hit, steps);
 
 	float2 q0 = rot2(fbk_kfold(p, n0, twist), time * 0.07) * z;
 	float2 q1 = rot2(fbk_kfold(p, n0 + 1.0, twist), time * 0.07) * z;
-	float4 a0 = fbk_take(fbk_unasp(q0), 0.3);
-	float4 a1 = fbk_take(fbk_unasp(q1), 0.3);
+	float4 a0 = fbk_take(fbk_unasp(q0), 0.42);
+	float4 a1 = fbk_take(fbk_unasp(q1), 0.42);
 	float4 old = lerp(a0, a1, smoothstep(0.0, 1.0, frac(seg)));
 	old.rgb = fbk_huerot(old.rgb, (0.012 * steps + 0.25 * hit) * react_mix.z);
 
@@ -530,39 +532,36 @@ float4 PSMilkKaleidoDream(VertData v_in) : TARGET
 	float rx = react_mix.x;
 	float swell = calm_e(0.2, 0.7);
 
-	/* the mandala slowly flows inwards, so each ring of petals nests
-	 * inside the next */
+	/* the mandala slowly blooms outwards: each ring of petals drawn in the
+	 * middle echoes out through the kaleidoscope */
 	float2 p = fbk_asp(v_in.uv);
-	float seg = 8.0 + 2.0 * sin(time * 0.05);
-	float n0 = floor(seg);
-	float twist = 0.002 * steps + time * 0.015;
-	float z = pow(1.009 + 0.004 * calm_in.y * rx, steps);
-	float4 a0 = fbk_take(fbk_unasp(fbk_kfold(p, n0, twist) * z), 0.82);
-	float4 a1 = fbk_take(fbk_unasp(fbk_kfold(p, n0 + 1.0, twist) * z), 0.82);
-	float4 old = lerp(a0, a1, smoothstep(0.0, 1.0, frac(seg)));
-	old.rgb = fbk_huerot(old.rgb, 0.003 * steps * react_mix.z);
+	/* one fixed fold (8 wedges) keeps the echoes crisp */
+	float twist = 0.002 * steps + time * 0.012;
+	float z = pow(0.986 - 0.004 * calm_in.y * rx, steps);
+	float4 old = fbk_take(fbk_unasp(fbk_kfold(p, 8.0, twist) * z), 0.45);
+	old.rgb = fbk_huerot(old.rgb, 0.004 * steps * react_mix.z);
 
 	float2 uv = view_uv(v_in.uv);
 	float2 pv = fbk_asp(uv);
 	float r = length(pv);
 	float th = atan2(pv.y, pv.x);
-	float w = (1.4 + 1.0 * swell * react_mix.y) / res.y;
-	/* petals near the edge, opening and closing slowly */
+	float w = (2.0 + 1.0 * swell * react_mix.y) / res.y;
+	/* petals in the middle, opening and closing slowly */
 	float k = 5.0 + floor(3.0 * frac(time * 0.013));
-	float rose = 0.38 + (0.035 + 0.025 * swell * react_mix.y) * cos(k * th + time * 0.2);
+	float rose = (0.09 + 0.03 * swell * react_mix.y) * (0.6 + 0.4 * abs(cos(k * 0.5 * th + time * 0.15)));
 	float petal = saturate(1.0 - abs(r - rose) / (w * 2.0));
 	float3 col = prism(cm_hue(hue + th / 6.2831853 * 0.3 + time * 0.01, uv, r, 0.0));
-	float4 o = over(old, col, petal * 0.6);
+	float4 o = over(old, col, petal * 0.7);
 
-	/* soft dots between the petals */
+	/* soft dots circling the petals */
 	float count = clamp(2.0 + 2.0 * density, 2.0, 6.0);
 	for (int i = 0; i < 6; i++) {
 		float fi = float(i);
 		if (fi < count) {
 			float t = fi / count;
-			float ang = time * 0.06 + t * 6.2831853;
-			float b = fbk_blob(pv, float2(cos(ang), sin(ang)) * 0.33, 0.008 + 0.006 * swell);
-			o = over(o, prism(cm_hue(hue + t * 0.5 + 0.3, uv, t, fi)), saturate(b * 0.7));
+			float ang = time * 0.08 + t * 6.2831853;
+			float b = fbk_blob(pv, float2(cos(ang), sin(ang)) * 0.13, 0.009 + 0.005 * swell);
+			o = over(o, prism(cm_hue(hue + t * 0.5 + 0.3, uv, t, fi)), saturate(b * 0.8));
 		}
 	}
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
@@ -810,7 +809,7 @@ float4 PSMilkRipplePond(VertData v_in) : TARGET
 				rings += step(0.0, rm) * saturate(1.0 - abs(dd - rm) * res.y / 1.5) * (1.0 - float(m) * 0.3);
 			}
 			float3 col = prism(cm_hue(hue + fj * 0.17 + cyc * 0.11, uv, fj / 6.0, fj));
-			o = over(o, col, saturate(rings * exp(-age * 0.8) * (0.4 + 0.3 * calm_in.x * react_mix.y)));
+			o = over(o, col, saturate(rings * exp(-age * 0.7) * (0.6 + 0.3 * calm_in.x * react_mix.y)));
 		}
 	}
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
@@ -867,24 +866,26 @@ float4 PSMilkFireRising(VertData v_in) : TARGET
 	float2 q = v_in.uv;
 	float turb = vnoise(float2(q.x * 9.0, q.y * 6.0 + time * 1.3)) - 0.5;
 	float turb2 = vnoise(float2(q.x * 23.0 + 3.0, q.y * 14.0 + time * 2.1)) - 0.5;
-	q += float2((turb * 0.005 + turb2 * 0.002), 0.0035 + 0.004 * saturate(bass) * rx) * steps;
-	float4 old = fbk_take(q, 0.5);
+	q += float2((turb * 0.006 + turb2 * 0.0025), 0.005 + 0.005 * saturate(bass) * rx) * steps;
+	float4 old = fbk_take(q, 0.55);
 	/* cooling: lose blue and green first */
-	float3 cool = pow(float3(0.997, 0.978, 0.94), float3(steps, steps, steps));
-	old.rgb *= lerp(float3(1.0, 1.0, 1.0), cool, saturate(react_mix.z + 0.3));
+	float3 cool = pow(float3(0.997, 0.975, 0.93), float3(steps, steps, steps));
+	old.rgb *= lerp(float3(1.0, 1.0, 1.0), cool, saturate(react_mix.z * 0.7 + 0.3));
 
 	float2 uv = view_uv(v_in.uv);
 	float en = band_level(abs(uv.x * 2.0 - 1.0) * 0.9);
-	float hgt = 0.04 + 0.16 * en * (0.5 + rx * 0.7);
+	float hgt = 0.06 + 0.24 * en * (0.5 + rx * 0.7);
 	float flick = vnoise(float2(uv.x * 30.0, time * 8.0));
-	float heat = smoothstep(1.0 - hgt, 1.0, uv.y + 0.02 * flick);
-	float3 base = prism(cm_hue(hue + uv.x * 0.25, uv, uv.x, 0.0));
-	float3 col = lerp(base, float3(1.0, 0.95, 0.8), 0.45 * heat);
-	float4 o = over(old, col, saturate(heat * (0.6 + 0.6 * level * react_mix.y)));
+	float heat = smoothstep(1.0 - hgt, 1.0, uv.y + 0.03 * flick);
+	/* fire colours by default; the palette tints them */
+	float3 fire = lerp(float3(1.0, 0.35, 0.05), float3(1.0, 0.85, 0.35), heat);
+	float3 base = lerp(fire, prism(cm_hue(hue + uv.x * 0.25, uv, uv.x, 0.0)), 0.25 + 0.6 * pal_mix);
+	float3 col = lerp(base, float3(1.0, 0.97, 0.85), 0.35 * heat * heat);
+	float4 o = over(old, col, saturate(heat * (0.7 + 0.5 * level * react_mix.y)));
 
-	/* embers thrown up by the treble */
-	float ember = step(0.9985 - 0.004 * treble * rx, hash21(floor(v_in.uv * res * 0.5) + floor(time * 60.0))) * smoothstep(0.7, 0.9, uv.y);
-	o = over(o, lerp(col, float3(1.0, 0.9, 0.6), 0.6), ember);
+	/* a few embers thrown up by the treble */
+	float ember = step(0.9993 - 0.003 * treble * rx, hash21(floor(v_in.uv * res * 0.5) + floor(time * 60.0))) * smoothstep(0.75, 0.92, uv.y);
+	o = over(o, float3(1.0, 0.8, 0.45), ember);
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
 }
 
@@ -975,10 +976,12 @@ float4 PSMilkPulseEcho(VertData v_in) : TARGET
 	float rx = react_mix.x;
 	float hit = fbk_hit();
 
+	/* the picture is thrown outwards mostly on the beat, so each hit
+	 * leaves its own echo of the shape */
 	float2 cc = fbk_asp(v_in.uv);
-	float z = pow(0.975 - 0.04 * saturate(bass) * rx - 0.1 * hit, steps);
-	float4 old = fbk_take(fbk_unasp(rot2(cc * z, 0.002 * steps)), 0.15);
-	old.rgb = fbk_huerot(old.rgb, (0.008 * steps + 0.2 * hit) * react_mix.z);
+	float z = pow(0.995 - 0.008 * saturate(bass) * rx - 0.1 * hit, steps);
+	float4 old = fbk_take(fbk_unasp(rot2(cc * z, 0.12 * hit)), 0.25);
+	old.rgb = fbk_huerot(old.rgb, (0.004 * steps + 0.25 * hit) * react_mix.z);
 
 	float2 uv = view_uv(v_in.uv);
 	float2 pv = fbk_asp(uv);
@@ -987,11 +990,11 @@ float4 PSMilkPulseEcho(VertData v_in) : TARGET
 	float sides = 3.0 + floor(5.0 * frac(time * 0.03));
 	float sector = 6.2831853 / sides;
 	float poly = cos(sector * 0.5) / cos(glmod(a, sector) - sector * 0.5);
-	float rad = (0.06 + 0.07 * level * react_mix.y) * poly;
-	float w = 1.6 / res.y;
+	float rad = (0.06 + 0.05 * level * react_mix.y) * poly;
+	float w = 2.2 / res.y;
 	float edge = saturate(1.0 - abs(r - rad) / (w * 2.0));
 	float3 col = prism(cm_hue(hue + time * 0.07, uv, 0.0, 0.0));
-	float4 o = over(old, col, edge * (0.6 + 0.4 * hit));
+	float4 o = over(old, col, edge * saturate(0.15 + 1.4 * hit));
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
 }
 
@@ -1004,8 +1007,8 @@ float4 PSMilkScopeTrails(VertData v_in) : TARGET
 	float rx = react_mix.x;
 
 	float2 cc = fbk_asp(v_in.uv);
-	float4 old = fbk_take(fbk_unasp(rot2(cc * pow(0.99, steps), 0.003 * steps)), 0.25);
-	old.rgb = fbk_huerot(old.rgb, 0.015 * steps * react_mix.z);
+	float4 old = fbk_take(fbk_unasp(rot2(cc * pow(0.997, steps), 0.002 * steps)), 0.12);
+	old.rgb = fbk_huerot(old.rgb, 0.02 * steps * react_mix.z);
 
 	float2 uv = view_uv(v_in.uv);
 	float2 pv = fbk_asp(uv);
@@ -1013,6 +1016,7 @@ float4 PSMilkScopeTrails(VertData v_in) : TARGET
 	float ay = 0.3 * (0.6 + 0.8 * saturate(treble) * rx);
 	float fa = 3.0;
 	float fbq = 2.0 + floor(3.0 * frac(time * 0.02));
+	fbq += 2.0 * step(2.5, fbq) * step(fbq, 3.5); /* 3:3 would collapse to a line */
 	float best = 1.0;
 	float2 prevp = float2(sin(time * 0.7) * ax, sin(time * 0.5 + 1.0) * ay);
 	for (int i = 1; i <= 48; i++) {
@@ -1023,10 +1027,12 @@ float4 PSMilkScopeTrails(VertData v_in) : TARGET
 		best = min(best, length(pv - prevp - ab * hh));
 		prevp = pt;
 	}
-	float w = (1.1 + 1.2 * level * react_mix.y) / res.y;
+	float w = (1.0 + 1.0 * level * react_mix.y) / res.y;
 	float ln = saturate(1.0 - best / (w * 2.0));
+	float glow = exp(-best / (w * 5.0)) * 0.25;
 	float3 col = prism(cm_hue(hue + time * 0.06, uv, 0.0, 0.0));
-	float4 o = over(old, lerp(col, float3(1.0, 1.0, 1.0), 0.3), ln);
+	float4 o = over(old, col, glow);
+	o = over(o, lerp(col, float3(1.0, 1.0, 1.0), 0.35), ln);
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
 }
 
