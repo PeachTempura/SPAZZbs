@@ -1,4 +1,10 @@
 target_sources(
   obs-studio
-  PRIVATE docks/OBSDock.cpp docks/OBSDock.hpp docks/SpazzMusicDock.cpp docks/SpazzMusicDock.hpp
+  PRIVATE
+    docks/OBSDock.cpp
+    docks/OBSDock.hpp
+    docks/SpazzChatDock.cpp
+    docks/SpazzChatDock.hpp
+    docks/SpazzMusicDock.cpp
+    docks/SpazzMusicDock.hpp
 )

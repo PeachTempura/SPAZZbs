@@ -36,6 +36,7 @@
 #include <utility/SpazzUpdater.hpp>
 #include <dialogs/SpazzStingerStudio.hpp>
 #include <dialogs/SpazzSponsorCenter.hpp>
+#include <docks/SpazzChatDock.hpp>
 #include <utility/SpazzMultistream.hpp>
 #include <utility/SpazzSponsorSwitch.hpp>
 #include <dialogs/NameDialog.hpp>
@@ -1159,6 +1160,12 @@ void OBSBasic::OBSInit()
 			dock->raise();
 		}
 	};
+
+	/* SPAZZbs: one chat for YouTube, Kick, Twitch and Rumble (X opens its
+	 * own chat), on the right side of the canvas by default */
+	OBSDock *chatDock = SpazzChatView::CreateDock(this);
+	AddDockWidget(chatDock, Qt::RightDockWidgetArea);
+	PlaceSpazzChatDock(chatDock);
 
 	const char *dockStateStr = config_get_string(App()->GetUserConfig(), "BasicWindow", "DockState");
 

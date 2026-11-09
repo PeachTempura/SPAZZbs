@@ -3,6 +3,10 @@ target_sources(
   PRIVATE
     utility/AdvancedOutput.cpp
     utility/AdvancedOutput.hpp
+    utility/SpazzChatNet.cpp
+    utility/SpazzChatNet.hpp
+    utility/SpazzChatParse.cpp
+    utility/SpazzChatParse.hpp
     utility/SpazzMultistream.cpp
     utility/SpazzSponsorSwitch.cpp
     utility/SpazzSponsorSwitch.hpp
