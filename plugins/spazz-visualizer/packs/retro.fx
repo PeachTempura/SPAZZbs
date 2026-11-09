@@ -1,35 +1,82 @@
 /* ================================================================== */
 /* Retro pack: old media-player visualizations                         */
 /* (styles listed in pack-retro.h; labels in packs/locale)             */
+/*                                                                     */
+/* Every style here follows react_mix:                                 */
+/*   x  music-driven movement (heights, lengths, sway, warps)          */
+/*   y  music-driven brightness / glow                                 */
+/*   z  music-driven colour shifts                                     */
+/*   w  beat pulses                                                    */
+/* At (1,1,1,1) they react fully; at 0 that part ignores the music.    */
 /* ================================================================== */
 
+/* centred, aspect-correct coordinates (y down, 0 at the middle) */
+float2 rt_centre(float2 uv)
+{
+	return float2((uv.x - 0.5) * res.x / res.y, uv.y - 0.5);
+}
+
+/* soft glowing line: d is the distance in screen-height units */
+float rt_glow(float d, float w)
+{
+	float g = w / (abs(d) + w);
+	return g * g;
+}
+
+/* anti-aliased solid line of half-width w (screen-height units) */
+float rt_line(float d, float w)
+{
+	float px = 1.0 / res.y;
+	return 1.0 - smoothstep(w - px, w + px, abs(d));
+}
+
+/* music-scaled amounts */
+float rt_move(float e)
+{
+	return e * react_mix.x;
+}
+float rt_bright(float e)
+{
+	return e * react_mix.y;
+}
+float rt_tint(float e)
+{
+	return e * react_mix.z;
+}
+float rt_beat()
+{
+	return saturate(beat) * react_mix.w;
+}
+
+/* ------------------------------------------------------------------ */
 /* Battery: a kaleidoscope of glowing wavy rings round a hot core, each
  * ring one part of the spectrum. Amount = number of mirror arms. */
 float4 PSRetroBattery(VertData v_in) : TARGET
 {
 	float2 uv = view_uv(v_in.uv);
-	float aspect = res.x / res.y;
-	float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5);
+	float2 p = rt_centre(uv);
 	float r = length(p);
 	float a = atan2(p.y, p.x);
 	float arms = floor(4.0 + 4.0 * clamp(density, 0.3, 2.0));
 	float seg = 6.2831853 / arms;
 	float am = abs(glmod(a + time * 0.15, seg) - seg * 0.5);
 	float2 q = float2(cos(am), sin(am)) * r;
+	float kick = rt_beat();
 
 	float3 light = float3(0.0, 0.0, 0.0);
 	for (int i = 0; i < 5; i++) {
 		float fi = float(i);
 		float e = band_level(0.04 + fi * 0.19);
-		float ring = 0.07 + fi * 0.07 +
-			     0.025 * sin(q.y * 22.0 - time * (1.2 + fi * 0.45) + fi * 1.7) * (0.35 + e);
+		float ring = 0.07 + fi * 0.07 + 0.012 * kick +
+			     0.025 * sin(q.y * 22.0 - time * (1.2 + fi * 0.45) + fi * 1.7) * (0.35 + rt_move(e));
 		float d = abs(length(q) - ring);
-		float w = 0.003 + 0.008 * e;
+		float w = 0.003 + 0.008 * rt_bright(e);
 		float g = w / (d + w);
-		light += prism(hue + fi * 0.13 + r * 0.6) * g * g * (0.3 + 1.3 * e);
+		float h = cm_hue(hue + fi * 0.13 + r * 0.6 + rt_tint(e) * 0.15, uv, fi / 5.0, fi);
+		light += prism(h) * g * g * (0.3 + 1.3 * rt_bright(e));
 	}
-	light += prism(hue + 0.5) * exp(-r * 10.0) * (0.25 + 1.6 * bass);
-	return finish(light, uv);
+	light += prism(hue + 0.5) * exp(-r * 10.0) * (0.25 + 1.6 * rt_bright(bass) + 0.8 * kick);
+	return finish_dither(light, uv, v_in.uv * res);
 }
 
 technique RetroBattery
@@ -38,5 +85,788 @@ technique RetroBattery
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSRetroBattery(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Bars & Waves: the classic analyser. Gradient bars on a mirror floor
+ * with falling peak caps, and a wave riding over them.
+ * Amount = number of bars. */
+float rt_bar_height(float i, float n)
+{
+	float e = band_level((i + 0.5) / n);
+	return clamp(0.035 + 0.62 * rt_move(e), 0.02, 0.74);
+}
+
+float3 rt_bars_at(float2 uv, float floor_y, float n, float3 tint_shift)
+{
+	float x = uv.x * n;
+	float i = floor(x);
+	float f = frac(x);
+	float e = band_level((i + 0.5) / n);
+	float h = rt_bar_height(i, n);
+	float pk = clamp(0.035 + 0.62 * band_full((i + 0.5) / n).g * react_mix.x, 0.02, 0.76);
+	float px = 1.0 / res.y;
+	float gapw = 0.14;
+	float side = smoothstep(gapw - 0.06, gapw + 0.02, f) * (1.0 - smoothstep(1.0 - gapw - 0.02, 1.0 - gapw + 0.06, f));
+	float up = floor_y - uv.y; /* height above the floor */
+	float body = side * smoothstep(-px, px, up) * (1.0 - smoothstep(h - px, h + px, up));
+	float t = saturate(up / 0.74);
+	float hh = cm_hue(hue + t * 0.55 + rt_tint(e) * 0.2, uv, t, i / n) + tint_shift.x;
+	float3 col = prism(hh) * (0.55 + 0.9 * t) * (0.6 + 0.9 * rt_bright(e));
+	/* a lit edge on top of every bar */
+	col += prism(hh + 0.1) * side * rt_glow(up - h, 0.004) * 0.9;
+	float cap = side * rt_line(up - pk - 0.008, 0.0045);
+	return col * body + float3(1.0, 1.0, 1.0) * cap * (0.6 + 0.5 * rt_bright(level));
+}
+
+float4 PSRetroBarsWaves(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float n = floor(clamp(16.0 + 20.0 * density, 8.0, 64.0));
+	float floor_y = 0.8;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	if (uv.y <= floor_y) {
+		light += rt_bars_at(uv, floor_y, n, float3(0.0, 0.0, 0.0));
+	} else {
+		/* the reflection in the floor, fading away */
+		float2 m = float2(uv.x, 2.0 * floor_y - uv.y + 0.004 * sin(uv.x * 90.0 + time * 3.0));
+		float fade = exp(-(uv.y - floor_y) * 14.0);
+		light += rt_bars_at(m, floor_y, n, float3(0.0, 0.0, 0.0)) * 0.32 * fade;
+	}
+	/* the floor line flashes on the beat */
+	light += prism(hue + 0.6) * rt_glow(uv.y - floor_y, 0.0025) * (0.35 + 1.4 * rt_beat());
+
+	/* the wave across the top */
+	float aspect = res.x / res.y;
+	float x = uv.x * aspect;
+	float amp1 = 0.03 + 0.07 * rt_move(mid);
+	float amp2 = 0.012 + 0.04 * rt_move(treble);
+	float wy = 0.3 + amp1 * sin(x * 7.0 + time * 1.7) + amp2 * sin(x * 23.0 - time * 3.1);
+	float dy = amp1 * 7.0 * cos(x * 7.0 + time * 1.7) + amp2 * 23.0 * cos(x * 23.0 - time * 3.1);
+	float d = (uv.y - wy) / sqrt(1.0 + dy * dy);
+	float wh = cm_hue(hue + 0.33 + uv.x * 0.4 + rt_tint(level) * 0.2, uv, uv.x, 0.0);
+	light += prism(wh) * (rt_glow(d, 0.0035) * 1.2 + rt_glow(d, 0.02) * 0.25) * (0.5 + 1.0 * rt_bright(level));
+
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroBarsWaves
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroBarsWaves(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Ocean Mist: soft sea-green fog columns rise from the bottom, one per
+ * band, drifting and glittering with the highs. Amount = columns. */
+float4 PSRetroOceanMist(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float n = floor(clamp(10.0 + 14.0 * density, 6.0, 40.0));
+	float x = uv.x * n;
+	float ci = floor(x);
+	float yy = 1.0 - uv.y;
+	float mist = fbm4(float2(uv.x * 7.0, yy * 3.0 - time * 0.45));
+	float wisp = fbm4(float2(uv.x * 15.0 + 3.1, yy * 6.0 - time * 0.8));
+
+	float3 light = float3(0.0, 0.0, 0.0);
+	for (int k = -2; k <= 2; k++) {
+		float i = ci + float(k);
+		if (i >= 0.0 && i < n) {
+			float e = band_level((i + 0.5) / n);
+			float cx = (i + 0.5) / n + 0.008 * sin(time * 0.7 + i * 1.7);
+			float dx = (uv.x - cx) * n;
+			float h = 0.12 + 0.72 * rt_move(e);
+			float col = exp(-dx * dx * 0.9) * smoothstep(h + 0.15, h * 0.4, yy + (mist - 0.5) * 0.22);
+			float hh = cm_hue(hue + 0.45 + yy * 0.25 + i / n * 0.15 + rt_tint(e) * 0.15, uv, yy, i / n);
+			light += prism(hh) * col * (0.25 + 0.9 * rt_bright(e)) * (0.6 + 0.8 * wisp);
+		}
+	}
+	/* sea-green haze and a calm horizon line */
+	light += float3(0.02, 0.07, 0.08) * (0.6 + mist) * smoothstep(0.7, 0.0, yy);
+	/* glitter in the mist on the highs */
+	float2 g = floor(v_in.uv * res / 3.0);
+	float sp = step(0.9965, hash21(g + floor(time * 9.0)));
+	light += float3(0.7, 1.0, 1.0) * sp * smoothstep(0.75, 0.1, yy) * (0.2 + 1.6 * rt_bright(treble));
+	light *= 1.0 + 0.35 * rt_beat();
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroOceanMist
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroOceanMist(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Classic Scope: the old oscilloscope line, built from the spectrum,
+ * on a dotted graticule with a faint echo. */
+float rt_scope_y(float x, float tt, float k)
+{
+	float y = 0.0;
+	for (int i = 0; i < 8; i++) {
+		float fi = float(i);
+		float f = 1.5 + fi * 2.3;
+		float a = band_level(0.03 + fi / 8.0) * 0.11 / (1.0 + fi * 0.3) * react_mix.x;
+		y += a * sin(6.2831853 * f * x + tt * (1.3 + fi * 0.7) + fi * 1.9 + k);
+	}
+	return y;
+}
+
+float4 PSRetroClassicScope(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float eps = 0.002;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	/* graticule dots */
+	float2 cell = frac(float2(uv.x * aspect, uv.y) * 10.0) - 0.5;
+	float dot_ = exp(-dot(cell, cell) * 900.0);
+	light += float3(0.05, 0.12, 0.08) * dot_;
+	light += float3(0.03, 0.07, 0.05) * rt_glow(uv.y - 0.5, 0.0012);
+
+	for (int j = 0; j < 2; j++) {
+		float fj = float(j);
+		float tt = time * (1.0 + fj * 0.15);
+		float y = 0.5 + rt_scope_y(uv.x, tt, fj * 0.7);
+		float y2 = 0.5 + rt_scope_y(uv.x + eps, tt, fj * 0.7);
+		float dy = (y2 - y) / (eps * aspect);
+		float d = (uv.y - y) / sqrt(1.0 + dy * dy);
+		float w = 0.0018 + 0.0022 * rt_beat() + 0.0012 * rt_bright(level);
+		float hh = cm_hue(hue + 0.3 + uv.x * 0.15 + rt_tint(level) * 0.2, uv, uv.x, fj);
+		float strength = (j == 0) ? 1.0 : 0.25;
+		light += prism(hh) * strength * (rt_glow(d, w) * 1.4 + rt_glow(d, 0.02) * 0.25) *
+			 (0.55 + 0.9 * rt_bright(level));
+	}
+	/* faint scanlines, like the old screen */
+	light *= 0.9 + 0.1 * sin(v_in.uv.y * res.y * 3.14159);
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroClassicScope
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroClassicScope(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Fire Storm: a wall of flame whose height follows the spectrum, with
+ * embers lifting off on the highs. */
+float3 rt_fire_ramp(float t)
+{
+	t = saturate(t);
+	float3 c = float3(1.6, 0.35, 0.05) * smoothstep(0.0, 0.45, t);
+	c += float3(0.4, 0.75, 0.1) * smoothstep(0.35, 0.75, t);
+	c += float3(0.3, 0.4, 0.75) * smoothstep(0.7, 1.0, t);
+	return c;
+}
+
+float4 PSRetroFireStorm(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float yy = 1.0 - uv.y;
+	float e = band_level(uv.x * 0.9 + 0.03);
+	float e2 = band_level(saturate(uv.x * 0.9 + 0.06));
+	float ee = (e + e2) * 0.5;
+	float h = 0.12 + 0.62 * rt_move(ee) + 0.08 * rt_beat();
+	float sc = 3.0 + 2.0 * clamp(density, 0.3, 2.0);
+	float n1 = fbm4(float2(uv.x * sc * 2.0, yy * sc - time * 1.9));
+	float n2 = fbm4(float2(uv.x * sc * 4.0 + 7.0, yy * sc * 2.0 - time * 3.3));
+	float n = n1 * 0.7 + n2 * 0.3;
+	float shape = smoothstep(h + 0.06, h * 0.15, yy + (n - 0.5) * 0.35 * (0.6 + h));
+	float t = shape * (0.55 + 0.55 * n) * (0.75 + 0.6 * rt_bright(ee));
+	float3 fire = rt_fire_ramp(t) * shape;
+	float hh = cm_hue(hue + t * 0.25 + rt_tint(ee) * 0.2, uv, yy, 0.0);
+	float3 col = lerp(fire, prism(hh) * t * 1.8, pal_mix);
+	float3 light = col;
+
+	/* embers */
+	float2 gp = float2(uv.x * 40.0, yy * 22.0 - time * 3.0);
+	float2 gi = floor(gp);
+	float2 gf = frac(gp) - 0.5;
+	float hr = hash21(gi);
+	float2 off = float2(hash21(gi + 7.0) - 0.5, hash21(gi + 3.0) - 0.5) * 0.6;
+	float sd = length((gf - off) * float2(1.0, 0.6));
+	float ember = step(0.86, hr) * exp(-sd * sd * 120.0) * smoothstep(0.95, 0.2, yy);
+	light += rt_fire_ramp(0.8) * ember * (0.3 + 1.5 * rt_bright(treble));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroFireStorm
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroFireStorm(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Ambience Warp: a twisting tunnel of glowing filaments that churns
+ * harder with the bass. */
+float4 PSRetroAmbienceWarp(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = max(length(p), 0.001);
+	float a = atan2(p.y, p.x);
+	float lr = log(r);
+	float churn = 0.6 + 1.6 * rt_move(bass);
+	float tw = fbm4(float2(a * 1.6 + time * 0.2, lr * 2.0 - time * 0.4));
+	float z = lr * 2.2 - time * 0.9 - 0.35 * rt_beat();
+	float arms = 3.0 + floor(3.0 * clamp(density, 0.3, 2.0));
+	float f = sin(z * 6.0 + a * arms + tw * 4.0 * churn);
+	float g = sin(z * 3.0 - a * 2.0 + tw * 3.0 + time * 0.5);
+	float fil = pow(0.5 + 0.5 * f, 10.0) + 0.6 * pow(0.5 + 0.5 * g, 18.0);
+	float depth = smoothstep(0.0, 0.25, r) * exp(-r * 1.2);
+	float hh = cm_hue(hue + lr * 0.22 + a / 6.2831853 + rt_tint(mid) * 0.25, uv, frac(z * 0.1), 0.0);
+	float3 light = prism(hh) * fil * depth * (0.7 + 1.4 * rt_bright(level));
+	light += prism(hh + 0.5) * exp(-r * 18.0) * (0.15 + 0.9 * rt_bright(bass));
+	return finish_dither(light * 1.4, uv, v_in.uv * res);
+}
+
+technique RetroAmbienceWarp
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroAmbienceWarp(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Ambience Water (calm): drifting caustic light on the bottom of a
+ * pool, swelling softly with the music. */
+float rt_ridge(float2 p)
+{
+	return 1.0 - abs(2.0 * vnoise(p) - 1.0);
+}
+
+float4 PSRetroAmbienceWater(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = float2(uv.x * res.x / res.y, uv.y) * (3.0 + 2.0 * clamp(density, 0.3, 2.0));
+	float t = time * 0.35;
+	float2 w = float2(fbm4(p * 0.6 + float2(t, 0.0)), fbm4(p * 0.6 + float2(4.0, -t)));
+	float2 q = p + (w - 0.5) * (1.4 + 0.8 * calm_in.y * react_mix.x);
+	float c1 = rt_ridge(q + float2(t * 0.8, t * 0.3));
+	float c2 = rt_ridge(q * 1.7 + float2(-t * 0.5, t * 0.9) + 3.0);
+	float caustic = pow(c1, 7.0) * 0.9 + pow(c2, 9.0) * 0.6 + pow(c1 * c2, 4.0) * 0.8;
+	float swell = 0.6 + 0.8 * calm_in.x * react_mix.y + 0.25 * calm_in.w * react_mix.w;
+	float hh = cm_hue(hue + 0.5 + w.x * 0.2 + calm_in.z * react_mix.z * 0.15, uv, w.y, 0.0);
+	float3 deep = prism(hh + 0.08) * 0.07 * (0.7 + w.y);
+	float3 light = deep + prism(hh) * caustic * 0.55 * swell;
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroAmbienceWater
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroAmbienceWater(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Anemone: swaying tentacles reach out from the middle, each one a band,
+ * glowing at the tips. Amount = number of tentacles. */
+float4 PSRetroAnemone(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x) + 3.14159265;
+	float n = floor(clamp(10.0 + 10.0 * density, 6.0, 30.0));
+	float cellw = 6.2831853 / n;
+	float ci = floor(a / cellw);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int k = -2; k <= 2; k++) {
+		float i = glmod(ci + float(k), n);
+		float e = band_level(glmod(i * 7.0, n) / n);
+		float len = 0.12 + 0.26 * rt_move(e) + 0.02 * sin(time * 0.8 + i);
+		float base_a = (ci + float(k) + 0.5) * cellw;
+		float sway = (0.18 + 0.25 * rt_move(mid)) * sin(r * 9.0 - time * 1.6 + i * 1.3) * (r / max(len, 0.01));
+		float ta = base_a + sway;
+		float da = a - ta;
+		da = glmod(da + 3.14159265, 6.2831853) - 3.14159265;
+		float along = r / max(len, 0.01);
+		float wdt = 0.013 * (1.0 - smoothstep(0.0, 1.0, along)) + 0.002;
+		float dd = abs(da) * r;
+		float inside = step(r, len);
+		float hh = cm_hue(hue + i / n * 0.6 + along * 0.15 + rt_tint(e) * 0.2, uv, along, i / n);
+		light += prism(hh) * inside * (rt_glow(dd - wdt * 0.5, 0.0025) * 0.5 + rt_line(dd, wdt) * 0.35) *
+			 (0.5 + 1.0 * rt_bright(e));
+		/* the tip */
+		float2 tip = float2(cos(ta), sin(ta)) * len;
+		float2 pp = float2(cos(a), sin(a)) * r;
+		float td = length(pp - tip);
+		light += prism(hh + 0.15) * rt_glow(td, 0.006 + 0.006 * rt_beat()) * (0.4 + 1.2 * rt_bright(e));
+	}
+	light += prism(hue + 0.5) * exp(-r * 22.0) * (0.3 + 1.2 * rt_bright(bass));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroAnemone
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroAnemone(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Battery Dandelion: a seed head of fine rays, each with a little puff
+ * at its end; the rays stretch with their bands. Amount = rays. */
+float4 PSRetroDandelion(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x) + 3.14159265 + time * 0.06;
+	float n = floor(clamp(36.0 + 30.0 * density, 18.0, 96.0));
+	float cellw = 6.2831853 / n;
+	float ci = floor(a / cellw);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int k = -1; k <= 1; k++) {
+		float i = ci + float(k);
+		float ii = glmod(i, n);
+		float e = band_level(abs(ii / n * 2.0 - 1.0));
+		float len = 0.16 + 0.22 * rt_move(e) + 0.015 * hash11(ii);
+		float ta = (i + 0.5) * cellw;
+		float da = a - ta;
+		float dd = abs(da) * r;
+		float inside = step(r, len) * smoothstep(0.02, 0.05, r);
+		float hh = cm_hue(hue + ii / n * 0.5 + rt_tint(e) * 0.2, uv, r / max(len, 0.01), ii / n);
+		light += prism(hh) * inside * rt_glow(dd, 0.0012) * (0.35 + 0.8 * rt_bright(e));
+		/* the puff: a few fibres fanning out at the end */
+		float2 tip = float2(cos(ta), sin(ta)) * len;
+		float2 pp = float2(cos(a), sin(a)) * r;
+		float2 rel = pp - tip;
+		float td = length(rel);
+		float fan = atan2(rel.y, rel.x) - ta;
+		float fib = pow(abs(cos(fan * 3.5)), 30.0) * smoothstep(0.035, 0.0, td) * step(0.0, dot(rel, tip));
+		light += prism(hh + 0.08) * (fib * 0.5 + rt_glow(td, 0.0035) * 0.6) * (0.35 + 1.0 * rt_bright(e) + 0.6 * rt_beat());
+	}
+	light += float3(1.0, 1.0, 1.0) * prism(hue) * exp(-r * 30.0) * (0.3 + 0.8 * rt_bright(bass));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroDandelion
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroDandelion(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Spider Web: spokes and sagging polygon threads that tremble with the
+ * music, with dew catching the light on the beat. Amount = spokes. */
+float4 PSRetroSpiderWeb(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x) + 3.14159265 + time * 0.03;
+	float m = floor(clamp(8.0 + 5.0 * density, 5.0, 20.0));
+	float seg = 6.2831853 / m;
+	float si = floor(a / seg);
+	float am = a - (si + 0.5) * seg;
+	float e = band_level(glmod(si, m) / m);
+	float px = 1.0 / res.y;
+
+	/* spokes */
+	float sd = abs(sin(am)) * r;
+	float3 light = float3(0.0, 0.0, 0.0);
+	float hh = cm_hue(hue + si / m * 0.3 + rt_tint(e) * 0.2, uv, r, si / m);
+	light += prism(hh) * rt_glow(sd, 0.0011) * smoothstep(0.47, 0.42, r) * 0.9;
+
+	/* threads: polygon rings that sag between spokes and shiver */
+	float rp = r * cos(am) / cos(seg * 0.5);
+	float am_n = am / (seg * 0.5);
+	float sag = 0.006 * (1.0 - am_n * am_n) * (0.4 + rp * 2.0);
+	float shiver = 0.006 * sin(time * 9.0 + si * 2.3) * rt_move(e) * 3.0;
+	float rings = 11.0;
+	float rr = (rp + sag + shiver) * rings / 0.45;
+	float ring_d = abs(frac(rr + 0.5) - 0.5) * 0.45 / rings;
+	float inside = step(0.04, rp) * step(rp, 0.45);
+	light += prism(hh + 0.05) * inside * rt_glow(ring_d, 0.001) * (0.6 + 1.2 * rt_bright(e));
+
+	/* dew: bright beads where threads cross spokes */
+	float ringn = floor(rr + 0.5);
+	float dewp = hash21(float2(si, ringn));
+	float2 dd = float2(sd, ring_d);
+	float dew = step(0.55, dewp) * exp(-dot(dd, dd) / (px * px * 9.0)) * inside;
+	light += float3(1.0, 1.0, 1.0) * dew * (0.3 + 1.2 * rt_bright(treble) + 1.5 * rt_beat() * step(0.8, dewp));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroSpiderWeb
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroSpiderWeb(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Cotton Star (calm): soft fluffy star shapes turning slowly over each
+ * other, breathing with the music. Amount = points. */
+float4 PSRetroCottonStar(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x);
+	float pts = floor(4.0 + 2.0 * clamp(density, 0.3, 2.0));
+	float swell = calm_in.x * react_mix.y;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int i = 0; i < 3; i++) {
+		float fi = float(i);
+		float rot = time * (0.05 + fi * 0.03) * (fi > 0.5 ? -1.0 : 1.0) + fi * 0.7;
+		float shape = 0.17 + fi * 0.05 + (0.05 + 0.02 * calm_in.y * react_mix.x) * cos(pts * (a + rot));
+		shape *= 1.0 + 0.08 * calm_in.w * react_mix.w;
+		float fluff = fbm4(float2(a * 3.0 + fi * 5.0, r * 8.0 - time * 0.2)) - 0.5;
+		float d = r - shape + fluff * 0.07;
+		float body = smoothstep(0.06, -0.04, d);
+		float hh = cm_hue(hue + fi * 0.18 + calm_in.z * react_mix.z * 0.1, uv, r, fi);
+		float3 c = lerp(prism(hh), float3(1.0, 1.0, 1.0), 0.35);
+		light += c * body * (0.18 + 0.3 * swell) / (1.0 + fi * 0.6);
+		light += c * exp(-max(d, 0.0) * 30.0) * 0.08 * (1.0 + swell);
+	}
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroCottonStar
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroCottonStar(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Musical Colors: big soft colour pools blooming and overlapping, each
+ * one a part of the spectrum. Amount = number of pools. */
+float4 PSRetroMusicalColors(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float n = floor(clamp(6.0 + 6.0 * density, 3.0, 16.0));
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int i = 0; i < 16; i++) {
+		float fi = float(i);
+		if (fi < n) {
+			float h1 = hash11(fi * 3.7 + 0.4);
+			float h2 = hash11(fi * 9.1 + 2.0);
+			float2 c = float2((0.15 + 0.7 * h1 + 0.12 * sin(time * (0.13 + 0.05 * h2) + fi)) * aspect,
+					  0.2 + 0.6 * h2 + 0.12 * cos(time * (0.11 + 0.04 * h1) + fi * 1.7));
+			float e = band_level(fi / max(n - 1.0, 1.0));
+			float rad = 0.07 + 0.2 * rt_move(e) + 0.03 * rt_beat();
+			float d = length(p - c);
+			float pool = exp(-d * d / (rad * rad));
+			float rim = exp(-pow((d - rad * 0.9) / (0.012 + rad * 0.08), 2.0)) * 0.35;
+			float hh = cm_hue(hue + fi * 0.13 + rt_tint(e) * 0.2, uv, fi / max(n, 1.0), fi);
+			light += prism(hh) * (pool * 0.55 + rim) * (0.35 + 1.1 * rt_bright(e));
+		}
+	}
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroMusicalColors
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroMusicalColors(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Plenoptic: shimmering interference patterns from moving sources,
+ * folded into psychedelic colour contours. */
+float4 PSRetroPlenoptic(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float k = 26.0 + 18.0 * clamp(density, 0.3, 2.0) + 12.0 * rt_move(bass);
+	float2 s1 = float2(0.35 * sin(time * 0.31), 0.22 * cos(time * 0.23));
+	float2 s2 = float2(0.38 * cos(time * 0.19 + 1.0), 0.2 * sin(time * 0.29 + 2.0));
+	float2 s3 = float2(0.25 * sin(time * 0.17 + 4.0), 0.25 * sin(time * 0.37));
+	float v = sin(length(p - s1) * k - time * 2.0) + sin(length(p - s2) * k * 0.9 + time * 1.6) +
+		  sin(length(p - s3) * k * 1.1 - time * 1.1) + 0.6 * sin(atan2(p.y, p.x) * 6.0 + time * 0.4);
+	v = v / 3.6;
+	float contour = 0.5 + 0.5 * cos(v * 6.2831853 * (2.0 + rt_move(mid)));
+	float edge = pow(contour, 6.0);
+	float hh = cm_hue(hue + v * 0.6 + rt_tint(level) * 0.3, uv, 0.5 + 0.5 * v, 0.0);
+	float3 light = prism(hh) * (0.18 + 0.55 * contour) * (0.6 + 1.0 * rt_bright(level));
+	light += prism(hh + 0.5) * edge * (0.4 + 0.8 * rt_bright(treble) + 0.8 * rt_beat());
+	light *= smoothstep(0.85, 0.2, length(p));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroPlenoptic
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroPlenoptic(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Spikes: a ring of sharp spectrum spikes, mirrored left and right,
+ * with a glowing hub. Amount = number of spikes. */
+float4 PSRetroSpikes(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.x, -p.y); /* 0 at the top, -pi..pi */
+	float n = floor(clamp(48.0 + 32.0 * density, 24.0, 128.0));
+	float cellw = 6.2831853 / n;
+	float ac = (floor(a / cellw) + 0.5) * cellw;
+	float e = band_level(abs(ac) / 3.14159265);
+	float r0 = 0.11 + 0.02 * rt_beat();
+	float len = 0.025 + 0.3 * rt_move(e);
+	float along = (r - r0) / max(len, 0.001);
+	float halfw = cellw * 0.42 * saturate(1.0 - along);
+	float da = abs(a - ac);
+	float px = 1.0 / res.y;
+	float body = (1.0 - smoothstep(halfw * r - px, halfw * r + px, da * r)) * step(r0, r);
+	float hh = cm_hue(hue + abs(ac) / 6.2831853 + along * 0.2 + rt_tint(e) * 0.2, uv, saturate(along), 0.0);
+	float3 light = prism(hh) * body * (0.6 + 0.8 * saturate(along)) * (0.5 + 1.0 * rt_bright(e));
+	light += prism(hh) * rt_glow(da * r - halfw * r, 0.004) * step(r0, r) * step(along, 1.0) * 0.4;
+	/* the hub */
+	light += prism(hue + 0.5) * rt_glow(r - r0, 0.003) * (0.6 + 1.2 * rt_bright(bass));
+	light += prism(hue + 0.5) * exp(-r * 14.0) * (0.15 + 0.6 * rt_bright(bass) + 0.6 * rt_beat());
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroSpikes
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroSpikes(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Superscope Rings: rings of glowing points tumbling in 3D, bulging with
+ * their bands, like the old programmable scopes. */
+float4 PSRetroSuperscope(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float n = floor(clamp(32.0 + 16.0 * density, 16.0, 64.0));
+	float3 light = float3(0.0, 0.0, 0.0);
+	float rx = time * 0.37;
+	float ry = time * 0.23;
+	float cx = cos(rx);
+	float sx = sin(rx);
+	float cy = cos(ry);
+	float sy = sin(ry);
+
+	for (int j = 0; j < 3; j++) {
+		float fj = float(j);
+		float tilt = fj * 1.047;
+		for (int i = 0; i < 64; i++) {
+			float fi = float(i);
+			if (fi < n) {
+				float t = fi / n * 6.2831853;
+				float e = band_level(fi / n);
+				float rad = 0.22 + 0.05 * fj + 0.09 * rt_move(e);
+				float3 q = float3(cos(t) * rad, sin(t) * rad, 0.0);
+				/* tilt each ring, then tumble the whole thing */
+				q = float3(q.x, q.y * cos(tilt), q.y * sin(tilt));
+				q = float3(q.x * cy + q.z * sy, q.y, -q.x * sy + q.z * cy);
+				q = float3(q.x, q.y * cx - q.z * sx, q.y * sx + q.z * cx);
+				float persp = 1.0 / (1.6 + q.z * 2.0);
+				float2 s = q.xy * persp * 1.6;
+				float d = length(p - s);
+				float size = (0.0025 + 0.003 * rt_bright(e) + 0.002 * rt_beat()) * persp * 1.6;
+				float hh = cm_hue(hue + fi / n * 0.5 + fj * 0.2 + rt_tint(e) * 0.2, uv, fi / n, fj);
+				light += prism(hh) * rt_glow(d, size) * (0.5 + 1.0 * rt_bright(e)) * (0.6 + 0.6 * persp);
+			}
+		}
+	}
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroSuperscope
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroSuperscope(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Starburst: turning rays from a bright core and sparks flying out,
+ * bursting harder on the beat. Amount = rays. */
+float4 PSRetroStarburst(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x);
+	float n = floor(clamp(12.0 + 10.0 * density, 6.0, 40.0));
+	float cellw = 6.2831853 / n;
+	float3 light = float3(0.0, 0.0, 0.0);
+	float kick = rt_beat();
+
+	for (int j = 0; j < 2; j++) {
+		float fj = float(j);
+		float aa = a + time * (0.12 - fj * 0.2) + fj * cellw * 0.5;
+		float ci = floor(aa / cellw);
+		float da = aa - (ci + 0.5) * cellw;
+		float idx = glmod(ci, n);
+		float e = band_level(idx / n);
+		float len = 0.18 + 0.32 * rt_move(e) + 0.08 * kick;
+		float ray = exp(-abs(da) * r * (220.0 + fj * 200.0)) * smoothstep(len, 0.0, r);
+		float hh = cm_hue(hue + idx / n * 0.4 + fj * 0.3 + rt_tint(e) * 0.2, uv, r / max(len, 0.01), fj);
+		light += prism(hh) * ray * (0.4 + 1.0 * rt_bright(e)) * (1.0 - fj * 0.4);
+	}
+
+	/* sparks flying outwards */
+	float lane = 40.0;
+	float2 pol = float2((a + 3.14159265) / 6.2831853 * lane, r * 9.0 - time * (1.6 + 1.5 * rt_move(level)));
+	float2 gi = floor(pol);
+	float2 gf = frac(pol) - 0.5;
+	float hs = hash21(gi + float2(0.0, 31.0));
+	float2 off = float2(hash21(gi) - 0.5, hash21(gi + 5.0) - 0.5) * 0.5;
+	float sd = length((gf - off) * float2(r * 6.2831853 / lane * 9.0 + 0.05, 1.0));
+	float spark = step(0.7, hs) * exp(-sd * sd * 60.0) * smoothstep(0.05, 0.15, r);
+	light += prism(hue + hs * 0.3) * spark * (0.3 + 1.0 * rt_bright(treble) + 1.5 * kick);
+
+	light += float3(1.0, 1.0, 1.0) * exp(-r * 25.0) * (0.4 + 1.0 * rt_bright(bass) + 1.2 * kick);
+	light += prism(hue) * exp(-r * 6.0) * 0.15;
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroStarburst
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroStarburst(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Club Lights (calm): soft blurred lights drifting slowly through the
+ * dark with gentle streaks behind them. Amount = number of lights. */
+float4 PSRetroClubLights(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float2 p = float2(uv.x * aspect, uv.y);
+	float n = floor(clamp(6.0 + 5.0 * density, 3.0, 14.0));
+	float swell = calm_in.x * react_mix.y;
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	for (int i = 0; i < 14; i++) {
+		float fi = float(i);
+		if (fi < n) {
+			float h1 = hash11(fi * 5.3 + 1.1);
+			float h2 = hash11(fi * 2.9 + 7.7);
+			float sp = 0.07 + 0.05 * h1;
+			float t0 = time * sp + fi * 3.1;
+			float2 c0 = float2((0.5 + 0.45 * sin(t0 * 1.3 + h2 * 6.0)) * aspect, 0.5 + 0.4 * sin(t0 * 0.9 + h1 * 6.0));
+			float t1 = t0 - 0.35;
+			float2 c1 = float2((0.5 + 0.45 * sin(t1 * 1.3 + h2 * 6.0)) * aspect, 0.5 + 0.4 * sin(t1 * 0.9 + h1 * 6.0));
+			/* distance to the streak from c1 to c0 */
+			float2 ab = c0 - c1;
+			float hcl = saturate(dot(p - c1, ab) / max(dot(ab, ab), 0.00001));
+			float ds = length(p - (c1 + ab * hcl));
+			float rad = 0.03 + 0.03 * h2 + 0.02 * calm_in.y * react_mix.x;
+			float glow = exp(-ds * ds / (rad * rad)) * (0.4 + 0.6 * hcl);
+			float hh = cm_hue(hue + fi * 0.17 + calm_in.z * react_mix.z * 0.15, uv, hcl, fi);
+			light += prism(hh) * (glow * 0.7 + exp(-ds / (rad * 3.0)) * 0.12) * (0.5 + 0.9 * swell + 0.3 * calm_in.w * react_mix.w);
+		}
+	}
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroClubLights
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroClubLights(v_in);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Dial Rings: concentric arcs turning at their own speeds, each filled
+ * as far as its band reaches, with tick marks like an old player's
+ * dials. Amount = number of rings. */
+float4 PSRetroDialRings(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float2 p = rt_centre(uv);
+	float r = length(p);
+	float a = atan2(p.y, p.x) + 3.14159265;
+	float n = floor(clamp(4.0 + 3.0 * density, 3.0, 10.0));
+	float ringw = 0.36 / n;
+	float ri = floor((r - 0.06) / ringw);
+	float3 light = float3(0.0, 0.0, 0.0);
+
+	if (ri >= 0.0 && ri < n) {
+		float e = band_level((ri + 0.5) / n);
+		float rc = 0.06 + (ri + 0.5) * ringw;
+		float dir = glmod(ri, 2.0) < 0.5 ? 1.0 : -1.0;
+		float rotv = dir * time * (0.2 + 0.1 * ri);
+		float aa = glmod(a + rotv, 6.2831853);
+		float fill = (0.12 + 0.85 * saturate(rt_move(e))) * 6.2831853;
+		float on = smoothstep(fill + 0.02, fill - 0.02, aa);
+		float band_d = abs(r - rc) - ringw * 0.32;
+		float px = 1.0 / res.y;
+		float body = 1.0 - smoothstep(-px, px, band_d);
+		float hh = cm_hue(hue + ri / n * 0.5 + aa / 6.2831853 * 0.2 + rt_tint(e) * 0.2, uv, aa / 6.2831853, ri / n);
+		light += prism(hh) * body * on * (0.45 + 1.0 * rt_bright(e));
+		light += prism(hh) * body * (1.0 - on) * 0.06;
+		light += prism(hh) * rt_glow(band_d, 0.004) * on * 0.35;
+		/* ticks */
+		float tick = 1.0 - smoothstep(0.02, 0.05, abs(frac(aa / 6.2831853 * 24.0) - 0.5) * 2.0);
+		light += float3(1.0, 1.0, 1.0) * tick * rt_line(r - (rc + ringw * 0.45), 0.0015) * 0.35;
+		/* the bright leading edge */
+		float lead = exp(-pow((aa - fill) * r * 90.0, 2.0)) * body;
+		light += float3(1.0, 1.0, 1.0) * lead * (0.5 + 1.2 * rt_beat());
+	}
+	light += prism(hue + 0.5) * exp(-r * 30.0) * (0.3 + 1.0 * rt_bright(bass));
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
+technique RetroDialRings
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSRetroDialRings(v_in);
 	}
 }
