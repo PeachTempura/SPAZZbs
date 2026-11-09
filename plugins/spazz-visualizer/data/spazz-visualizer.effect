@@ -217,7 +217,7 @@ float3 shimmer_layer(float2 p, float aspect, float px, float layer, float cols, 
 				float fl = bd.b;
 
 				/* glitter tail: a faint thread plus twinkling dots */
-				float tail_len = (0.05 + 0.24 * e) * (0.7 + 0.25 * layer);
+				float tail_len = (0.05 + 0.24 * e * react_mix.x) * (0.7 + 0.25 * layer);
 				float tail = step(0.0, dy) * exp(-max(dy, 0.0) / tail_len);
 				float g = hash21(float2(c * 3.1 + kf * 7.0, row + floor(time * 12.0 + seed * 50.0)));
 				float sparkle = smoothstep(0.6, 1.0, g);
@@ -235,14 +235,14 @@ float3 shimmer_layer(float2 p, float aspect, float px, float layer, float cols, 
 				float d2 = dx * dx + dy * dy;
 				float r = (1.3 + layer) * px;
 				float core = exp(-d2 / (r * r));
-				float arm_len = px * (5.0 + 12.0 * e + 6.0 * layer);
+				float arm_len = px * (5.0 + 12.0 * e * react_mix.x + 6.0 * layer);
 				float arm_v = exp(-abs(dy) / arm_len) * exp(-adx / (px * 0.8));
 				float arm_h = exp(-adx / (arm_len * 1.3)) * exp(-abs(dy) / (px * 0.9));
 				float twinkle = 0.65 + 0.35 * sin(twinkle_base + seed * 40.0);
-				float shine = twinkle * (0.35 + 1.1 * e + 0.9 * fl);
+				float shine = twinkle * (0.35 + 1.1 * e * react_mix.y + 0.9 * fl * react_mix.w);
 				float3 split = prism(hue + seed * 0.3 + dx / arm_len * 0.18);
 
-				float amount = bright * (0.22 + 1.35 * e);
+				float amount = bright * (0.22 + 1.35 * e * react_mix.y);
 				light += (tint * streak + float3(1.0, 0.98, 0.95) * (core * 1.6 + arm_v * 0.6) * shine +
 					  split * arm_h * 0.9 * shine) *
 					 amount;
@@ -258,7 +258,7 @@ float3 glitter_crown(float2 p, float aspect, float px)
 	float cell_px = 3.0;
 	float2 cell = floor(p * res.y / cell_px);
 	float g = hash21(cell + floor(time * 8.0) * 0.618);
-	float top = exp(-p.y / (0.035 + 0.06 * treble + 0.04 * density));
+	float top = exp(-p.y / (0.035 + 0.06 * treble * react_mix.y + 0.04 * density));
 	float bx = abs((cell.x * cell_px / res.y) / aspect - 0.5) * 2.0;
 	float e = band_level(bx);
 
@@ -266,14 +266,14 @@ float3 glitter_crown(float2 p, float aspect, float px)
 	float dot_shape = exp(-dot(f, f) * 8.0);
 
 	float3 tint = lerp(float3(1.0, 0.97, 0.93), prism(hue + bx * 0.5), 0.35);
-	return tint * smoothstep(0.92, 1.0, g) * dot_shape * top * (0.3 + 1.4 * treble + 1.2 * e);
+	return tint * smoothstep(0.92, 1.0, g) * dot_shape * top * (0.3 + 1.4 * treble * react_mix.y + 1.2 * e * react_mix.y);
 }
 
 float3 beat_flare(float2 p, float aspect)
 {
 	float x = p.x / aspect;
 	float wave = 0.6 + 0.4 * sin(x * 9.0 + time * 0.7);
-	return prism(hue + x * 0.35 + 0.1) * beat * 0.28 * wave * exp(-p.y / 0.16);
+	return prism(hue + x * 0.35 + 0.1) * beat * react_mix.w * 0.28 * wave * exp(-p.y / 0.16);
 }
 
 float4 PSPrismRain(VertData v_in) : TARGET
@@ -313,16 +313,16 @@ float4 PSPrismHalo(VertData v_in) : TARGET
 	float m = abs(frac(a01 * 3.0) - 0.5) * 2.0;
 
 	float e = (band_level(m - 0.02) + band_level(m) * 2.0 + band_level(m + 0.02)) * 0.25;
-	float base_r = 0.2 + 0.035 * level + 0.025 * beat;
-	float ring_r = base_r + e * 0.035;
+	float base_r = 0.2 + 0.035 * level * react_mix.x + 0.025 * beat * react_mix.w;
+	float ring_r = base_r + e * react_mix.x * 0.035;
 
 	float3 light = float3(0.0, 0.0, 0.0);
 
 	/* thin glass ring, split into colour fringes by bass */
-	float3 dr = (r - ring_r) + px * (1.0 + 3.0 * bass) * float3(-1.0, 0.0, 1.0);
-	float w = px * (1.2 + 2.0 * e);
+	float3 dr = (r - ring_r) + px * (1.0 + 3.0 * bass * react_mix.y) * float3(-1.0, 0.0, 1.0);
+	float w = px * (1.2 + 2.0 * e * react_mix.y);
 	float3 ring = exp(-(dr * dr) / (w * w));
-	light += ring * lerp(float3(1.0, 0.97, 0.93), prism(hue + a01), 0.55) * (0.6 + 1.6 * e);
+	light += ring * lerp(float3(1.0, 0.97, 0.93), prism(hue + a01), 0.55) * (0.6 + 1.6 * e * react_mix.y);
 
 	/* faint inner rim */
 	light += prism(hue + a01 + 0.5) * exp(-abs(r - base_r) / (px * 3.0)) * 0.18;
@@ -334,12 +334,12 @@ float4 PSPrismHalo(VertData v_in) : TARGET
 	float fx = frac(a01 * nb) - 0.5;
 	float beam = exp(-(fx * fx) / 0.02);
 	float out_d = max(r - ring_r, 0.0);
-	float reach = 0.04 + 0.4 * e * (0.4 + 0.6 * rh) + 0.1 * beat;
-	float ray = beam * step(ring_r, r) * exp(-out_d / reach) * (0.15 + 1.2 * e) * (0.5 + 0.5 * rh);
+	float reach = 0.04 + 0.4 * e * react_mix.x * (0.4 + 0.6 * rh) + 0.1 * beat * react_mix.w;
+	float ray = beam * step(ring_r, r) * exp(-out_d / reach) * (0.15 + 1.2 * e * react_mix.y) * (0.5 + 0.5 * rh);
 	light += prism(hue + a01 + out_d * 1.8) * ray * 0.9;
 
 	/* soft bloom around the ring on beats */
-	light += prism(hue + a01) * exp(-abs(r - ring_r) / 0.05) * beat * 0.25;
+	light += prism(hue + a01) * exp(-abs(r - ring_r) / 0.05) * beat * react_mix.w * 0.25;
 
 	/* far shimmer dust behind */
 	light += shimmer_layer(p, aspect, px, 0.0, 70.0 * max(density, 0.25), 0.4, 0.3);
@@ -368,8 +368,8 @@ float4 PSSpectrumGlass(VertData v_in) : TARGET
 	float inside_x = step(0.0, t) * step(t, 1.0);
 
 	float4 bd = band_full((i + 0.5) / nb);
-	float h = bd.r * max_h;
-	float peak_y = baseline - bd.g * max_h;
+	float h = bd.r * react_mix.x * max_h;
+	float peak_y = baseline - bd.g * react_mix.x * max_h;
 
 	float gap = 0.16;
 	float col_mask = smoothstep(gap * 0.5, gap * 0.5 + 0.04, fx) * smoothstep(gap * 0.5, gap * 0.5 + 0.04, 1.0 - fx);
@@ -384,7 +384,7 @@ float4 PSSpectrumGlass(VertData v_in) : TARGET
 	float seg = smoothstep(0.15, 0.35, frac(above / 0.0125));
 	float heat = saturate(above / max(h, 0.001));
 	float3 bar_col = lerp(c * 0.8, lerp(c, float3(1.0, 1.0, 1.0), 0.4), heat) * 1.3;
-	light += bar_col * in_bar * col_mask * seg * (0.9 + 0.8 * bd.b);
+	light += bar_col * in_bar * col_mask * seg * (0.9 + 0.8 * bd.b * react_mix.w);
 
 	/* glass sheen down the left edge of each bar */
 	light += float3(1.0, 1.0, 1.0) * in_bar * col_mask * exp(-fx / 0.12) * 0.12;
@@ -396,7 +396,7 @@ float4 PSSpectrumGlass(VertData v_in) : TARGET
 	/* bloom around the bar */
 	float dist_top = max(above - h, 0.0);
 	float in_col = step(0.0, above + 0.002);
-	light += c * col_mask * in_col * exp(-dist_top / (px * 14.0)) * bd.r * 0.25 * (1.0 - in_bar);
+	light += c * col_mask * in_col * exp(-dist_top / (px * 14.0)) * bd.r * react_mix.y * 0.25 * (1.0 - in_bar);
 
 	/* reflection on the floor */
 	float below = uv.y - baseline;
@@ -466,15 +466,15 @@ float4 PSPrismPetals(VertData v_in) : TARGET
 		float4 bd = band_full(bx);
 		float e = bd.r;
 
-		float len = (0.14 + 0.3 * e + 0.035 * beat) * (1.0 - 0.38 * lf);
+		float len = (0.14 + 0.3 * e * react_mix.x + 0.035 * beat * react_mix.w) * (1.0 - 0.38 * lf);
 		float rb = len * sqrt(saturate(1.0 - m * m * 0.92));
 		float inside = 1.0 - smoothstep(rb - px, rb + px, r);
-		float edge = exp(-abs(r - rb) / (px * (1.2 + 1.5 * e)));
+		float edge = exp(-abs(r - rb) / (px * (1.2 + 1.5 * e * react_mix.y)));
 
 		float3 tint = prism(hue + pi / petals + r * 1.8 + lf * 0.3);
 		float3 glass = lerp(float3(1.0, 0.97, 0.94), tint, 0.65);
-		light += glass * edge * (0.5 + 1.6 * e + bd.b) * (1.0 - 0.3 * lf);
-		light += tint * inside * (0.06 + 0.35 * e) * smoothstep(0.0, len, r) * (1.0 - 0.4 * lf);
+		light += glass * edge * (0.5 + 1.6 * e * react_mix.y + bd.b * react_mix.w) * (1.0 - 0.3 * lf);
+		light += tint * inside * (0.06 + 0.35 * e * react_mix.y) * smoothstep(0.0, len, r) * (1.0 - 0.4 * lf);
 
 		/* a glint where each petal tips out */
 		float2 tip = float2(cos((pi + 0.5) / petals * 6.2831853 - (spin + 0.5) * 6.2831853),
@@ -485,8 +485,8 @@ float4 PSPrismPetals(VertData v_in) : TARGET
 	}
 
 	/* the jewel in the middle */
-	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + time * 0.05), 0.3) * exp(-r / (0.012 + 0.02 * bass)) * (0.8 + beat);
-	light += prism(hue + r * 3.0) * exp(-r / 0.25) * beat * 0.15;
+	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + time * 0.05), 0.3) * exp(-r / (0.012 + 0.02 * bass * react_mix.x)) * (0.8 + beat * react_mix.w);
+	light += prism(hue + r * 3.0) * exp(-r / 0.25) * beat * react_mix.w * 0.15;
 	return finish(light, uv);
 }
 
@@ -589,8 +589,8 @@ float3 aurora_light(float2 uv, float aspect, float px, float sky_h, float calm_k
 		/* the hem floats on slow waves; the mids ripple it */
 		float hem = 0.36 + 0.09 * lf + 0.095 * sin(xs * 1.05 + t * 0.2 * par + lf * 1.9) +
 			    0.035 * sin(xs * 2.9 - t * 0.31 * par + lf) +
-			    (0.006 + 0.02 * lm) * sin(xs * 7.0 + t * 0.9 + lf * 2.3) - 0.04 * lb * depth;
-		float height = (0.11 + 0.2 * e + 0.12 * lb) * depth;
+			    (0.006 + 0.02 * lm * react_mix.x) * sin(xs * 7.0 + t * 0.9 + lf * 2.3) - 0.04 * lb * react_mix.x * depth;
+		float height = (0.11 + (0.2 * e + 0.12 * lb) * react_mix.x) * depth;
 		float d = hem - sy; /* above the hem is positive */
 
 		float upper = exp(-max(d, 0.0) / max(height, 0.02));
@@ -605,16 +605,16 @@ float3 aurora_light(float2 uv, float aspect, float px, float sky_h, float calm_k
 		/* light climbing the rays, in soft patches */
 		rays *= 0.8 + 0.2 * vnoise(float2(rx * 0.5, d * 14.0 - t * 1.4));
 		/* the treble sparkles on the thinnest rays */
-		rays += lt * pow(r2, 6.0) * 2.2 * upper;
+		rays += lt * react_mix.y * pow(r2, 6.0) * 2.2 * upper;
 		/* folds seen edge-on glow brighter */
 		float fold = 1.0 + 0.7 * pow(abs(sin(xs * 1.6 + t * 0.12 + lf * 1.3)), 10.0);
 		/* gentle pulses travel along each ribbon with the beat */
 		float pq = (frac(uv.x * 0.45 - t * 0.07 * par + lf * 0.31) - 0.5) * 6.0;
-		float pulse = exp(-pq * pq) * pulse_amt * 1.4;
+		float pulse = exp(-pq * pq) * pulse_amt * react_mix.w * 1.4;
 
 		/* each ribbon thins and fades in places, so they never read as bands */
 		float presence = smoothstep(0.2, 0.62, vnoise(float2(xs * 0.55 + lf * 5.3, t * 0.04 + lf * 2.0)));
-		float energy = (0.4 + 0.7 * e + 0.3 * lb + pulse) * (1.0 - 0.17 * lf) * (0.25 + 0.75 * presence);
+		float energy = (0.4 + (0.7 * e + 0.3 * lb) * react_mix.y + pulse) * (1.0 - 0.17 * lf) * (0.25 + 0.75 * presence);
 		float along = uv.x;
 		float h0 = cm_hue(hue + uv.x * 0.32 + lf * 0.17, float2(uv.x, sy), along, lf);
 		float3 low_c = prism(h0);
@@ -624,8 +624,8 @@ float3 aurora_light(float2 uv, float aspect, float px, float sky_h, float calm_k
 		light += tint * curtain * rays * fold * energy;
 		/* a bright hem and a soft glow around the whole ribbon */
 		light += lerp(low_c, float3(1.0, 1.0, 1.0), 0.3) * exp(-abs(d) / (spx * 3.0 + 0.004)) * rays *
-			 (0.05 + 0.3 * e + pulse * 0.3) * depth * depth;
-		light += tint * exp(-abs(d) / (height * 2.8 + 0.02)) * (0.035 + 0.05 * lb) * depth;
+			 (0.05 + 0.3 * e * react_mix.y + pulse * 0.3) * depth * depth;
+		light += tint * exp(-abs(d) / (height * 2.8 + 0.02)) * (0.035 + 0.05 * lb * react_mix.y) * depth;
 	}
 	return light;
 }
@@ -665,22 +665,22 @@ float3 aurora_classic(float2 uv, float px)
 		float e = band_level(abs(frac(x * (0.8 + 0.3 * lf) + lf * 0.21) - 0.5) * 2.0);
 		float y0 = 0.16 + 0.12 * lf + 0.05 * sin(x * 5.0 + time * 0.25 + lf * 1.7) +
 			   0.03 * sin(x * 13.0 - time * 0.4 + lf);
-		float height = 0.08 + 0.42 * e + 0.05 * beat;
+		float height = 0.08 + 0.42 * e * react_mix.x + 0.05 * beat * react_mix.w;
 		float below = uv.y - y0;
 		float fold = sin(x * (38.0 + 9.0 * lf) + time * (0.9 + 0.3 * lf) + 2.0 * sin(x * 6.0 + time * 0.5 + lf));
 		float curtain = smoothstep(-0.006, 0.01, below) * exp(-max(below, 0.0) / height);
 		float rays = 0.35 + 0.65 * fold * fold;
 		float3 tint = prism(cm_hue(hue + x * 0.45 + below * 1.6 + lf * 0.18, uv, x, lf));
-		light += tint * curtain * rays * (0.18 + 0.9 * e) * (1.0 - 0.25 * lf);
+		light += tint * curtain * rays * (0.18 + 0.9 * e * react_mix.y) * (1.0 - 0.25 * lf);
 		/* a bright hem along the top edge */
-		light += lerp(tint, float3(1.0, 1.0, 1.0), 0.4) * exp(-abs(below) / (px * 2.5)) * (0.1 + 0.6 * e);
+		light += lerp(tint, float3(1.0, 1.0, 1.0), 0.4) * exp(-abs(below) / (px * 2.5)) * (0.1 + 0.6 * e * react_mix.y);
 	}
 
 	/* stars behind it */
 	float2 cell = floor(uv * res / 3.0);
 	float st = hash21(cell);
 	float tw = 0.5 + 0.5 * sin(time * 3.0 + st * 60.0);
-	light += float3(0.9, 0.92, 1.0) * smoothstep(0.996, 1.0, st) * tw * 0.8 * (0.5 + treble);
+	light += float3(0.9, 0.92, 1.0) * smoothstep(0.996, 1.0, st) * tw * 0.8 * (0.5 + treble * react_mix.y);
 	return light;
 }
 
@@ -700,9 +700,9 @@ float4 PSPrismAurora(VertData v_in) : TARGET
 
 	float3 light = aurora_light(uv, aspect, px, 1.0, 0.0);
 	/* a faint glow over the horizon */
-	light += prism(cm_hue(hue + 0.1, uv, uv.x, 0.0)) * exp(-(1.0 - uv.y) / 0.25) * 0.05 * (0.5 + level);
+	light += prism(cm_hue(hue + 0.1, uv, uv.x, 0.0)) * exp(-(1.0 - uv.y) / 0.25) * 0.05 * (0.5 + level * react_mix.y);
 	float bright = dot(light, float3(0.3, 0.5, 0.2));
-	light += starfield(pix, uv, 1.6, 1.0) * saturate(1.0 - bright * 2.5) * (0.6 + 0.6 * treble);
+	light += starfield(pix, uv, 1.6, 1.0) * saturate(1.0 - bright * 2.5) * (0.6 + 0.6 * treble * react_mix.y);
 	/* distant mountains hide the bottom of the sky, lit along the top */
 	float ry = ridge_y(uv.x * aspect, 0.93);
 	float m = smoothstep(ry - px, ry + px, uv.y);
@@ -719,7 +719,7 @@ float4 PSPrismTunnel(VertData v_in) : TARGET
 	float2 uv = view_uv(v_in.uv);
 	float aspect = res.x / res.y;
 	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
-	q = rot2(q, time * 0.05 + bass * 0.08);
+	q = rot2(q, time * 0.05 + bass * react_mix.x * 0.08);
 	float hexd = max(abs(q.x) * 0.866 + abs(q.y) * 0.5, abs(q.y));
 	float ang = atan2(q.y, q.x) / 6.2831853 + 0.5;
 
@@ -730,17 +730,17 @@ float4 PSPrismTunnel(VertData v_in) : TARGET
 	float4 bd = band_full(hash11(id + 0.5));
 	float e = bd.r;
 
-	float ring = exp(-min(f, 1.0 - f) / (0.025 + 0.04 * e));
+	float ring = exp(-min(f, 1.0 - f) / (0.025 + 0.04 * e * react_mix.y));
 	/* rings thin out as they reach you instead of flooding the screen */
 	float fade = smoothstep(0.0, 0.08, hexd) * exp(-depth * 0.08) * (1.0 - 0.75 * smoothstep(0.3, 0.75, hexd));
 	float3 tint = prism(hue + id * 0.09 + ang * 0.5);
-	float3 light = lerp(tint, float3(1.0, 1.0, 1.0), 0.25 * bd.b) * ring * fade * (0.25 + 1.6 * e + bd.b);
+	float3 light = lerp(tint, float3(1.0, 1.0, 1.0), 0.25 * bd.b * react_mix.w) * ring * fade * (0.25 + 1.6 * e * react_mix.y + bd.b * react_mix.w);
 
 	/* light spokes down the corners */
 	float spoke = exp(-abs(frac(ang * 6.0) - 0.5) * 60.0);
-	light += prism(hue + ang + depth * 0.1) * spoke * fade * (0.08 + 0.4 * mid);
+	light += prism(hue + ang + depth * 0.1) * spoke * fade * (0.08 + 0.4 * mid * react_mix.y);
 	/* the far end glows on beats */
-	light += prism(hue + time * 0.1) * exp(-hexd / 0.05) * (0.15 + 0.8 * beat);
+	light += prism(hue + time * 0.1) * exp(-hexd / 0.05) * (0.15 + 0.8 * beat * react_mix.w);
 	return finish(light, uv);
 }
 
@@ -761,15 +761,15 @@ float4 PSPrismWaves(VertData v_in) : TARGET
 		float e = bd.r;
 		float yc = 0.5 + (fi - 3.0) * 0.045;
 		float env = sin(uv.x * 3.14159);
-		float amp = (0.015 + 0.16 * e) * env;
+		float amp = (0.015 + 0.16 * e * react_mix.x) * env;
 		/* flow wraps at 64, so its speeds are whole turns per wrap */
 		float wy = yc + amp * sin(x * (3.0 + fi * 0.9) + flow * 0.0981748 * (8.0 + fi) + fi * 1.3) +
 			   amp * 0.4 * sin(x * (7.0 + fi) - time * 0.7);
-		float w = px * (1.0 + 2.5 * e + 2.0 * bd.b);
+		float w = px * (1.0 + 2.5 * e * react_mix.y + 2.0 * bd.b * react_mix.w);
 		float d = abs(uv.y - wy);
 		float3 tint = prism(cm_hue(hue + fi / 7.0 + uv.x * 0.25, uv, uv.x, fi));
-		light += lerp(tint, float3(1.0, 1.0, 1.0), 0.3) * exp(-d / w) * (0.35 + 1.4 * e);
-		light += tint * exp(-d / (w * 10.0)) * 0.12 * e;
+		light += lerp(tint, float3(1.0, 1.0, 1.0), 0.3) * exp(-d / w) * (0.35 + 1.4 * e * react_mix.y);
+		light += tint * exp(-d / (w * 10.0)) * 0.12 * e * react_mix.y;
 	}
 	return finish(light, uv);
 }
@@ -801,15 +801,15 @@ float4 PSBubbles(VertData v_in) : TARGET
 			float rise = frac(seed * 5.3 + flow * spd * 0.25);
 			float cy = 1.15 - rise * 1.35;
 			float cx = (c + 0.5 + 0.3 * sin(time * (0.6 + seed) + seed * 20.0)) * cw;
-			float R = (0.02 + 0.035 * seed2) * (0.7 + 0.9 * e);
+			float R = (0.02 + 0.035 * seed2) * (0.7 + 0.9 * e * react_mix.x);
 			float2 d2 = p - float2(cx, cy);
 			float d = length(d2);
 			BRANCH
 			if (d < R * 1.6) {
 				float ang = atan2(d2.y, d2.x);
-				float rim = exp(-abs(d - R) / (px * (1.1 + e)));
+				float rim = exp(-abs(d - R) / (px * (1.1 + e * react_mix.y)));
 				float3 film = prism(hue + seed + ang * 0.12 + (R - d) * 30.0 + time * 0.1);
-				light += film * rim * (0.6 + 1.2 * e + bd.b);
+				light += film * rim * (0.6 + 1.2 * e * react_mix.y + bd.b * react_mix.w);
 				light += film * step(d, R) * 0.04;
 				float hl = length(d2 - float2(-0.35, -0.4) * R);
 				light += float3(1.0, 1.0, 1.0) * exp(-hl / (R * 0.12)) * 0.9;
@@ -841,7 +841,7 @@ float4 PSConfetti(VertData v_in) : TARGET
 			float bx = saturate((c + 0.5) * cw / aspect);
 			float e = band_level(abs(bx - 0.5) * 2.0);
 			/* quieter parts of the song thin the confetti out */
-			float shown = step(seed2, 0.25 + 0.75 * saturate(e * 1.6 + beat * 0.4));
+			float shown = step(seed2, 0.25 + 0.75 * saturate(e * react_mix.x * 1.6 + beat * react_mix.w * 0.4));
 			float spd = floor((0.3 + 0.4 * seed2) * 16.0 + 0.5) / 16.0;
 			float fall = frac(seed * 9.1 + flow * spd * 0.25);
 			float cy = fall * 1.2 - 0.1;
@@ -853,7 +853,7 @@ float4 PSConfetti(VertData v_in) : TARGET
 				float2 l = rot2(d2, spin);
 				/* the twirl: the piece narrows as it turns edge-on */
 				float tw = abs(cos(time * (3.0 + 3.0 * seed2) + seed * 17.0));
-				float2 half_size = float2(0.014 * max(tw, 0.12), 0.007) * (0.9 + 0.5 * e);
+				float2 half_size = float2(0.014 * max(tw, 0.12), 0.007) * (0.9 + 0.5 * e * react_mix.x);
 				float2 q2 = abs(l) - half_size;
 				float sd = length(max(q2, float2(0.0, 0.0))) + min(max(q2.x, q2.y), 0.0);
 				float a = 1.0 - smoothstep(0.0, 1.0 / res.y, sd);
@@ -885,9 +885,9 @@ float4 PSBounceBuddies(VertData v_in) : TARGET
 		float e = bd.r;
 		float R = min(0.075, aspect / n * 0.32);
 		float cx = (fi + 0.5) / n * aspect;
-		float hop = e * 0.32 + bd.b * 0.05;
+		float hop = e * react_mix.x * 0.32 + bd.b * react_mix.w * 0.05;
 		/* stretched going up, squashed when landing */
-		float sy = 1.0 + 0.25 * e - 0.15 * (1.0 - smoothstep(0.0, 0.03, hop));
+		float sy = 1.0 + 0.25 * e * react_mix.x - 0.15 * (1.0 - smoothstep(0.0, 0.03, hop));
 		float sx = 1.0 / sy;
 		float cy = floor_y - hop - R * sy;
 		float2 d = (p - float2(cx, cy)) / float2(R * sx, R * sy);
@@ -917,12 +917,12 @@ float4 PSBounceBuddies(VertData v_in) : TARGET
 				float2 ed = (d - float2(side * 0.32, -0.18)) / float2(0.22, 0.26 * max(blink, 0.08));
 				float eye = 1.0 - smoothstep(0.9, 1.0, length(ed));
 				col = over(col, float3(1.0, 1.0, 1.0), eye * a);
-				float2 pd = d - float2(side * 0.32 + look, -0.16 + 0.04 * e);
+				float2 pd = d - float2(side * 0.32 + look, -0.16 + 0.04 * e * react_mix.x);
 				float pupil = 1.0 - smoothstep(0.085, 0.11, length(pd));
 				col = over(col, float3(0.05, 0.04, 0.08), pupil * eye * a);
 			}
 			/* mouth: a smile, opening into an "o" when it's loud */
-			float open_m = saturate(e * 1.4);
+			float open_m = saturate(e * react_mix.x * 1.4);
 			float2 md = (d - float2(0.0, 0.3)) / float2(0.22, 0.06 + 0.16 * open_m);
 			float mouth = (1.0 - smoothstep(0.85, 1.0, length(md))) * step(0.28, d.y + 0.02 * (1.0 - open_m));
 			col = over(col, float3(0.25, 0.05, 0.1), mouth * a);
@@ -954,16 +954,16 @@ float4 PSDiscoFloor(VertData v_in) : TARGET
 		float2 tf = frac(float2(wx, wz) * 1.2);
 		float tid = hash21(float2(tile.x, glmod(tile.y, 64.0)));
 		float e = band_level(tid);
-		float tile_on = smoothstep(0.12, 0.45, e + 0.15 * sin(time * 2.0 + tid * 30.0));
+		float tile_on = smoothstep(0.12, 0.45, e * react_mix.y + 0.15 * sin(time * 2.0 + tid * 30.0));
 		float edge = smoothstep(0.0, 0.06, min(min(tf.x, 1.0 - tf.x), min(tf.y, 1.0 - tf.y)));
 		float fog = exp(-z * 0.12);
-		light += prism(hue + tid) * tile_on * edge * fog * (0.8 + 1.8 * e);
+		light += prism(hue + tid) * tile_on * edge * fog * (0.8 + 1.8 * e * react_mix.y);
 		light += float3(0.4, 0.35, 0.6) * (1.0 - edge) * fog * 0.08;
 	}
 
 	/* the mirror ball */
 	float2 bc = float2(aspect * 0.5, 0.2);
-	float br = 0.1 + 0.01 * beat;
+	float br = 0.1 + 0.01 * beat * react_mix.w;
 	float2 bq = (p - bc) / br;
 	float bd2 = dot(bq, bq);
 	BRANCH
@@ -975,7 +975,7 @@ float4 PSDiscoFloor(VertData v_in) : TARGET
 		float2 ff = frac(float2(lon * 5.0, lat * 5.0));
 		float fh = hash21(facet + 7.0);
 		float gap = smoothstep(0.0, 0.12, min(min(ff.x, 1.0 - ff.x), min(ff.y, 1.0 - ff.y)));
-		float glint = pow(saturate(fh), 12.0) * (0.5 + 2.0 * treble + beat);
+		float glint = pow(saturate(fh), 12.0) * (0.5 + 2.0 * treble * react_mix.y + beat * react_mix.w);
 		float3 base = float3(0.55, 0.55, 0.62) * (0.35 + 0.65 * bz);
 		light += (base + prism(hue + fh) * glint) * gap;
 	}
@@ -987,7 +987,7 @@ float4 PSDiscoFloor(VertData v_in) : TARGET
 		float2 sp = float2(aspect * (0.5 + 0.42 * sin(time * (0.3 + fi * 0.07) + fi * 2.1)),
 				   0.15 + 0.3 * frac(fi * 0.37 + time * 0.03));
 		float e = band_level(fi / 5.0 + 0.1);
-		light += prism(hue + fi * 0.2) * exp(-length(p - sp) / (0.012 + 0.03 * e)) * (0.2 + 1.2 * e) *
+		light += prism(hue + fi * 0.2) * exp(-length(p - sp) / (0.012 + 0.03 * e * react_mix.x)) * (0.2 + 1.2 * e * react_mix.y) *
 			 step(uv.y, horizon);
 	}
 	return finish(light, uv);
@@ -1022,7 +1022,7 @@ float4 PSLavaLamp(VertData v_in) : TARGET
 
 	float3 wax = prism(hue + li * 0.29 + 0.02);
 	float3 liquid = lerp(prism(hue + li * 0.29 + 0.78), float3(0.08, 0.06, 0.16), 0.35);
-	float heat_glow = 0.55 + 0.6 * level + 0.35 * bass + 0.25 * beat;
+	float heat_glow = 0.55 + 0.6 * level * react_mix.y + 0.35 * bass * react_mix.y + 0.25 * beat * react_mix.w;
 
 	float4 col = float4(0.0, 0.0, 0.0, 0.0);
 
@@ -1030,7 +1030,7 @@ float4 PSLavaLamp(VertData v_in) : TARGET
 	float gw = lamp_glass_w(l.y);
 	float in_band = smoothstep(0.05, 0.16, l.y) * (1.0 - smoothstep(0.8, 0.9, l.y));
 	float out_d = max(abs(l.x) - gw, 0.0);
-	col = over(col, wax, saturate(exp(-out_d / (0.05 + 0.04 * level)) * in_band * 0.32 * heat_glow) * step(0.0001, out_d));
+	col = over(col, wax, saturate(exp(-out_d / (0.05 + 0.04 * level * react_mix.y)) * in_band * 0.32 * heat_glow) * step(0.0001, out_d));
 
 	/* ---- the glass: liquid, wax, highlights ---- */
 	float de = gw - abs(l.x); /* distance inside the glass edge */
@@ -1051,16 +1051,16 @@ float4 PSLavaLamp(VertData v_in) : TARGET
 			float by = 0.76 - rise * 0.56;
 			float bx = lamp_glass_w(by) * 0.5 * sin(time * (0.11 + 0.07 * s1) + s2 * 40.0);
 			float e = band_level((fi + 0.5) / 7.0);
-			float r = (0.028 + 0.022 * s1) * (0.85 + 0.5 * e + 0.12 * beat);
+			float r = (0.028 + 0.022 * s1) * (0.85 + 0.5 * e * react_mix.x + 0.12 * beat * react_mix.w);
 			/* stretched while it moves, round when it rests */
 			float stretch = 1.0 + 0.55 * abs(sin(ph)) * (1.0 - abs(rise - 0.5));
 			float2 d = (l - float2(bx, by)) * float2(sqrt(stretch), 1.0 / stretch);
 			float k = r * r / max(dot(d, d), 0.000001);
 			field += k;
-			hot += k * e;
+			hot += k * e * react_mix.y;
 		}
 		/* the pool of warm wax on the bottom, and a little stuck at the top */
-		float2 pool = float2(l.x / (lamp_glass_w(0.8) * 1.05), (l.y - 0.815) / (0.028 + 0.02 * bass + 0.008 * beat));
+		float2 pool = float2(l.x / (lamp_glass_w(0.8) * 1.05), (l.y - 0.815) / (0.028 + 0.02 * bass * react_mix.x + 0.008 * beat * react_mix.w));
 		field += 1.0 / max(dot(pool, pool), 0.0001);
 		float2 cap = float2(l.x / 0.035, (l.y - 0.126) / 0.012);
 		field += 0.6 / max(dot(cap, cap), 0.0001);
@@ -1132,7 +1132,7 @@ float4 PSPrismKaleido(VertData v_in) : TARGET
 	float2 k = float2(cos(a), sin(a)) * r;
 
 	/* the glass pieces drift outward through the mirrors */
-	float2 z = rot2(k, time * 0.07) * (6.0 + 1.5 * bass) - float2(flow * 0.125, 0.0);
+	float2 z = rot2(k, time * 0.07) * (6.0 + 1.5 * bass * react_mix.x) - float2(flow * 0.125, 0.0);
 	float2 cell = floor(z);
 	float2 f = frac(z);
 	/* each square splits into two triangles */
@@ -1141,19 +1141,19 @@ float4 PSPrismKaleido(VertData v_in) : TARGET
 	float4 bd = band_full(id);
 	float e = bd.r;
 	float edge_d = min(min(f.x, 1.0 - f.x), min(min(f.y, 1.0 - f.y), abs(f.x - f.y) * 0.7071));
-	float w = (6.0 + 1.5 * bass) * px * (1.2 + 2.0 * e);
+	float w = (6.0 + 1.5 * bass * react_mix.x) * px * (1.2 + 2.0 * e * react_mix.y);
 	float edge = exp(-edge_d / w);
 
 	float3 tint = prism(hue + id * 0.6 + r * 0.8);
 	float fade = 1.0 - smoothstep(0.3, 0.62, r);
-	float3 light = tint * (0.05 + 0.75 * e * e + 0.5 * bd.b) * fade;
-	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.45) * edge * (0.2 + 1.3 * e + bd.b) * fade;
+	float3 light = tint * (0.05 + 0.75 * e * e * react_mix.y + 0.5 * bd.b * react_mix.w) * fade;
+	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.45) * edge * (0.2 + 1.3 * e * react_mix.y + bd.b * react_mix.w) * fade;
 	/* the mirror seams */
 	float seam = exp(-a * r / (px * 1.5));
-	light += prism(hue + r) * seam * fade * (0.1 + 0.5 * mid);
+	light += prism(hue + r) * seam * fade * (0.1 + 0.5 * mid * react_mix.y);
 	/* the jewel in the middle, and a flash on beats */
-	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + 0.3), 0.4) * exp(-r / (0.015 + 0.03 * bass)) * (0.7 + beat);
-	light += prism(hue + r * 2.0) * exp(-r / 0.2) * beat * 0.25;
+	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + 0.3), 0.4) * exp(-r / (0.015 + 0.03 * bass * react_mix.x)) * (0.7 + beat * react_mix.w);
+	light += prism(hue + r * 2.0) * exp(-r / 0.2) * beat * react_mix.w * 0.25;
 	return finish(light, uv);
 }
 
@@ -1183,7 +1183,7 @@ float4 PSStarWarp(VertData v_in) : TARGET
 			float zz = frac(seed * 3.7 + flow * spd * 0.25);
 			/* perspective: slow far away, rushing past up close */
 			float rs = 0.03 / max(1.0 - zz * 0.97, 0.03);
-			float tl = rs * (0.04 + 0.35 * level + 0.25 * beat);
+			float tl = rs * (0.04 + 0.35 * level * react_mix.x + 0.25 * beat * react_mix.w);
 			float da = abs(frac(a01 - ang + 0.5) - 0.5) * 6.2831853 * r;
 			float along = rs - r;
 			float wid = px * (0.45 + 1.1 * zz);
@@ -1195,11 +1195,11 @@ float4 PSStarWarp(VertData v_in) : TARGET
 			float e = band_level(abs(ang - 0.5) * 2.0);
 			float3 tint = lerp(float3(1.0, 1.0, 1.0), prism(hue + seed + zz * 0.3), 0.55);
 			float closeness = smoothstep(0.08, 0.5, zz);
-			light += tint * (glow + head * 0.8) * closeness * zz * (0.7 + 1.6 * e) * 1.8;
+			light += tint * (glow + head * 0.8) * closeness * zz * (0.7 + 1.6 * e * react_mix.y) * 1.8;
 		}
 	}
 	/* the light at the end of the tunnel */
-	light += prism(hue + time * 0.05) * exp(-r / (0.03 + 0.05 * bass)) * (0.3 + 0.9 * beat);
+	light += prism(hue + time * 0.05) * exp(-r / (0.03 + 0.05 * bass * react_mix.x)) * (0.3 + 0.9 * beat * react_mix.w);
 	return finish(light, uv);
 }
 
@@ -1235,10 +1235,10 @@ float4 PSFireflies(VertData v_in) : TARGET
 				if (d < 0.08) {
 					float4 bd = band_full(seed);
 					float blink = smoothstep(0.2, 1.0, sin(time * (0.8 + 1.5 * seed2) + seed * 40.0));
-					float glow_amt = 0.15 + blink * (0.4 + 0.6 * level) + 1.6 * bd.b + 0.8 * bd.r * treble;
+					float glow_amt = 0.15 + blink * (0.4 + 0.6 * level * react_mix.y) + 1.6 * bd.b * react_mix.w + 0.8 * bd.r * treble * react_mix.y;
 					float3 tint = lerp(float3(0.85, 1.0, 0.35), prism(hue + seed * 0.4), 0.55);
 					float size = (1.8 + 1.6 * (1.0 - lf)) * px;
-					light += tint * (exp(-d / size) * 2.2 + exp(-d / (0.02 + 0.014 * bd.r)) * 0.32) * glow_amt *
+					light += tint * (exp(-d / size) * 2.2 + exp(-d / (0.02 + 0.014 * bd.r * react_mix.y)) * 0.32) * glow_amt *
 						 (1.0 - 0.45 * lf);
 				}
 			}
@@ -1268,24 +1268,24 @@ float4 PSSynthwave(VertData v_in) : TARGET
 	float2 cell = floor(uv * res / 3.0);
 	float st = hash21(cell);
 	float tw = 0.5 + 0.5 * sin(time * 2.0 + st * 60.0);
-	col = over(col, float3(1.0, 0.95, 1.0), smoothstep(0.997, 1.0, st) * tw * step(uv.y, horizon) * (0.5 + 0.5 * treble));
+	col = over(col, float3(1.0, 0.95, 1.0), smoothstep(0.997, 1.0, st) * tw * step(uv.y, horizon) * (0.5 + 0.5 * treble * react_mix.y));
 
 	/* the sun, its glow, and the stripes that slide down it */
 	float2 sc = float2(aspect * 0.5, horizon - 0.2);
-	float R = 0.24 * (1.0 + 0.05 * bass + 0.02 * beat);
+	float R = 0.24 * (1.0 + 0.05 * bass * react_mix.x + 0.02 * beat * react_mix.w);
 	float sd = length(p - sc);
-	col = over(col, sun_bot, saturate(exp(-max(sd - R, 0.0) / (0.05 + 0.04 * level)) * 0.45) * step(R, sd) * step(uv.y, horizon));
+	col = over(col, sun_bot, saturate(exp(-max(sd - R, 0.0) / (0.05 + 0.04 * level * react_mix.y)) * 0.45) * step(R, sd) * step(uv.y, horizon));
 	float sy = (p.y - (sc.y - R)) / (2.0 * R);
 	float3 sun = lerp(sun_top, sun_bot, smoothstep(0.1, 0.9, sy));
 	float band_y = (p.y - sc.y) / 0.034 - flow * 0.25;
 	float gap = (sy - 0.45) * 0.55;
 	float stripe = step(gap, frac(band_y)) + step(sy, 0.45);
 	float sun_a = (1.0 - smoothstep(R - px, R + px, sd)) * saturate(stripe);
-	col = over(col, sun * (1.0 + 0.3 * beat), sun_a * step(uv.y, horizon));
+	col = over(col, sun * (1.0 + 0.3 * beat * react_mix.w), sun_a * step(uv.y, horizon));
 
 	/* mountains: the spectrum, mirrored from the middle */
 	float mx = abs(uv.x - 0.5) * 2.0;
-	float mh = 0.03 + 0.16 * (band_level(mx * 0.9) * 0.7 + 0.3 * band_level(mx * 0.9 + 0.04)) * (0.4 + 0.6 * mx);
+	float mh = 0.03 + 0.16 * react_mix.x * (band_level(mx * 0.9) * 0.7 + 0.3 * band_level(mx * 0.9 + 0.04)) * (0.4 + 0.6 * mx);
 	float mtop = horizon - mh;
 	float in_mtn = smoothstep(mtop - px, mtop + px, uv.y) * step(uv.y, horizon);
 	col = over(col, float3(0.07, 0.03, 0.14) + grid_c * 0.05, in_mtn);
@@ -1305,12 +1305,12 @@ float4 PSSynthwave(VertData v_in) : TARGET
 		float line_v = exp(-lx / (wpx * 1.4));
 		float line_h = exp(-lz / (wpx * 0.9));
 		float fog = exp(-z * 0.18);
-		float g = saturate(max(line_v, line_h) * (0.7 + 0.8 * e + 0.6 * beat)) * (0.25 + 0.75 * fog);
+		float g = saturate(max(line_v, line_h) * (0.7 + 0.8 * e * react_mix.y + 0.6 * beat * react_mix.w)) * (0.25 + 0.75 * fog);
 		col = over(col, float3(0.03, 0.01, 0.06), 0.55);
 		col = over(col, lerp(grid_c, float3(1.0, 1.0, 1.0), 0.25 * g), g);
 	}
 	/* the horizon line */
-	col = over(col, lerp(grid_c, float3(1.0, 1.0, 1.0), 0.4), exp(-abs(dy) / (px * 1.5)) * (0.7 + 0.3 * level));
+	col = over(col, lerp(grid_c, float3(1.0, 1.0, 1.0), 0.4), exp(-abs(dy) / (px * 1.5)) * (0.7 + 0.3 * level * react_mix.y));
 	return finish_paint(col, uv);
 }
 
@@ -1337,7 +1337,7 @@ float4 PSCandyBars(VertData v_in) : TARGET
 	float cx = (i + 0.5) * slot;
 	float dx = abs(abs(p.x - aspect * 0.5) - cx);
 	float4 bd = band_full((i + 0.5) / n);
-	float h = max(bd.r * max_h, wbar * 2.0);
+	float h = max(bd.r * react_mix.x * max_h, wbar * 2.0);
 	float3 c = prism(hue + i / n * 0.8);
 
 	/* the bar: a capsule standing on the floor */
@@ -1346,7 +1346,7 @@ float4 PSCandyBars(VertData v_in) : TARGET
 	float d = length(float2(dx, p.y - yy)) - wbar;
 	float a = 1.0 - smoothstep(-px, px, d);
 	float u = dx / wbar;
-	float3 body = c * (0.7 + 0.45 * (1.0 - u * u)) * (0.9 + 0.4 * bd.b);
+	float3 body = c * (0.7 + 0.45 * (1.0 - u * u)) * (0.9 + 0.4 * bd.b * react_mix.w);
 	body = lerp(body, c * 0.45, smoothstep(-px * 2.5, 0.0, d)); /* outline */
 	/* the candy shine */
 	float shine = exp(-(u + 0.4) * (u + 0.4) / 0.03) * step(y0, p.y);
@@ -1354,7 +1354,7 @@ float4 PSCandyBars(VertData v_in) : TARGET
 	col = over(col, body, a);
 
 	/* the ball that bounces on top (the falling peak) */
-	float pk = baseline - max(bd.g * max_h, wbar * 2.0) - wbar * 1.25;
+	float pk = baseline - max(bd.g * react_mix.x * max_h, wbar * 2.0) - wbar * 1.25;
 	float bdist = length(float2(dx, p.y - pk)) - wbar * 0.9;
 	float ba = 1.0 - smoothstep(-px, px, bdist);
 	float3 ball = lerp(prism(hue + i / n * 0.8 + 0.5), float3(1.0, 1.0, 1.0), 0.3);
@@ -1380,16 +1380,16 @@ float4 PSGroovySwirl(VertData v_in) : TARGET
 	float2 q = float2(uv.x * aspect, uv.y) - float2(aspect * 0.5, 0.5);
 	float r = length(q);
 	float ang = atan2(q.y, q.x);
-	float R = 0.36 * (1.0 + 0.08 * bass + 0.04 * beat);
+	float R = 0.36 * (1.0 + 0.08 * bass * react_mix.x + 0.04 * beat * react_mix.w);
 
 	/* the edge ripples with the spectrum */
 	float a01 = ang / 6.2831853 + 0.5;
 	float m = abs(frac(a01 * 2.0) - 0.5) * 1.2;
 	float e = (band_level(m - 0.04) + 2.0 * band_level(m) + band_level(m + 0.04)) * 0.25;
-	float rim = R * (1.0 + 0.1 * e);
+	float rim = R * (1.0 + 0.1 * e * react_mix.x);
 
 	float arms = 2.0 + floor(2.0 * max(density, 0.3));
-	float twist = 9.0 + 4.0 * mid;
+	float twist = 9.0 + 4.0 * mid * react_mix.x;
 	/* whole turns per flow wrap */
 	float sp = ang * arms + r * twist * 6.2831853 / 6.0 - flow * 0.7853982;
 	float stripes = 0.5 + 0.5 * sin(sp);
@@ -1398,13 +1398,13 @@ float4 PSGroovySwirl(VertData v_in) : TARGET
 	float3 c1 = prism(hue + r * 0.8);
 	float3 c2 = prism(hue + 0.5 + r * 0.8);
 	float3 swirl = lerp(c2, c1, smoothstep(0.35, 0.65, v));
-	swirl *= 0.75 + 0.35 * level + 0.25 * beat;
+	swirl *= 0.75 + 0.35 * level * react_mix.y + 0.25 * beat * react_mix.w;
 	/* a little shading toward the middle and edge */
 	swirl *= 0.8 + 0.2 * smoothstep(0.0, 0.12, r);
 	float a = 1.0 - smoothstep(rim - px, rim + px, r);
 	float4 col = float4(0.0, 0.0, 0.0, 0.0);
 	/* the aura */
-	col = over(col, c1, saturate(exp(-max(r - rim, 0.0) / (0.03 + 0.05 * level)) * 0.5) * step(rim, r));
+	col = over(col, c1, saturate(exp(-max(r - rim, 0.0) / (0.03 + 0.05 * level * react_mix.y)) * 0.5) * step(rim, r));
 	col = over(col, swirl, a);
 	/* a glossy highlight */
 	float2 hq = q - float2(-0.35, -0.4) * R;
@@ -1450,7 +1450,7 @@ float4 PSFireworks(VertData v_in) : TARGET
 			} else {
 				/* the burst: sparks fly out, slow down, fall and fade */
 				float bt = lt - launch;
-				float size = (0.15 + 0.15 * e + 0.05 * beat) * (0.8 + 0.4 * seed2);
+				float size = (0.15 + 0.15 * e * react_mix.x + 0.05 * beat * react_mix.w) * (0.8 + 0.4 * seed2);
 				float spread = size * (1.0 - exp(-bt * 3.0));
 				float2 cc = c + float2(0.0, 0.06 * bt * bt);
 				float2 d = p - cc;
@@ -1471,10 +1471,10 @@ float4 PSFireworks(VertData v_in) : TARGET
 					float spark = exp(-da / (px * 1.4)) * trail * step(0.0, sr - r + px * 3.0);
 					float head = exp(-length(float2(da, along)) / (px * 2.2));
 					light += lerp(tint, float3(1.0, 1.0, 1.0), 0.35 * fade) * (spark * 2.2 + head * 2.5) * fade * twinkle *
-						 (1.0 + 1.2 * e);
+						 (1.0 + 1.2 * e * react_mix.y);
 				}
 				/* the flash */
-				light += tint * exp(-r / (0.04 + 0.06 * e)) * exp(-bt * 6.0) * 1.2;
+				light += tint * exp(-r / (0.04 + 0.06 * e * react_mix.x)) * exp(-bt * 6.0) * 1.2;
 			}
 		}
 	}
@@ -1502,8 +1502,8 @@ float4 PSGalaxy(VertData v_in) : TARGET
 	float arm = pow(0.5 + 0.5 * spiral, 3.0);
 	float a01 = frac(ang / 6.2831853);
 	float e = band_level(saturate(r * 2.2));
-	float disc = exp(-r / (0.17 + 0.05 * mid));
-	float3 light = prism(hue + r * 1.5 + 0.1) * arm * disc * (0.55 + 1.8 * e);
+	float disc = exp(-r / (0.17 + 0.05 * mid * react_mix.x));
+	float3 light = prism(hue + r * 1.5 + 0.1) * arm * disc * (0.55 + 1.8 * e * react_mix.y);
 	/* dust between the arms */
 	light += prism(hue + 0.55 + r) * (1.0 - arm) * disc * 0.08;
 
@@ -1514,10 +1514,10 @@ float4 PSGalaxy(VertData v_in) : TARGET
 	float2 f = frac(sp) - 0.5;
 	float star = smoothstep(0.88 - 0.25 * arm, 1.0, h) * exp(-dot(f, f) * 10.0);
 	float tw = 0.6 + 0.4 * sin(time * 4.0 + h * 80.0);
-	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + h), 0.3) * star * tw * (0.5 + 1.5 * treble) * exp(-r / 0.4);
+	light += lerp(float3(1.0, 1.0, 1.0), prism(hue + h), 0.3) * star * tw * (0.5 + 1.5 * treble * react_mix.y) * exp(-r / 0.4);
 
 	/* the core */
-	light += lerp(float3(1.0, 0.92, 0.75), prism(hue), 0.2) * exp(-r / (0.03 + 0.03 * bass)) * (1.0 + 1.2 * beat);
+	light += lerp(float3(1.0, 0.92, 0.75), prism(hue), 0.2) * exp(-r / (0.03 + 0.03 * bass * react_mix.x)) * (1.0 + 1.2 * beat * react_mix.w);
 	return finish(light, uv);
 }
 
@@ -1537,7 +1537,7 @@ float4 PSRainbowRipples(VertData v_in) : TARGET
 	/* the pond's slow shimmer */
 	float sheen = sin(p.x * 13.0 + sin(p.y * 9.0 + time * 0.7) * 1.5 + time * 0.4) *
 		      sin(p.y * 17.0 - time * 0.5 + sin(p.x * 7.0) * 1.2);
-	light += prism(hue + 0.55 + uv.x * 0.3) * (0.03 + 0.05 * level) * (0.5 + 0.5 * sheen);
+	light += prism(hue + 0.55 + uv.x * 0.3) * (0.03 + 0.05 * level * react_mix.y) * (0.5 + 0.5 * sheen);
 
 	for (int ox = -1; ox <= 1; ox++) {
 		for (int oy = -1; oy <= 1; oy++) {
@@ -1558,13 +1558,13 @@ float4 PSRainbowRipples(VertData v_in) : TARGET
 				/* rings spread out and slow down, never past the next cell */
 				float grow = 1.0 - exp(-lt * 1.4);
 				float rr = cs * 1.15 * grow;
-				float fade = (1.0 - grow) * (0.15 + 1.6 * bd.r + 1.4 * bd.b + 0.5 * beat);
+				float fade = (1.0 - grow) * (0.15 + 1.6 * bd.r * react_mix.y + (1.4 * bd.b + 0.5 * beat) * react_mix.w);
 				float w = px * (1.0 + 4.0 * grow);
 				float ring = exp(-abs(d - rr) / w) + 0.55 * exp(-abs(d - rr * 0.64) / w) +
 					     0.3 * exp(-abs(d - rr * 0.36) / w);
 				float splash = exp(-d / (px * 2.5)) * exp(-lt * 7.0) * 2.5;
 				float3 tint = prism(hue + seed * 0.7 + d * 3.0);
-				light += tint * (ring * fade + splash * (0.3 + bd.r));
+				light += tint * (ring * fade + splash * (0.3 + bd.r * react_mix.y));
 			}
 		}
 	}
@@ -1611,8 +1611,8 @@ float ecg_y(float x)
 	float t = xs / cell - ci;
 	float seed = hash11(glmod(ci, 32.0) * 1.37 + 0.5);
 	float e = band_level(seed * 0.6);
-	float amp = 0.07 + 0.2 * e + 0.08 * beat;
-	return 0.62 - amp * ecg_shape(t) - 0.004 * sin(x * 40.0 + time * 3.0) * treble;
+	float amp = 0.07 + 0.2 * e * react_mix.x + 0.08 * beat * react_mix.w;
+	return 0.62 - amp * ecg_shape(t) - 0.004 * sin(x * 40.0 + time * 3.0) * treble * react_mix.x;
 }
 
 float4 PSNeonHeartbeat(VertData v_in) : TARGET
@@ -1644,24 +1644,24 @@ float4 PSNeonHeartbeat(VertData v_in) : TARGET
 		prev = cur;
 	}
 	float behind = head_x - p.x;
-	float trail = step(0.0, behind) * exp(-behind / (0.45 + 0.4 * level));
+	float trail = step(0.0, behind) * exp(-behind / (0.45 + 0.4 * level * react_mix.x));
 	float glow = exp(-dist / (px * 1.4)) * 2.0 + exp(-dist / 0.012) * 0.35;
-	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.25) * glow * trail * (0.7 + 0.6 * level);
+	light += lerp(tint, float3(1.0, 1.0, 1.0), 0.25) * glow * trail * (0.7 + 0.6 * level * react_mix.y);
 
 	/* the pen */
 	float2 hp = float2(head_x, ecg_y(head_x));
 	float hd = length(p - hp);
-	light += float3(1.0, 1.0, 1.0) * exp(-hd / (px * 2.5)) * 2.0 + tint * exp(-hd / 0.03) * (0.4 + 0.8 * beat);
+	light += float3(1.0, 1.0, 1.0) * exp(-hd / (px * 2.5)) * 2.0 + tint * exp(-hd / 0.03) * (0.4 + 0.8 * beat * react_mix.w);
 
 	/* the heart */
-	float hs = 0.12 * (1.0 + 0.12 * bass + 0.18 * beat);
+	float hs = 0.12 * (1.0 + 0.12 * bass * react_mix.x + 0.18 * beat * react_mix.w);
 	float2 hq = (p - float2(aspect * 0.5, 0.27)) / hs;
 	hq.y = -hq.y;
 	float hdist = heart_dist(hq) * hs;
 	float3 hc = prism(hue);
-	light += hc * exp(-abs(hdist) / (px * 1.6)) * (1.4 + 1.5 * beat);
-	light += hc * exp(-max(hdist, 0.0) / (0.02 + 0.03 * bass)) * (0.25 + 0.6 * beat);
-	light += hc * step(hdist, 0.0) * (0.08 + 0.25 * beat);
+	light += hc * exp(-abs(hdist) / (px * 1.6)) * (1.4 + 1.5 * beat * react_mix.w);
+	light += hc * exp(-max(hdist, 0.0) / (0.02 + 0.03 * bass * react_mix.y)) * (0.25 + 0.6 * beat * react_mix.w);
+	light += hc * step(hdist, 0.0) * (0.08 + 0.25 * beat * react_mix.w);
 	return finish(light, uv);
 }
 
@@ -1691,8 +1691,8 @@ float4 PSFlowerGarden(VertData v_in) : TARGET
 			float4 bd = band_full(side * 0.85 + seed * 0.1);
 			float e = bd.r;
 			float bx = (i + 0.5) * slot + (seed - 0.5) * slot * 0.3;
-			float h = (0.32 + 0.18 * seed) * (0.85 + 0.25 * e);
-			float sway = (0.025 + 0.03 * bass) * sin(time * (0.9 + 0.3 * seed) + i * 1.7);
+			float h = (0.32 + 0.18 * seed) * (0.85 + 0.25 * e * react_mix.x);
+			float sway = (0.025 + 0.03 * bass * react_mix.x) * sin(time * (0.9 + 0.3 * seed) + i * 1.7);
 			float2 hc = float2(bx + sway, ground - h);
 
 			/* the stem bends toward the head */
@@ -1715,7 +1715,7 @@ float4 PSFlowerGarden(VertData v_in) : TARGET
 			float spin = time * (0.15 + 0.1 * seed) + seed * 6.0;
 			float ang = atan2(q.y, q.x) + spin;
 			float petals = 5.0 + floor(seed * 3.0);
-			float bloom = 0.034 + 0.06 * e + 0.014 * bd.b + 0.008 * beat;
+			float bloom = 0.034 + 0.06 * e * react_mix.x + (0.014 * bd.b + 0.008 * beat) * react_mix.w;
 			float shape = 0.45 + 0.55 * abs(cos(ang * petals * 0.5));
 			float pr = bloom * shape;
 			float pa = 1.0 - smoothstep(pr - px, pr + px, r);
@@ -1728,13 +1728,13 @@ float4 PSFlowerGarden(VertData v_in) : TARGET
 			float ca = 1.0 - smoothstep(cr - px, cr + px, r);
 			float dots = 0.5 + 0.5 * sin(q.x * 300.0) * sin(q.y * 300.0);
 			float3 mid_c = lerp(float3(1.0, 0.8, 0.25), float3(0.65, 0.38, 0.12), dots * 0.5);
-			col = over(col, mid_c * (0.9 + 0.3 * bd.b), ca);
+			col = over(col, mid_c * (0.9 + 0.3 * bd.b * react_mix.w), ca);
 		}
 	}
 
 	/* a grassy hill */
 	float hill = ground - 0.012 * sin(p.x * 3.0 + 1.0) - 0.006 * sin(p.x * 11.0);
-	float blades = 0.008 * abs(sin(p.x * 160.0 + sin(time * 1.3 + p.x * 4.0) * 0.6)) * (1.0 + level);
+	float blades = 0.008 * abs(sin(p.x * 160.0 + sin(time * 1.3 + p.x * 4.0) * 0.6)) * (1.0 + level * react_mix.x);
 	float ga = smoothstep(hill - blades - px, hill - blades + px, p.y);
 	float3 grass = lerp(float3(0.16, 0.5, 0.22), prism(hue + 0.38), 0.2 * pal_mix) * (0.7 + 0.3 * (1.0 - (p.y - hill) * 8.0));
 	col = over(col, grass, ga);
@@ -1750,7 +1750,7 @@ float4 PSDiscoBall(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float px = 1.0 / res.y;
 	float2 p = float2(uv.x * aspect, uv.y);
-	float R = 0.13 * (1.0 + 0.04 * bass);
+	float R = 0.13 * (1.0 + 0.04 * bass * react_mix.x);
 	float2 bc = float2(aspect * 0.5, 0.24);
 	float2 q = p - bc;
 	float r = length(q);
@@ -1766,8 +1766,8 @@ float4 PSDiscoBall(VertData v_in) : TARGET
 	float4 bd = band_full(bseed);
 	float aw = abs(bf - 0.5) / beams * 6.2831853 * max(r, 0.001);
 	float bw = 0.006 + 0.04 * r;
-	float beam = exp(-aw / bw) * step(R, r) * exp(-r / (0.6 + 0.5 * level));
-	light += prism(hue + bseed + bi / beams) * beam * (0.25 + 1.4 * bd.r + 0.8 * beat);
+	float beam = exp(-aw / bw) * step(R, r) * exp(-r / (0.6 + 0.5 * level * react_mix.x));
+	light += prism(hue + bseed + bi / beams) * beam * (0.25 + 1.4 * bd.r * react_mix.y + 0.8 * beat * react_mix.w);
 
 	/* spots swirling around the room */
 	float2 sp = float2(frac(ang / 6.2831853 + time * 0.04) * 40.0, r * 22.0);
@@ -1775,10 +1775,10 @@ float4 PSDiscoBall(VertData v_in) : TARGET
 	float h = hash21(float2(glmod(cell.x, 40.0), cell.y));
 	float2 f = frac(sp) - 0.5;
 	float spot = smoothstep(0.8, 1.0, h) * exp(-dot(f, f) * 9.0) * step(R * 1.2, r);
-	light += prism(hue + h * 2.0) * spot * (0.3 + 1.6 * band_level(h) + 0.8 * beat) * 0.9;
+	light += prism(hue + h * 2.0) * spot * (0.3 + 1.6 * band_level(h) * react_mix.y + 0.8 * beat * react_mix.w) * 0.9;
 
 	/* glare */
-	light += prism(hue + 0.1) * exp(-r / (0.06 + 0.05 * level)) * (0.25 + 0.7 * beat);
+	light += prism(hue + 0.1) * exp(-r / (0.06 + 0.05 * level * react_mix.y)) * (0.25 + 0.7 * beat * react_mix.w);
 
 	float4 col = finish(light, uv);
 
@@ -1802,7 +1802,7 @@ float4 PSDiscoBall(VertData v_in) : TARGET
 		float glint = smoothstep(0.82, 1.0, th) * (0.5 + 0.5 * sin(time * 6.0 + th * 50.0));
 		float shade = 0.35 + 0.65 * z;
 		float3 tile = lerp(float3(0.55, 0.57, 0.65), prism(hue + th), 0.35) * shade * (0.75 + 0.5 * th);
-		tile = lerp(tile, float3(1.0, 1.0, 1.0), saturate(glint * (0.6 + 1.2 * treble + 0.8 * beat)));
+		tile = lerp(tile, float3(1.0, 1.0, 1.0), saturate(glint * (0.6 + 1.2 * treble * react_mix.y + 0.8 * beat * react_mix.w)));
 		tile *= 1.0 - 0.6 * edge;
 		/* highlight */
 		float2 hl = nq - float2(-0.35, -0.4);
@@ -1842,8 +1842,8 @@ float4 PSPixelEQ(VertData v_in) : TARGET
 	if (i >= 0.0 && i < cols && j >= 0.0 && j < rows) {
 		float side = abs((i + 0.5) / cols - 0.5) * 2.0;
 		float4 bd = band_full(side * 0.95);
-		float lvl = bd.r * rows;
-		float pk = floor(bd.g * rows);
+		float lvl = bd.r * react_mix.x * rows;
+		float pk = floor(bd.g * react_mix.x * rows);
 		float fr = j / rows;
 		float3 retro = fr < 0.6 ? float3(0.25, 1.0, 0.35) : (fr < 0.82 ? float3(1.0, 0.86, 0.2) : float3(1.0, 0.28, 0.25));
 		float3 c = lerp(retro, prism(hue + fr * 0.5 + side * 0.15), 0.12 + 0.88 * pal_mix);
@@ -1853,7 +1853,7 @@ float4 PSPixelEQ(VertData v_in) : TARGET
 		float bevel = step(f.y, 1.0 - gap) * step(1.0 - gap - 0.16, f.y) + step(gap, f.x) * step(f.x, gap + 0.12);
 		float lit_on = step(j + 0.5, lvl); /* lit is an HLSL intrinsic */
 		float peak = step(abs(j - pk), 0.5) * step(1.0, pk);
-		float3 block = c * (1.0 + 0.3 * bd.b);
+		float3 block = c * (1.0 + 0.3 * bd.b * react_mix.w);
 		block = lerp(block, float3(1.0, 1.0, 1.0), saturate(bevel) * 0.2 + peak * (1.0 - lit_on) * 0.45);
 		col = over(col, c * 0.1, inside * 0.5);
 		col = over(col, block, inside * max(lit_on, peak));
@@ -1862,7 +1862,7 @@ float4 PSPixelEQ(VertData v_in) : TARGET
 	/* scanlines and a floor glow */
 	col.rgb *= 0.88 + 0.12 * step(0.5, frac(p.y * res.y / 3.0));
 	float below = p.y - bottom;
-	float fl = step(0.0, below) * exp(-below / 0.04) * (0.15 + 0.5 * level);
+	float fl = step(0.0, below) * exp(-below / 0.04) * (0.15 + 0.5 * level * react_mix.y);
 	col = over(col, prism(hue + 0.2), fl * step(left, p.x) * step(p.x, left + width) * 0.6);
 	return finish_paint(col, uv);
 }
@@ -1959,25 +1959,25 @@ float4 PSPlasmaGlobe(VertData v_in) : TARGET
 				float base_a = tf / n * 6.2831853 + sin(time * (0.2 + 0.25 * seed) + seed * 20.0) * 0.9;
 				float wig = (0.12 * sin(r * 16.0 + time * (4.0 + 3.0 * seed) + seed * 30.0) +
 					     0.06 * sin(r * 37.0 - time * 7.0 + seed * 11.0)) *
-					    (0.4 + 1.6 * r / R) * (0.6 + 0.8 * treble);
+					    (0.4 + 1.6 * r / R) * (0.6 + 0.8 * treble * react_mix.y);
 				float da = abs(frac((ang - base_a - wig) / 6.2831853 + 0.5) - 0.5) * 6.2831853 * r;
-				float reach = R * (0.55 + 0.45 * saturate(bd.r * 1.6 + beat * 0.5));
+				float reach = R * (0.55 + 0.45 * saturate(bd.r * react_mix.x * 1.6 + beat * react_mix.w * 0.5));
 				float along = step(r, reach) * smoothstep(0.0, 0.03, r);
-				float energy = 0.3 + 1.6 * bd.r + 1.0 * bd.b + 0.6 * beat;
+				float energy = 0.3 + 1.6 * bd.r * react_mix.y + (1.0 * bd.b + 0.6 * beat) * react_mix.w;
 				float3 tint = lerp(prism(hue + seed * 0.3), float3(1.0, 0.9, 1.0), 0.35);
-				light += tint * (exp(-da / (px * 1.2)) * 1.6 + exp(-da / (0.012 + 0.01 * bd.r)) * 0.3) * along * energy;
+				light += tint * (exp(-da / (px * 1.2)) * 1.6 + exp(-da / (0.012 + 0.01 * bd.r * react_mix.y)) * 0.3) * along * energy;
 				/* where it touches the glass */
 				float2 tip = float2(cos(base_a + wig), sin(base_a + wig)) * reach;
-				light += tint * exp(-length(q - tip) / (0.012 + 0.02 * bd.r)) * energy * 0.6 * step(R * 0.9, reach);
+				light += tint * exp(-length(q - tip) / (0.012 + 0.02 * bd.r * react_mix.y)) * energy * 0.6 * step(R * 0.9, reach);
 			}
 		}
 	}
 	/* the electrode in the middle */
 	float3 core_c = lerp(prism(hue), float3(1.0, 0.85, 1.0), 0.4);
-	light += core_c * (exp(-r / 0.012) * 2.0 + exp(-r / (0.05 + 0.04 * bass)) * (0.4 + 0.8 * beat));
+	light += core_c * (exp(-r / 0.012) * 2.0 + exp(-r / (0.05 + 0.04 * bass * react_mix.x)) * (0.4 + 0.8 * beat * react_mix.w));
 	/* the glass: a thin rim, a faint fill and a highlight */
 	light += prism(hue + 0.6) * exp(-abs(r - R) / (px * 1.4)) * 0.5;
-	light += prism(hue + 0.6) * step(r, R) * 0.05 * (0.6 + level);
+	light += prism(hue + 0.6) * step(r, R) * 0.05 * (0.6 + level * react_mix.y);
 	float2 hl = q - float2(-0.13, -0.16);
 	light += float3(1.0, 1.0, 1.0) * exp(-dot(hl, hl) / 0.0006) * 0.3;
 
@@ -1998,7 +1998,7 @@ float4 PSPlasmaGlobe(VertData v_in) : TARGET
 float wave_y(float x, float layer, float e)
 {
 	float base = 0.6 + layer * 0.075;
-	float amp = (0.006 + 0.01 * layer) * (1.0 + 2.5 * e);
+	float amp = (0.006 + 0.01 * layer) * (1.0 + 2.5 * e * react_mix.x);
 	/* 1 wave per 8 units of flow per layer: seamless at the wrap */
 	float t = flow * 0.78539816;
 	return base + amp * sin(x * (9.0 - layer) + t + layer * 1.7) + amp * 0.5 * sin(x * (17.0 - layer) - t + layer);
@@ -2017,13 +2017,13 @@ float4 PSOceanSunset(VertData v_in) : TARGET
 	float3 sea_c = lerp(float3(0.2, 0.32, 0.6), prism(hue + 0.55), 0.4 * pal_mix);
 
 	/* a warm sky near the horizon */
-	col = over(col, sun_c * 0.8, exp(-max(horizon - p.y, 0.0) / (0.12 + 0.05 * level)) * 0.35 * step(p.y, horizon));
+	col = over(col, sun_c * 0.8, exp(-max(horizon - p.y, 0.0) / (0.12 + 0.05 * level * react_mix.y)) * 0.35 * step(p.y, horizon));
 
 	/* the sun and its glow, sinking into the sea */
 	float2 sc = float2(aspect * 0.5, horizon - 0.06);
-	float R = 0.12 * (1.0 + 0.05 * bass + 0.03 * beat);
+	float R = 0.12 * (1.0 + 0.05 * bass * react_mix.x + 0.03 * beat * react_mix.w);
 	float sd = length(p - sc);
-	col = over(col, sun_c, saturate(exp(-max(sd - R, 0.0) / (0.08 + 0.06 * level)) * 0.5) * step(p.y, horizon));
+	col = over(col, sun_c, saturate(exp(-max(sd - R, 0.0) / (0.08 + 0.06 * level * react_mix.y)) * 0.5) * step(p.y, horizon));
 	col = over(col, lerp(sun_c, float3(1.0, 1.0, 0.9), 0.3), (1.0 - smoothstep(R - px, R + px, sd)) * step(p.y, horizon));
 
 	/* birds */
@@ -2044,15 +2044,15 @@ float4 PSOceanSunset(VertData v_in) : TARGET
 		float y = wave_y(p.x, lf, e);
 		float a = smoothstep(y - px, y + px, p.y);
 		float depth = lf / 4.0;
-		float3 water = lerp(sea_c * 0.55, sea_c * (0.9 + 0.3 * e), depth);
+		float3 water = lerp(sea_c * 0.55, sea_c * (0.9 + 0.3 * e * react_mix.y), depth);
 		water = lerp(water, sun_c, 0.12 * (1.0 - depth));
 		/* the sun's path on the water */
 		float path = exp(-abs(p.x - sc.x) / (0.05 + 0.1 * (p.y - horizon))) *
 			     (0.5 + 0.5 * sin(p.y * 220.0 + flow * 3.1415927 + p.x * 30.0));
-		water += sun_c * path * 0.5 * (1.0 - depth * 0.6) * (0.6 + level);
+		water += sun_c * path * 0.5 * (1.0 - depth * 0.6) * (0.6 + level * react_mix.y);
 		col = over(col, water, a);
 		/* foam on the crest */
-		float foam = exp(-abs(p.y - y) / (px * (0.8 + 0.4 * lf))) * (0.12 + 0.6 * e + 0.3 * beat);
+		float foam = exp(-abs(p.y - y) / (px * (0.8 + 0.4 * lf))) * (0.12 + 0.6 * e * react_mix.y + 0.3 * beat * react_mix.w);
 		col = over(col, float3(1.0, 1.0, 1.0), saturate(foam) * step(y - px * 4.0, p.y));
 	}
 	return finish_paint(col, uv);
@@ -2264,9 +2264,9 @@ float4 pl_viz(float2 p, float2 lo, float2 hi, float kind, float skin, float px)
 			float fx = frac(q.x * n);
 			float4 bd = band_full((i + 0.5) / n);
 			float gx = step(0.14, fx) * step(fx, 0.86);
-			float bar = gx * (1.0 - smoothstep(bd.r - pxy, bd.r + pxy, yup));
-			c = over(c, pl_bar_col(yup, i / n, skin) * (1.0 + 0.4 * bd.b), bar);
-			float cap = gx * (1.0 - smoothstep(pxy * 0.8, pxy * 2.0, abs(yup - max(bd.g, 0.02))));
+			float bar = gx * (1.0 - smoothstep(bd.r * react_mix.x - pxy, bd.r * react_mix.x + pxy, yup));
+			c = over(c, pl_bar_col(yup, i / n, skin) * (1.0 + 0.4 * bd.b * react_mix.w), bar);
+			float cap = gx * (1.0 - smoothstep(pxy * 0.8, pxy * 2.0, abs(yup - max(bd.g * react_mix.x, 0.02))));
 			c = over(c, lerp(pl_bar_col(1.0, i / n, skin), float3(1.0, 1.0, 1.0), 0.5), cap * 0.9);
 		} else if (kind < 1.5) {
 			float a = 0.0;
@@ -2276,7 +2276,7 @@ float4 pl_viz(float2 p, float2 lo, float2 hi, float kind, float skin, float px)
 				a += e * sin(q.x * 6.2831853 * (kf * 1.35 + 0.6) + time * (2.0 + kf * 1.7) + kf * 1.9) /
 				     sqrt(kf);
 			}
-			float y = 0.5 - a * 0.36 * (0.7 + 0.6 * level);
+			float y = 0.5 - a * 0.36 * (0.7 + 0.6 * level * react_mix.x);
 			float d = abs(q.y - y) * sz.y;
 			float3 lc = pl_col(q.x * 0.3);
 			c = over(c, lc, exp(-d / 1.6) * 0.45);
@@ -2300,8 +2300,8 @@ float4 pl_viz(float2 p, float2 lo, float2 hi, float kind, float skin, float px)
 			float2 f = float2(frac(q.x * n), frac(yup * rows));
 			float4 bd = band_full((i + 0.5) / n);
 			float cell = step(0.12, f.x) * step(f.x, 0.88) * step(0.16, f.y) * step(f.y, 0.84);
-			float on = step(j + 0.5, bd.r * rows);
-			float pk = step(abs(j - floor(bd.g * rows)), 0.5) * step(0.03, bd.g);
+			float on = step(j + 0.5, bd.r * react_mix.x * rows);
+			float pk = step(abs(j - floor(bd.g * react_mix.x * rows)), 0.5) * step(0.03, bd.g);
 			float3 lc = pl_bar_col(j / rows, i / n, skin);
 			c = over(c, lc, cell * 0.08);
 			c = over(c, lc, cell * on);
@@ -2606,8 +2606,8 @@ float4 pl_draw(float2 p, float px, float skin)
 		/* the logo: a ring that kicks on the beat */
 		float2 lg = p - float2(256.5, 83.0);
 		float lr = length(lg);
-		float ring = pl_cover(abs(lr - 6.2 - beat * 0.8) - 0.9, px);
-		c = over(c, acc, exp(-abs(lr - 6.2) / 2.0) * (0.15 + 0.5 * beat));
+		float ring = pl_cover(abs(lr - 6.2 - beat * react_mix.w * 0.8) - 0.9, px);
+		c = over(c, acc, exp(-abs(lr - 6.2) / 2.0) * (0.15 + 0.5 * beat * react_mix.w));
 		c = over(c, lerp(acc, acc2, 0.5 + 0.5 * sin(time * 2.0)), ring);
 		c = over(c, acc2, pl_icon(p, float2(257.0, 83.0), 1.0, px) * 0.9);
 	}
@@ -3049,7 +3049,7 @@ float ns_wave(float x, float t)
 	for (int k = 1; k <= 8; k++) {
 		float kf = float(k);
 		float e = band_level(kf / 9.0);
-		a += e * sin(x * 6.2831853 * (kf * 1.2 + 0.5) + t * (1.5 + kf * 1.3) + kf * 2.1) / sqrt(kf);
+		a += e * react_mix.x * sin(x * 6.2831853 * (kf * 1.2 + 0.5) + t * (1.5 + kf * 1.3) + kf * 2.1) / sqrt(kf);
 	}
 	return a;
 }
@@ -3068,7 +3068,7 @@ float4 PSNeonScope(VertData v_in) : TARGET
 	light += prism(hue + 0.5) * grid * 0.035;
 
 	/* the trace, with two fading echoes behind it */
-	float amp = 0.17 * (0.6 + 0.8 * level) * density;
+	float amp = 0.17 * (0.6 + 0.8 * level * react_mix.x) * density;
 	for (int e = 0; e < 3; e++) {
 		float ef = float(e);
 		float t = time - ef * 0.06;
@@ -3081,11 +3081,11 @@ float4 PSNeonScope(VertData v_in) : TARGET
 
 	/* Lissajous: x and y from different bands */
 	float2 ctr = float2(aspect * 0.5, 0.5);
-	float rad = 0.16 + 0.08 * bass + 0.05 * beat;
+	float rad = 0.16 + 0.08 * bass * react_mix.x + 0.05 * beat * react_mix.w;
 	float best = 1.0;
 	BRANCH
 	if (length(p - ctr) < rad * 1.5 + 0.1) {
-		float fa = 2.0 + floor(mid * 3.0);
+		float fa = 2.0 + floor(mid * react_mix.x * 3.0);
 		float2 a0 = ctr + rad * float2(sin(time * 0.7), sin(time * 0.5));
 		for (int i = 1; i <= 48; i++) {
 			float s = float(i) / 48.0 * 6.2831853;
@@ -3095,7 +3095,7 @@ float4 PSNeonScope(VertData v_in) : TARGET
 		}
 	}
 	float3 lc = prism(hue + 0.3);
-	light += lc * (exp(-best / (px * 2.2)) * 1.3 + exp(-best / 0.025) * (0.25 + 0.5 * beat));
+	light += lc * (exp(-best / (px * 2.2)) * 1.3 + exp(-best / 0.025) * (0.25 + 0.5 * beat * react_mix.w));
 	return finish(light, uv);
 }
 
@@ -3119,17 +3119,17 @@ float4 PSCRTSpectrum(VertData v_in) : TARGET
 	float fx = frac(uv.x * n);
 	float4 bd = band_full((i + 0.5) / n);
 	float yup = 1.0 - uv.y;
-	float top = 0.06 + 0.86 * bd.r;
+	float top = 0.06 + 0.86 * bd.r * react_mix.x;
 	float bar = smoothstep(0.08, 0.16, fx) * smoothstep(0.92, 0.84, fx);
 	float inside = bar * step(yup, top) * step(0.04, yup);
 	float3 bc = prism(hue + i / n * 0.6 + yup * 0.15);
-	light += bc * inside * (0.8 + 0.6 * yup) * (1.0 + 0.6 * bd.b);
+	light += bc * inside * (0.8 + 0.6 * yup) * (1.0 + 0.6 * bd.b * react_mix.w);
 	/* bloom above each bar and a peak line */
 	light += bc * bar * exp(-max(yup - top, 0.0) / 0.03) * step(top, yup) * 0.5;
-	float pk = 0.06 + 0.86 * bd.g;
+	float pk = 0.06 + 0.86 * bd.g * react_mix.x;
 	light += lerp(bc, float3(1.0, 1.0, 1.0), 0.5) * bar * exp(-abs(yup - pk) * res.y / 1.8) * 1.2;
 	/* glow behind everything */
-	light += bc * 0.12 * exp(-abs(yup - top * 0.5) * 3.0) * level;
+	light += bc * 0.12 * exp(-abs(yup - top * 0.5) * 3.0) * level * react_mix.y;
 
 	/* scanlines, an aperture grille, the picture rolling, vignette */
 	float scan = 0.65 + 0.35 * sin(uv.y * res.y * 3.14159265 / 1.5);
@@ -3152,7 +3152,7 @@ float gb_bars(float2 uv, float n)
 	float fx = frac(uv.x * n);
 	float e = band_level((i + 0.5) / n);
 	float yup = 1.0 - uv.y;
-	return step(0.12, fx) * step(fx, 0.88) * step(yup, 0.05 + 0.85 * e) * step(0.05, yup);
+	return step(0.12, fx) * step(fx, 0.88) * step(yup, 0.05 + 0.85 * e * react_mix.x) * step(0.05, yup);
 }
 
 float4 PSGlitchBars(VertData v_in) : TARGET
@@ -3160,11 +3160,11 @@ float4 PSGlitchBars(VertData v_in) : TARGET
 	float2 uv = view_uv(v_in.uv);
 	float tick = floor(time * 12.0);
 	float row = floor(uv.y * 40.0);
-	float burst = step(0.78 - 0.4 * beat, hash11(tick * 0.71 + 0.3));
+	float burst = step(0.78 - 0.4 * beat * react_mix.w, hash11(tick * 0.71 + 0.3));
 	float shift = (hash21(float2(row, tick)) - 0.5) * 0.08 * burst * step(0.5, hash21(float2(row + 5.0, tick)));
 	float2 q = float2(uv.x + shift, uv.y);
 	float n = floor(clamp(24.0 * density, 8.0, 64.0));
-	float sp = (0.003 + 0.012 * beat + 0.01 * burst);
+	float sp = (0.003 + 0.012 * beat * react_mix.w + 0.01 * burst);
 	float r = gb_bars(q + float2(sp, 0.0), n);
 	float g = gb_bars(q, n);
 	float b = gb_bars(q - float2(sp, 0.0), n);
@@ -3172,7 +3172,7 @@ float4 PSGlitchBars(VertData v_in) : TARGET
 	float3 light = float3(r, g, b) * lerp(float3(1.0, 1.0, 1.0), tint * 1.3, 0.8) * 1.2;
 	/* junk blocks and a stuck colour band */
 	float2 blk = floor(uv * float2(28.0, 18.0));
-	float junk = step(0.975 - 0.05 * beat, hash21(blk + tick * 1.7));
+	float junk = step(0.975 - 0.05 * beat * react_mix.w, hash21(blk + tick * 1.7));
 	light += prism(hash21(blk) + hue) * junk * 0.9;
 	float band = step(abs(uv.y - hash11(tick * 0.13)), 0.012) * burst;
 	light += prism(hue + 0.5) * band * 0.8;
@@ -3204,7 +3204,7 @@ float4 PSVHSTape(VertData v_in) : TARGET
 		float kf = float(k);
 		float x = q.x - kf * 0.006;
 		float e = band_level(abs(x - 0.5) * 2.0);
-		float hill = 0.82 - e * 0.55 - 0.05 * sin(x * 20.0 + t);
+		float hill = 0.82 - e * react_mix.x * 0.55 - 0.05 * sin(x * 20.0 + t);
 		float m = smoothstep(hill, hill + 0.02, q.y) * smoothstep(0.98, 0.9, q.y);
 		float3 cc = prism(hue + x * 0.4 + q.y * 0.2);
 		light += (kf < 0.5 ? cc : (kf < 1.5 ? float3(cc.r, 0.0, 0.0) * 0.6 : float3(0.0, 0.0, cc.b) * 0.6)) * m * 0.8;
@@ -3212,7 +3212,7 @@ float4 PSVHSTape(VertData v_in) : TARGET
 	}
 	/* sun-ish glow behind */
 	float2 sd = p - float2(aspect * 0.5, 0.45);
-	light += prism(hue + 0.1) * exp(-length(sd) / 0.12) * (0.25 + 0.6 * bass);
+	light += prism(hue + 0.1) * exp(-length(sd) / 0.12) * (0.25 + 0.6 * bass * react_mix.y);
 
 	/* snow and the tracking band */
 	float snow = hash21(floor(v_in.uv * res / 2.0) + floor(t * 24.0) * 7.0);
@@ -3255,7 +3255,7 @@ float4 PSNorthernLake(VertData v_in) : TARGET
 	float under = step(horizon, uv.y);
 	float dy = max(uv.y - horizon, 0.0);
 	float rip = vnoise(float2(uv.x * aspect * 34.0, dy * 900.0 / (dy * 30.0 + 1.0) - time * 0.6)) - 0.5;
-	float2 q = float2(uv.x + under * rip * (0.002 + 0.012 * dy) * (1.0 + 2.0 * calm_in.y), lerp(uv.y, horizon - dy, under));
+	float2 q = float2(uv.x + under * rip * (0.002 + 0.012 * dy) * (1.0 + 2.0 * calm_in.y * react_mix.x), lerp(uv.y, horizon - dy, under));
 
 	float3 light = aurora_light(q, aspect, px, 0.86, 0.85);
 	float bright = dot(light, float3(0.3, 0.5, 0.2));
@@ -3281,7 +3281,7 @@ float4 PSNorthernLake(VertData v_in) : TARGET
 	light = lerp(light, light * water_tint * (0.7 - 0.35 * saturate(dy * 2.5)), under);
 	/* mist on the shore and a thin shine where the lake meets it */
 	float3 glow_c = prism(cm_hue(hue + 0.1, uv, uv.x, 0.0));
-	light += glow_c * exp(-abs(uv.y - horizon) / 0.03) * (0.03 + 0.04 * calm_in.x);
+	light += glow_c * exp(-abs(uv.y - horizon) / 0.03) * (0.03 + 0.04 * calm_in.x * react_mix.y);
 	light += glow_c * exp(-abs(uv.y - horizon - px * 2.0) / (px * 1.2)) * 0.06 * under;
 	return finish_dither(light, uv, pix);
 }
@@ -3312,7 +3312,7 @@ float4 PSMoonlitSea(VertData v_in) : TARGET
 	float disc = 1.0 - smoothstep(R - px, R + px, md);
 	float limb = 0.85 + 0.15 * sqrt(saturate(1.0 - md * md / (R * R)));
 	light += moon_c * disc * 1.0 * maria * limb * sky;
-	light += moon_c * exp(-max(md - R, 0.0) / (0.07 + 0.03 * calm_in.x)) * (0.3 + 0.25 * calm_in.w) * sky;
+	light += moon_c * exp(-max(md - R, 0.0) / (0.07 + 0.03 * calm_in.x * react_mix.y)) * (0.3 + 0.25 * calm_in.w * react_mix.w) * sky;
 	light += moon_c * exp(-max(md - R, 0.0) / 0.35) * 0.06 * sky;
 
 	/* the sea, in perspective */
@@ -3320,7 +3320,7 @@ float4 PSMoonlitSea(VertData v_in) : TARGET
 	float dy = max(uv.y - horizon, 0.0004);
 	float wz = 0.25 / dy;
 	float wx = (p.x - mc.x) * wz;
-	float swell = 0.5 + 1.0 * calm_in.y;
+	float swell = 0.5 + 1.0 * calm_in.y * react_mix.x;
 	float n1 = vnoise(float2(wx * 3.0, wz * 9.0 - time * 0.9));
 	float n2 = vnoise(float2(wx * 8.0 + 7.0, wz * 21.0 - time * 1.5));
 	float n3 = vnoise(float2(wx * 19.0 + 3.0, wz * 44.0 - time * 2.2));
@@ -3334,7 +3334,7 @@ float4 PSMoonlitSea(VertData v_in) : TARGET
 	float path = exp(-pxq * pxq);
 	float glint = pow(saturate((wave - 0.5) * swell * 2.6 + 0.5), 12.0) * 5.0;
 	float3 water = sky_c * (0.1 + 0.16 * wave) * (1.0 - 0.5 * saturate(dy * 2.0));
-	water += moon_c * path * (0.05 + glint * (1.0 - 0.7 * far_k)) * (0.7 + 0.5 * calm_in.x);
+	water += moon_c * path * (0.05 + glint * (1.0 - 0.7 * far_k)) * (0.7 + 0.5 * calm_in.x * react_mix.y);
 	water += moon_c * exp(-abs(p.x - mc.x) / 0.03) * exp(-dy / 0.015) * 0.35;
 	water += sky_c * exp(-dy / 0.1) * 0.25;
 	light = lerp(light, water, under);
@@ -3350,11 +3350,11 @@ float4 PSInkBloom(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float2 pix = v_in.uv * res;
 	float t = time * 0.6;
-	float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5) * (1.15 - 0.05 * calm_in.w);
+	float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5) * (1.15 - 0.05 * calm_in.w * react_mix.w);
 
 	float2 q = float2(fbm4(p + float2(t * 0.06, 0.0)), fbm4(p + float2(5.2, 1.3) - float2(0.0, t * 0.05)));
 	float2 r = float2(fbm4(p + 3.2 * q + float2(1.7, 9.2) + t * 0.04), fbm4(p + 3.2 * q + float2(8.3, 2.8) - t * 0.03));
-	float f = fbm4(p + 2.8 * r + calm_in.y * 0.4);
+	float f = fbm4(p + 2.8 * r + calm_in.y * react_mix.x * 0.4);
 
 	/* a few clouds of ink in clear water */
 	float clouds = smoothstep(0.36, 0.66, vnoise(p * 0.9 + float2(t * 0.02, -t * 0.015) + 3.0));
@@ -3362,10 +3362,10 @@ float4 PSInkBloom(VertData v_in) : TARGET
 	float3 c1 = prism(cm_hue(hue + q.x * 0.25, uv, length(r), 0.0));
 	float3 c2 = prism(cm_hue(hue + 0.45 + r.y * 0.2, uv, length(q), 1.0));
 	float3 ink = lerp(c1, c2, smoothstep(0.45, 0.65, r.x));
-	float3 light = ink * body * (0.7 + 0.6 * calm_in.x);
+	float3 light = ink * body * (0.7 + 0.6 * calm_in.x * react_mix.y);
 	/* the thin bright tendrils where the ink folds over itself */
 	float fold = exp(-abs(f - 0.62) / 0.025) * clouds;
-	light += lerp(ink, float3(1.0, 1.0, 1.0), 0.35) * fold * 0.5 * (0.7 + calm_in.z);
+	light += lerp(ink, float3(1.0, 1.0, 1.0), 0.35) * fold * 0.5 * (0.7 + calm_in.z * react_mix.y);
 	light += c2 * clouds * smoothstep(0.3, 0.6, f) * 0.06;
 	return finish_dither(light, uv, pix);
 }
@@ -3390,13 +3390,13 @@ float4 PSNebulaDrift(VertData v_in) : TARGET
 		float dust = 1.0 - 0.75 * smoothstep(0.48, 0.72, fbm4(g * 2.6 + 7.0));
 		float3 c = lerp(prism(cm_hue(hue + w.x * 0.2 + lf * 0.5, uv, w.y, lf)),
 				prism(cm_hue(hue + 0.12 + w.y * 0.2 + lf * 0.5, uv, w.x, lf + 1.0)), saturate(n * 2.0 - 0.8));
-		light += c * gas * dust * (0.85 - 0.3 * lf) * (0.65 + 0.6 * calm_in.x + 0.25 * calm_in.w);
+		light += c * gas * dust * (0.85 - 0.3 * lf) * (0.65 + 0.6 * calm_in.x * react_mix.y + 0.25 * calm_in.w * react_mix.w);
 		light += lerp(c, float3(1.0, 0.95, 0.9), 0.4) * pow(gas, 4.0) * dust * 0.5 * (1.0 - 0.5 * lf);
 	}
 
 	/* stars: fine ones, and a few big soft ones with a gentle cross */
 	float bright = dot(light, float3(0.3, 0.5, 0.2));
-	light += starfield(pix, uv, 0.8 + calm_in.z, density) * (0.8 + 0.4 * calm_in.z) * saturate(1.2 - bright);
+	light += starfield(pix, uv, 0.8 + calm_in.z * react_mix.x, density) * (0.8 + 0.4 * calm_in.z * react_mix.y) * saturate(1.2 - bright);
 	float2 sp = p * 5.0;
 	float2 cell = floor(sp);
 	float h = hash21(cell + 11.0);
@@ -3424,7 +3424,7 @@ float4 PSSilkRibbons(VertData v_in) : TARGET
 		float yc = 0.5 + (fi - 1.5) * 0.1 + 0.13 * sin(x * 1.4 + t + fi * 1.3) + 0.05 * sin(x * 3.3 - t * 0.7 + fi);
 		/* the ribbon turns over as it goes: its width runs through a cosine */
 		float turn = cos(x * (1.1 + 0.2 * fi) - t * 0.9 + fi * 2.1);
-		float w = (0.045 + 0.02 * calm_in.y + 0.01 * fi) * max(abs(turn), 0.06);
+		float w = (0.045 + 0.02 * calm_in.y * react_mix.x + 0.01 * fi) * max(abs(turn), 0.06);
 		float s = (uv.y - yc) / w;
 		float aa = px / w;
 		float inside = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, abs(s));
@@ -3432,9 +3432,9 @@ float4 PSSilkRibbons(VertData v_in) : TARGET
 		float side = turn > 0.0 ? 1.0 : 0.62;
 		float shade = (0.45 + 0.55 * sqrt(saturate(1.0 - s * s))) * side;
 		float sheen_at = 0.55 * sin(x * 2.2 - t * 1.6 + fi * 1.7);
-		float sheen = pow(saturate(1.0 - abs(s - sheen_at * sign(turn))), 14.0) * (0.55 + 0.45 * calm_in.x);
+		float sheen = pow(saturate(1.0 - abs(s - sheen_at * sign(turn))), 14.0) * (0.55 + 0.45 * calm_in.x * react_mix.y);
 		float3 c = prism(cm_hue(hue + fi * 0.19 + uv.x * 0.12, uv, uv.x, fi));
-		float3 silk = c * shade * (0.75 + 0.35 * calm_in.x) + lerp(c, float3(1.0, 1.0, 1.0), 0.6) * sheen;
+		float3 silk = c * shade * (0.75 + 0.35 * calm_in.x * react_mix.y) + lerp(c, float3(1.0, 1.0, 1.0), 0.6) * sheen;
 		col = over(col, silk, inside * 0.94);
 		/* a soft shadow under the next ribbon */
 		col.rgb *= 1.0 - 0.25 * exp(-abs(s) * 0.6) * (1.0 - inside) * step(abs(s), 3.0);
@@ -3458,7 +3458,7 @@ float4 PSDreamGradient(VertData v_in) : TARGET
 		float fi = float(i);
 		float2 c = float2(0.62 * aspect * 0.5 * sin(time * (0.07 + 0.013 * fi) + fi * 2.4),
 				  0.33 * cos(time * (0.055 + 0.011 * fi) + fi * 1.7));
-		float sz = 0.3 + 0.05 * fi + 0.06 * calm_in.y + 0.03 * calm_in.w;
+		float sz = 0.3 + 0.05 * fi + 0.06 * calm_in.y * react_mix.x + 0.03 * calm_in.w * react_mix.w;
 		float2 d = p - c;
 		float w = exp(-dot(d, d) / (sz * sz));
 		/* sharper weights keep the colours clean where fields meet */
@@ -3468,7 +3468,7 @@ float4 PSDreamGradient(VertData v_in) : TARGET
 	}
 	float3 c = sum / max(wsum, 0.0001);
 	/* light breathing with the music, a vignette, and fine grain */
-	c *= (0.72 + 0.22 * calm_in.x + 0.1 * calm_in.w) * (1.0 - 0.35 * dot(p, p));
+	c *= (0.72 + 0.22 * calm_in.x * react_mix.y + 0.1 * calm_in.w * react_mix.w) * (1.0 - 0.35 * dot(p, p));
 	float grain = (hash21(pix + frac(time * 3.0) * 97.0) - 0.5) * 0.012;
 	return finish_paint(float4(saturate(c + grain), 1.0), uv);
 }
@@ -3486,12 +3486,12 @@ float3 rg_bokeh(float2 q, float aspect, float focus)
 		float dir = h2 > 0.5 ? 1.0 : -1.0;
 		float2 c = float2(glmod(h1 * (aspect + 0.6) + time * (0.004 + 0.012 * h3) * dir, aspect + 0.6) - 0.3,
 				  0.3 + 0.7 * h2 * h2 + 0.01 * sin(time * 0.3 + fi));
-		float R = (0.05 + 0.09 * h3) * (1.0 + 0.1 * calm_in.y);
+		float R = (0.05 + 0.09 * h3) * (1.0 + 0.1 * calm_in.y * react_mix.x);
 		float d = length(q - c);
 		float disc = 1.0 - smoothstep(R * lerp(0.82, 0.97, focus), R, d);
 		float rim = smoothstep(R * 0.6, R * 0.97, d) * disc * 0.35;
 		float3 c_col = prism(cm_hue(hue + h1 * 0.45 + h3 * 0.2, float2(q.x / aspect, q.y), h1, fi));
-		light += c_col * (disc * 0.22 + rim * 0.2) * (0.45 + h2) * (0.7 + 0.45 * calm_in.x + 0.3 * calm_in.w * h3);
+		light += c_col * (disc * 0.22 + rim * 0.2) * (0.45 + h2) * (0.7 + 0.45 * calm_in.x * react_mix.y + 0.3 * calm_in.w * react_mix.w * h3);
 	}
 	/* the city's glow low in the window */
 	light += prism(cm_hue(hue + 0.08, float2(q.x / aspect, q.y), q.x / aspect, 0.0)) * smoothstep(0.3, 1.1, q.y) * 0.07;
@@ -3562,7 +3562,7 @@ float4 PSRainGlass(VertData v_in) : TARGET
 		/* slip, then stick a moment: drops lurch down a window; with
 		 * the music they slip a little more often */
 		float t = time * (0.16 + 0.2 * hs) + hc * 13.0;
-		float slip = smoothstep(lerp(0.62, 0.38, saturate(calm_in.x * 1.2)), 1.0, frac(t));
+		float slip = smoothstep(lerp(0.62, 0.38, saturate(calm_in.x * react_mix.x * 1.2)), 1.0, frac(t));
 		float y = glmod((floor(t) + slip) * 0.11 + hc * 1.6, 1.7) - 0.3;
 		float R = w * (0.12 + 0.07 * hs);
 		float2 d = p - float2(rg_path(y, x0, w, hc), y);
@@ -3678,7 +3678,7 @@ float4 PSLiquidChrome(VertData v_in) : TARGET
 	float aspect = res.x / res.y;
 	float2 p = float2((uv.x - 0.5) * aspect, uv.y - 0.5) * 1.3;
 	/* the slow bass bends it, so the surface boils rather than jitters */
-	float warp = 0.9 + 1.3 * calm_in.y + 0.2 * bass;
+	float warp = 0.9 + (1.3 * calm_in.y + 0.2 * bass) * react_mix.x;
 	float e = 0.006;
 	float h = lc_height(p, warp);
 	float hx = lc_height(p + float2(e, 0.0), warp);
@@ -3698,8 +3698,8 @@ float4 PSLiquidChrome(VertData v_in) : TARGET
 	env += float3(1.0, 1.0, 1.0) * exp(-abs(k) / 0.02) * 0.8;
 	/* hot highlights, flaring with the beat */
 	float3 L = normalize(float3(-0.4, -0.6, 0.7));
-	float spec = pow(saturate(dot(n, L)), 70.0) * (1.0 + 2.0 * beat + treble);
-	float3 c = env * (0.85 + 0.3 * level) + float3(1.0, 1.0, 1.0) * spec;
+	float spec = pow(saturate(dot(n, L)), 70.0) * (1.0 + 2.0 * beat * react_mix.w + treble * react_mix.y);
+	float3 c = env * (0.85 + 0.3 * level * react_mix.y) + float3(1.0, 1.0, 1.0) * spec;
 	return finish_paint(float4(saturate(c), 1.0), uv);
 }
 
@@ -3724,7 +3724,7 @@ float4 PSParticleVortex(VertData v_in) : TARGET
 		float h3 = hash11(fi * 2.53 + 0.9);
 		float life = frac(h1 - flow * (0.0625 + 0.0625 * floor(h3 * 3.0)));
 		float pr = 0.02 + 0.62 * pow(life, 0.8);
-		float pa = h2 * 6.2831853 + 2.6 / (pr + 0.08) + time * (0.35 + 0.4 * bass);
+		float pa = h2 * 6.2831853 + 2.6 / (pr + 0.08) + time * (0.35 + 0.4 * bass * react_mix.x);
 		/* a curved streak trailing behind it along its orbit */
 		float da = glmod(pa0 - pa + 3.1415927, 6.2831853) - 3.1415927;
 		float arc = da * pr;
@@ -3733,14 +3733,14 @@ float4 PSParticleVortex(VertData v_in) : TARGET
 		float sd = length(float2(arc - back, r - pr));
 		float tail = 1.0 + back / len * 0.85;
 		float3 c = prism(cm_hue(hue + h1 * 0.5 + pr * 0.8, uv, life, fi));
-		light += c * exp(-sd / (px * (1.1 + 1.4 * (1.0 - life)))) * tail * (0.35 + 0.9 * (1.0 - life)) * on * (0.6 + level);
+		light += c * exp(-sd / (px * (1.1 + 1.4 * (1.0 - life)))) * tail * (0.35 + 0.9 * (1.0 - life)) * on * (0.6 + level * react_mix.y);
 	}
 	/* faint spiral arms of dust */
-	float arms = pow(0.5 + 0.5 * sin(pa0 * 2.0 + log(max(r, 0.001)) * 5.0 + time * (0.35 + 0.4 * bass) * 2.0), 3.0);
-	light += prism(cm_hue(hue + r, uv, r, 0.0)) * arms * exp(-r / 0.28) * smoothstep(0.02, 0.1, r) * (0.12 + 0.2 * level);
+	float arms = pow(0.5 + 0.5 * sin(pa0 * 2.0 + log(max(r, 0.001)) * 5.0 + time * (0.35 + 0.4 * bass * react_mix.x) * 2.0), 3.0);
+	light += prism(cm_hue(hue + r, uv, r, 0.0)) * arms * exp(-r / 0.28) * smoothstep(0.02, 0.1, r) * (0.12 + 0.2 * level * react_mix.y);
 	/* the core, and rings thrown out on the beat */
-	light += lerp(prism(hue), float3(1.0, 1.0, 1.0), 0.5) * exp(-r / (0.03 + 0.03 * bass)) * (0.8 + beat);
-	light += prism(hue + 0.3) * exp(-abs(r - (0.08 + 0.5 * (1.0 - beat))) / 0.008) * beat * 0.7;
+	light += lerp(prism(hue), float3(1.0, 1.0, 1.0), 0.5) * exp(-r / (0.03 + 0.03 * bass * react_mix.x)) * (0.8 + beat * react_mix.w);
+	light += prism(hue + 0.3) * exp(-abs(r - (0.08 + 0.5 * (1.0 - beat))) / 0.008) * beat * react_mix.w * 0.7;
 	light += prism(hue + 0.6) * exp(-r / 0.35) * 0.06;
 	return finish_dither(light, uv, pix);
 }
@@ -3763,13 +3763,13 @@ float4 PSNeonRidges(VertData v_in) : TARGET
 		float row = fj - floor(flow * 0.25);
 		float e = band_level(abs(x - 0.5) * 1.6) * (0.55 + 0.45 * vnoise(float2(x * 9.0, row * 1.7)));
 		float jag = vnoise(float2(x * 22.0, row * 1.3)) * 0.6 + vnoise(float2(x * 55.0, row)) * 0.4;
-		float ridge = y0 - (0.012 + 0.32 * e * jag) * env * (0.35 + 0.65 * k) - 0.006 * jag;
+		float ridge = y0 - (0.012 + 0.32 * e * react_mix.x * jag) * env * (0.35 + 0.65 * k) - 0.006 * jag;
 		/* nearer ridges hide the ones behind them */
 		float below = smoothstep(ridge - px, ridge + px, uv.y);
 		light *= 1.0 - below;
 		float3 c = prism(cm_hue(hue + k * 0.5 + x * 0.1, uv, x, fj));
 		float fade = smoothstep(0.0, 0.25, k) * (0.4 + 0.6 * k);
-		light += c * exp(-abs(uv.y - ridge) / (px * (0.9 + 0.8 * k))) * (0.7 + 0.8 * e + 0.5 * beat) * fade;
+		light += c * exp(-abs(uv.y - ridge) / (px * (0.9 + 0.8 * k))) * (0.7 + 0.8 * e * react_mix.y + 0.5 * beat * react_mix.w) * fade;
 		light += c * exp(-abs(uv.y - ridge) / (px * 9.0)) * 0.12 * fade * (1.0 - below);
 	}
 	return finish_dither(light, uv, pix);

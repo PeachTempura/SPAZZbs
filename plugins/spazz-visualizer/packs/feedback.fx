@@ -536,7 +536,7 @@ float4 PSMilkLiquidMarble(VertData v_in) : TARGET
 		float fi = float(i);
 		float2 c = float2(sin(time * 0.031 + fi * 2.3) * 0.5, cos(time * 0.027 + fi * 1.9) * 0.28);
 		float2 d = cc - c;
-		float s = (fi == 1.0) ? -1.0 : 1.0;
+		float s = 1.0 - 2.0 * step(0.5, fi) * step(fi, 1.5);
 		vel += s * float2(-d.y, d.x) / (dot(d, d) + 0.03);
 	}
 	float2 q = cc - vel * (0.00035 + 0.0004 * calm_in.x * rx) * steps;

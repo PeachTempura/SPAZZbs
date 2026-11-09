@@ -225,6 +225,11 @@ struct spazz_viz {
 	/* how much each kind of reaction follows the music (react_mix):
 	 * x movement/bounce, y brightness/glow, z colour, w beat pulses */
 	struct vec4 react_mix;
+	/* the "Music reaction" settings: how hard everything reacts, whether it
+	 * follows the slow calm version of the music, and which part of it */
+	float react_amount;
+	bool react_calm;
+	int react_to; /* 0 whole mix, 1 bass, 2 mids, 3 highs */
 	float bg_opacity, bg_flat;
 	struct vec3 bg_col;
 	float auto_secs, fade_secs;
@@ -254,6 +259,8 @@ struct spazz_viz {
 	/* what the shader gets, after the boosts and extra smoothing */
 	float bands[SPAZZ_NUM_BANDS], peaks[SPAZZ_NUM_BANDS];
 	float bass, mid, treble, level, beat;
+	/* ... and after the Music reaction settings: what the shader gets */
+	float o_bass, o_mid, o_treble, o_level, o_beat;
 
 	/* animation */
 	float time, flow, hue;
@@ -473,6 +480,17 @@ static bool is(const char *a, const char *b)
 	return a && strcmp(a, b) == 0;
 }
 
+/* each style's own sense of "normal" movement (1x on the Movement slider):
+ * the auroras drift gently rather than bounce */
+static float style_move_base(int idx)
+{
+	if (idx < 0 || (size_t)idx >= num_styles) {
+		return 1.0f;
+	}
+	const char *k = styles[idx].key;
+	return is(k, "PrismAurora") || is(k, "NorthernLake") ? 0.25f : 1.0f;
+}
+
 static void viz_update(void *data, obs_data_t *settings)
 {
 	struct spazz_viz *v = data;
@@ -534,6 +552,15 @@ static void viz_update(void *data, obs_data_t *settings)
 		}
 	}
 	v->aurora_classic = is(obs_data_get_string(settings, "aurora_look"), "classic");
+
+	/* music reaction: x movement, y brightness & glow, z colour, w beat */
+	v->react_amount = (float)obs_data_get_double(settings, "react_amount");
+	vec4_set(&v->react_mix, (float)obs_data_get_double(settings, "react_move"),
+		 (float)obs_data_get_double(settings, "react_glow"), (float)obs_data_get_double(settings, "react_color"),
+		 (float)obs_data_get_double(settings, "react_beat"));
+	v->react_calm = obs_data_get_bool(settings, "react_calm");
+	const char *rt = obs_data_get_string(settings, "react_to");
+	v->react_to = is(rt, "bass") ? 1 : is(rt, "mids") ? 2 : is(rt, "highs") ? 3 : 0;
 
 	const char *bg = obs_data_get_string(settings, "background");
 	const float opacity = (float)obs_data_get_double(settings, "bg_opacity");
@@ -602,6 +629,13 @@ static void viz_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "palette", "prism");
 	obs_data_set_default_string(settings, "color_motion", "gradient");
 	obs_data_set_default_string(settings, "aurora_look", "deluxe");
+	obs_data_set_default_double(settings, "react_amount", 1.0);
+	obs_data_set_default_double(settings, "react_move", 1.0);
+	obs_data_set_default_double(settings, "react_glow", 1.0);
+	obs_data_set_default_double(settings, "react_color", 1.0);
+	obs_data_set_default_double(settings, "react_beat", 1.0);
+	obs_data_set_default_bool(settings, "react_calm", false);
+	obs_data_set_default_string(settings, "react_to", "mix");
 	obs_data_set_default_int(settings, "color_1", obs_color(0xff3f8e));
 	obs_data_set_default_int(settings, "color_2", obs_color(0x8a5cff));
 	obs_data_set_default_int(settings, "color_3", obs_color(0x2bd9ff));
@@ -949,6 +983,34 @@ static obs_properties_t *viz_properties(void *data)
 	obs_property_set_long_description(p, T_("Smoothing.Tip"));
 	obs_properties_add_float_slider(motion, "density", T_("Density"), 0.3, 2.0, 0.05);
 	obs_properties_add_group(props, "grp_motion", T_("Group.Motion"), OBS_GROUP_NORMAL, motion);
+
+	/* how much each part of a style follows the music, for every style */
+	obs_properties_t *react = obs_properties_create();
+	p = obs_properties_add_float_slider(react, "react_amount", T_("ReactAmount"), 0.0, 2.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("ReactAmount.Tip"));
+	p = obs_properties_add_float_slider(react, "react_move", T_("ReactMove"), 0.0, 4.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("ReactMove.Tip"));
+	p = obs_properties_add_float_slider(react, "react_glow", T_("ReactGlow"), 0.0, 2.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("ReactGlow.Tip"));
+	p = obs_properties_add_float_slider(react, "react_color", T_("ReactColor"), 0.0, 2.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("ReactColor.Tip"));
+	p = obs_properties_add_float_slider(react, "react_beat", T_("ReactBeat"), 0.0, 2.0, 0.05);
+	obs_property_float_set_suffix(p, "x");
+	obs_property_set_long_description(p, T_("ReactBeat.Tip"));
+	p = add_list(react, "react_to", T_("ReactTo"));
+	obs_property_list_add_string(p, T_("ReactTo.mix"), "mix");
+	obs_property_list_add_string(p, T_("ReactTo.bass"), "bass");
+	obs_property_list_add_string(p, T_("ReactTo.mids"), "mids");
+	obs_property_list_add_string(p, T_("ReactTo.highs"), "highs");
+	obs_property_set_long_description(p, T_("ReactTo.Tip"));
+	p = obs_properties_add_bool(react, "react_calm", T_("ReactCalm"));
+	obs_property_set_long_description(p, T_("ReactCalm.Tip"));
+	p = obs_properties_add_group(props, "grp_react", T_("Group.React"), OBS_GROUP_NORMAL, react);
+	obs_property_set_long_description(p, T_("Group.React.Tip"));
 
 	/* colour */
 	obs_properties_t *color = obs_properties_create();
@@ -1482,19 +1544,25 @@ static void viz_tick(void *data, float seconds)
 
 	/* bass and treble boost tilt the spectrum; smoothing calms it down */
 	const float keep = v->smoothing > 0.0f ? powf(v->smoothing * 0.96f, seconds * 30.0f) : 0.0f;
+	/* Music reaction: "Overall" scales everything the music drives; calm
+	 * mode lets the bars drift slowly too */
+	const float ov = v->react_amount;
+	const float keep_b = v->react_calm ? fmaxf(keep, powf(0.9f, seconds * 30.0f)) : keep;
 	struct spazz_analyzer *a = v->analyzer;
 	for (int i = 0; i < SPAZZ_NUM_BANDS; i++) {
 		const float x = (float)i / (float)(SPAZZ_NUM_BANDS - 1);
 		const float lo = 1.0f - 2.0f * x > 0.0f ? 1.0f - 2.0f * x : 0.0f;
 		const float hi = 2.0f * x - 1.0f > 0.0f ? 2.0f * x - 1.0f : 0.0f;
 		const float gain = 1.0f + (v->bass_boost - 1.0f) * lo + (v->treble_boost - 1.0f) * hi;
-		const float band = fminf(a->bands[i] * gain, 1.0f);
-		const float peak = fminf(a->peaks[i] * gain, 1.0f);
-		v->bands[i] = band + (v->bands[i] - band) * keep;
-		v->peaks[i] = fmaxf(peak, v->peaks[i] * keep);
+		const float band = fminf(a->bands[i] * gain * ov, 1.0f);
+		const float peak = fminf(a->peaks[i] * gain * ov, 1.0f);
+		v->bands[i] = band + (v->bands[i] - band) * keep_b;
+		v->peaks[i] = fmaxf(peak, v->peaks[i] * keep_b);
 		v->tex_data[i * 4 + 0] = (uint8_t)(v->bands[i] * 255.0f + 0.5f);
 		v->tex_data[i * 4 + 1] = (uint8_t)(v->peaks[i] * 255.0f + 0.5f);
-		v->tex_data[i * 4 + 2] = (uint8_t)(fminf(a->flash[i] * v->beat_punch, 1.0f) * 255.0f + 0.5f);
+		v->tex_data[i * 4 + 2] =
+			(uint8_t)(fminf(a->flash[i] * v->beat_punch * ov * (v->react_calm ? 0.4f : 1.0f), 1.0f) * 255.0f +
+				  0.5f);
 		v->tex_data[i * 4 + 3] = 255;
 	}
 	const float bass = fminf(a->bass * v->bass_boost, 1.5f);
@@ -1504,19 +1572,39 @@ static void viz_tick(void *data, float seconds)
 	v->treble = treble + (v->treble - treble) * keep;
 	v->level = a->level + (v->level - a->level) * keep;
 	v->beat = fminf(a->beat * v->beat_punch, 1.5f);
+
+	/* Music reaction: which part of the music drives everything ("React
+	 * to"), then how hard ("Overall") */
+	float rb = v->bass, rm = v->mid, rh = v->treble, rl = v->level;
+	if (v->react_to == 1) {
+		rm = rh = rb;
+		rl = fminf(rb, 1.0f) * 0.7f;
+	} else if (v->react_to == 2) {
+		rb = rh = rm;
+		rl = fminf(rm, 1.0f) * 0.7f;
+	} else if (v->react_to == 3) {
+		rb = rm = rh;
+		rl = fminf(rh, 1.0f) * 0.7f;
+	}
+	v->o_bass = fminf(rb * ov, 1.5f);
+	v->o_mid = fminf(rm * ov, 1.5f);
+	v->o_treble = fminf(rh * ov, 1.5f);
+	v->o_level = fminf(rl * ov, 1.0f);
+	v->o_beat = fminf(v->beat * ov, 1.5f);
+
 	/* what pushes the glitch players: jumps up with the music, settles fast */
-	const float push = v->glitch_follow == 1   ? v->bass
-			   : v->glitch_follow == 2 ? fminf(v->level * 1.6f, 1.5f)
-			   : v->glitch_follow == 3 ? v->treble
-						   : v->beat;
+	const float push = v->glitch_follow == 1   ? v->o_bass
+			   : v->glitch_follow == 2 ? fminf(v->o_level * 1.6f, 1.5f)
+			   : v->glitch_follow == 3 ? v->o_treble
+						   : v->o_beat;
 	v->glitch_env = fmaxf(push, v->glitch_env * powf(0.02f, seconds));
 	/* a big jump holds the glitch still for a moment: a stutter */
 	if (push - v->glitch_prev > 0.3f && v->glitch_hold <= 0.0f) {
 		v->glitch_hold = 0.05f + 0.1f * (float)(rand() % 100) / 100.0f;
 	}
 	v->glitch_prev = push;
-	const float level = a->level;
-	const float beat = a->beat;
+	const float level = a->level * ov;
+	const float beat = a->beat * ov;
 	pthread_mutex_unlock(&v->mutex);
 
 	v->tex_dirty = true;
@@ -1527,17 +1615,23 @@ static void viz_tick(void *data, float seconds)
 	} else {
 		v->glitch_tick = floorf(v->time * 14.0f);
 	}
-	v->flow += dt * (0.3f + 1.1f * level + 0.5f * beat);
+	/* the music speeds the flow up: that's movement */
+	const float move = v->react_mix.x * style_move_base(v->shown);
+	if (v->react_calm) {
+		v->flow += dt * (0.3f + (1.1f * v->calm_level * 0.7f + 0.5f * v->calm_swell * 0.6f) * move);
+	} else {
+		v->flow += dt * (0.3f + (1.1f * level + 0.5f * beat) * move);
+	}
 	v->hue += seconds * v->color_speed * 0.08f;
 
 	/* colour motion's clock: whole turns only matter, so it wraps at 1 */
 	v->cm_clock += seconds * (0.02f + 0.06f * v->color_speed);
 	v->cm_clock -= floorf(v->cm_clock);
 	/* "shift on the beat": each beat steps the colours on, gliding there */
-	if (v->beat > 0.6f && v->beat_prev <= 0.6f) {
-		v->beat_hue_to += 0.09f + 0.06f * (float)(rand() % 100) / 100.0f;
+	if (v->o_beat > 0.6f && v->beat_prev <= 0.6f) {
+		v->beat_hue_to += (0.09f + 0.06f * (float)(rand() % 100) / 100.0f) * v->react_mix.z;
 	}
-	v->beat_prev = v->beat;
+	v->beat_prev = v->o_beat;
 	v->beat_hue += (v->beat_hue_to - v->beat_hue) * (1.0f - expf(-seconds / 0.35f));
 	{
 		const float whole = floorf(v->beat_hue);
@@ -1550,14 +1644,22 @@ static void viz_tick(void *data, float seconds)
 	{
 		const float up = 1.0f - expf(-seconds / 0.55f);
 		const float down = 1.0f - expf(-seconds / 2.0f);
-		const float lvl = fminf(v->level * 1.4f, 1.0f);
-		const float bs = fminf(v->bass, 1.0f);
-		const float tr = fminf(v->treble, 1.0f);
+		const float lvl = fminf(v->o_level * 1.4f, 1.0f);
+		const float bs = fminf(v->o_bass, 1.0f);
+		const float tr = fminf(v->o_treble, 1.0f);
 		v->calm_level += (lvl - v->calm_level) * (lvl > v->calm_level ? up : down);
 		v->calm_bass += (bs - v->calm_bass) * (bs > v->calm_bass ? up : down);
 		v->calm_treble += (tr - v->calm_treble) * (tr > v->calm_treble ? up : down);
-		v->calm_swell_to = fmaxf(v->calm_swell_to * expf(-seconds / 1.3f), fminf(v->beat, 1.0f) * 0.8f);
+		v->calm_swell_to = fmaxf(v->calm_swell_to * expf(-seconds / 1.3f), fminf(v->o_beat, 1.0f) * 0.8f);
 		v->calm_swell += (v->calm_swell_to - v->calm_swell) * (1.0f - expf(-seconds / 0.3f));
+	}
+	/* calm mode: every style gets the slow, gentle version of the music */
+	if (v->react_calm) {
+		v->o_bass = v->calm_bass;
+		v->o_mid = v->calm_level * 0.8f;
+		v->o_treble = v->calm_treble;
+		v->o_level = v->calm_level * 0.7f;
+		v->o_beat = v->calm_swell * 0.6f;
 	}
 
 	/* keep floats small so the shader stays precise on long streams */
@@ -1655,6 +1757,15 @@ static void draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 	}
 }
 
+static void set_react(struct spazz_viz *v, struct viz_fx *fx, int idx)
+{
+	if (fx->react) {
+		struct vec4 m = v->react_mix;
+		m.x *= style_move_base(idx);
+		gs_effect_set_vec4(fx->react, &m);
+	}
+}
+
 static void draw_style(struct spazz_viz *v, int idx, float alpha)
 {
 	if (idx < 0 || (size_t)idx >= num_styles) {
@@ -1665,6 +1776,7 @@ static void draw_style(struct spazz_viz *v, int idx, float alpha)
 	if (!fx->effect) {
 		return;
 	}
+	set_react(v, fx, idx);
 
 	if ((st->flags & VZ_FEEDBACK) && idx == fb_owner(v)) {
 		draw_feedback(v, fx, st->tech, alpha);
@@ -1746,11 +1858,11 @@ static void set_common(struct spazz_viz *v, struct viz_fx *fx, const struct vec2
 	}
 	SETF(fx->time, v->time);
 	SETF(fx->flow, v->flow);
-	SETF(fx->bass, v->bass);
-	SETF(fx->mid, v->mid);
-	SETF(fx->treble, v->treble);
-	SETF(fx->level, v->level);
-	SETF(fx->beat, v->beat);
+	SETF(fx->bass, v->o_bass);
+	SETF(fx->mid, v->o_mid);
+	SETF(fx->treble, v->o_treble);
+	SETF(fx->level, v->o_level);
+	SETF(fx->beat, v->o_beat);
 	SETF(fx->hue, v->hue + v->hue_shift);
 	struct vec4 cmv, calm;
 	vec4_set(&cmv, (float)v->color_motion, v->cm_clock, v->aurora_classic ? 1.0f : 0.0f, v->beat_hue);
