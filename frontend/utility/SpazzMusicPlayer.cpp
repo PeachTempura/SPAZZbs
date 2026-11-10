@@ -96,6 +96,7 @@ void NowProc(void *, calldata_t *cd)
 
 constexpr const char *kConfigSection = "SPAZZbs";
 constexpr const char *kConfigPlaylist = "MusicPlaylist";
+constexpr const char *kConfigVolume = "MusicVolume";
 constexpr uint64_t kSilenceNs = 250000000ULL;
 
 const QStringList &AudioExtensions()
@@ -183,6 +184,23 @@ SpazzMusicPlayer::SpazzMusicPlayer(QObject *parent)
 	connect(this, &SpazzMusicPlayer::CurrentChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
 	connect(this, &SpazzMusicPlayer::StateChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
 	connect(this, &SpazzMusicPlayer::VolumeChanged, this, &SpazzMusicPlayer::UpdateNowPlaying);
+	/* remember the volume you left it at, whichever fader moved it */
+	QTimer *volumeSave = new QTimer(this);
+	volumeSave->setSingleShot(true);
+	volumeSave->setInterval(800);
+	connect(volumeSave, &QTimer::timeout, this,
+		[]() { config_save_safe(App()->GetUserConfig(), "tmp", nullptr); });
+	connect(this, &SpazzMusicPlayer::VolumeChanged, this, [this, volumeSave](float mul) {
+		if (!source) {
+			return;
+		}
+		config_t *cfg = App()->GetUserConfig();
+		if (!config_has_user_value(cfg, kConfigSection, kConfigVolume) ||
+		    std::abs(config_get_double(cfg, kConfigSection, kConfigVolume) - mul) > 0.0001) {
+			config_set_double(cfg, kConfigSection, kConfigVolume, mul);
+			volumeSave->start();
+		}
+	});
 	connect(this, &SpazzMusicPlayer::TrackUpdated, this, &SpazzMusicPlayer::UpdateNowPlaying);
 	nowTimer.setInterval(500);
 	connect(&nowTimer, &QTimer::timeout, this, &SpazzMusicPlayer::UpdateNowPlaying);
@@ -325,6 +343,12 @@ void SpazzMusicPlayer::Bind()
 
 	source = src.Get();
 	loadedPath.clear();
+
+	/* back to the volume it was left at */
+	if (config_has_user_value(App()->GetUserConfig(), kConfigSection, kConfigVolume)) {
+		double vol = config_get_double(App()->GetUserConfig(), kConfigSection, kConfigVolume);
+		obs_source_set_volume(source, (float)std::clamp(vol, 0.0, 1.0));
+	}
 
 	/* its own global channel: in the mixer and on stream, without having
 	 * to be in a scene */
