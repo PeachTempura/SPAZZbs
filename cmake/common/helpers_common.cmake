@@ -240,6 +240,9 @@ function(find_qt_plugins)
     iconengines
   )
   list(APPEND qt_plugins_Gui platforminputcontexts)
+  # SPAZZbs: the chat dock opens https/wss connections with Qt Network, which
+  # needs a TLS backend plugin (Schannel on Windows)
+  list(APPEND qt_plugins_Network tls networkinformation)
   list(APPEND qt_plugins_Sql sqldrivers)
   list(APPEND qt_plugins_3dRender sceneparsers geometryloaders)
   list(APPEND qt_plugins_3dQuickRender renderplugins)
