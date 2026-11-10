@@ -312,40 +312,105 @@ float4 PSMilkGeissPlasma(VertData v_in) : TARGET
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);
 }
 
-/* Alchemy Smoke: like Windows Media Player's Alchemy, coloured smoke is
- * carried along a swirling noise current; glowing emitters wander around
- * and puff out more of it as their part of the spectrum gets louder. */
+/* last frame for smoke: a gentler fixed step than fbk_take, so thin
+ * smoke can climb further before it clears (it still always clears) */
+float4 sm_take(float2 uv, float keep_ps)
+{
+	float4 o = prev_at(uv);
+	float2 e = abs(uv - 0.5);
+	o.a *= smoothstep(0.5, 0.47, max(e.x, e.y));
+	o.a = max(o.a * fb_decay(keep_ps) - 0.4 / 255.0 * max(fbk_steps(), 0.5), 0.0);
+	return o;
+}
+
+/* Alchemy Smoke: real smoke. Thin streams rise from vents along the
+ * bottom; last frame is carried up by buoyancy and stirred by a
+ * swirling (divergence-free) flow that gets stronger the higher it goes,
+ * so the streams kink, roll into curls and spread into haze. A little
+ * blur each frame lets it diffuse, and it thins out as it rises.
+ * Amount = vents. Knobs: rise, turbulence, wind, linger, colour, puffs. */
 float4 PSMilkAlchemySmoke(VertData v_in) : TARGET
 {
 	float steps = fbk_steps();
 	float rx = react_mix.x;
+	float rise = style_a.x;
+	float curlk = style_a.y;
+	float wind = style_a.z;
+	float linger = style_a.w;
+	float cmode = floor(style_b.x + 0.5);
+	float puffk = style_b.y;
 
 	float2 cc = fbk_asp(v_in.uv);
-	float2 cp = cc * 2.5 + float2(time * 0.05, -time * 0.03);
-	float e = 0.06;
+	/* 0 at the bottom, 1 at the top */
+	float hb = saturate(0.5 - cc.y);
+
+	/* the flow: curl of a noise field that drifts up with the smoke */
+	float2 cp = cc * 2.4 + float2(flow * 0.03, flow * 0.22 * (0.3 + rise));
+	float e = 0.05;
 	float nx1 = fbm4(cp + float2(e, 0.0));
 	float nx2 = fbm4(cp - float2(e, 0.0));
 	float ny1 = fbm4(cp + float2(0.0, e));
 	float ny2 = fbm4(cp - float2(0.0, e));
 	float2 curl = float2(ny1 - ny2, -(nx1 - nx2)) / (2.0 * e);
-	float2 q = cc - curl * (0.0016 + 0.004 * mid * rx) * steps + float2(0.0, 0.0006 * steps);
-	q *= pow(0.998, steps);
-	float4 old = fbk_take(fbk_unasp(q), 0.72);
-	old.rgb = fbk_huerot(old.rgb, 0.004 * steps * react_mix.z);
+	/* finer eddies */
+	float2 cq = cc * 7.0 + float2(3.1, flow * 0.3 * (0.3 + rise));
+	float e2 = 0.03;
+	float mx1 = vnoise(cq + float2(e2, 0.0));
+	float mx2 = vnoise(cq - float2(e2, 0.0));
+	float my1 = vnoise(cq + float2(0.0, e2));
+	float my2 = vnoise(cq - float2(0.0, e2));
+	float2 curl2 = float2(my1 - my2, -(mx1 - mx2)) / (2.0 * e2);
 
+	float turb = curlk * (0.35 + 1.0 * smoothstep(0.0, 0.45, hb)) * (1.0 + 0.6 * mid * rx);
+	float2 vel = float2(wind * 0.0016 * (0.3 + hb), -0.0042 * rise * (1.0 + 0.25 * bass * rx)) +
+		     curl * 0.0024 * turb + curl2 * 0.0009 * turb;
+	float2 q = cc - vel * steps;
+
+	/* carried-up smoke, softened by a small blur (diffusion) and thinning
+	 * as it climbs */
+	float keep = lerp(0.55, 0.97, saturate(linger * 0.5));
+	float2 du = float2(1.3 / max(res.x, 1.0), 1.3 / max(res.y, 1.0));
+	float2 qu = fbk_unasp(q);
+	float4 c0 = sm_take(qu, keep);
+	float4 c1 = sm_take(qu + float2(du.x, 0.0), keep);
+	float4 c2 = sm_take(qu - float2(du.x, 0.0), keep);
+	float4 c3 = sm_take(qu + float2(0.0, du.y), keep);
+	float4 c4 = sm_take(qu - float2(0.0, du.y), keep);
+	float aw = c0.a * 0.6 + (c1.a + c2.a + c3.a + c4.a) * 0.1;
+	float3 cw = c0.rgb * c0.a * 0.6 + (c1.rgb * c1.a + c2.rgb * c2.a + c3.rgb * c3.a + c4.rgb * c4.a) * 0.1;
+	float4 o = float4(cw / max(aw, 0.0001), aw);
+	o.a *= pow(1.0 - 0.0035 * hb * hb, steps);
+	if (cmode > 1.5 && cmode < 2.5) {
+		o.rgb = fbk_huerot(o.rgb, 0.01 * steps * (0.4 + react_mix.z));
+	}
+
+	/* the vents */
 	float2 uv = view_uv(v_in.uv);
 	float2 pv = fbk_asp(uv);
-	float4 o = old;
-	float count = clamp(4.0 + 3.0 * density, 2.0, 10.0);
+	float aspect = res.x / max(res.y, 1.0);
+	float count = clamp(floor(2.0 + 3.0 * density + 0.5), 1.0, 10.0);
+	float hit = fbk_hit() * puffk;
 	for (int i = 0; i < 10; i++) {
 		float fi = float(i);
 		if (fi < count) {
 			float t = (fi + 0.5) / count;
-			float2 cpos = float2(sin(time * (0.21 + 0.05 * fi) + fi * 2.1) * 0.6, sin(time * (0.17 + 0.04 * fi) + fi * 1.3) * 0.34);
 			float en = band_level(t);
-			float b = fbk_blob(pv, cpos, 0.025 + 0.06 * en * react_mix.y);
-			float3 col = prism(cm_hue(hue + t * 0.8 + time * 0.03, uv, t, fi));
-			o = over(o, col, saturate(b * (0.3 + 0.6 * en)));
+			float2 vent = float2((t - 0.5) * aspect * 0.9 + 0.025 * sin(time * (0.23 + 0.05 * fi) + fi * 2.3), 0.455);
+			float2 d = pv - vent;
+			float sw = 0.008 + 0.007 * en * react_mix.y + 0.012 * hit;
+			float sh = 0.014 + 0.01 * hit;
+			float src = exp(-(d.x * d.x) / (sw * sw) - (d.y * d.y) / (sh * sh));
+			float a0 = saturate(src * (0.32 + 0.45 * en * react_mix.y + 0.35 * hit));
+			float a = 1.0 - pow(1.0 - a0, max(steps, 0.25));
+			float3 col = float3(0.86, 0.88, 0.92);
+			if (cmode < 0.5) {
+				col = lerp(col, prism(cm_hue(hue + t * 0.7 + time * 0.02, uv, t, fi)), 0.55 + 0.35 * pal_mix);
+			} else if (cmode < 2.5 && cmode > 1.5) {
+				col = prism(glmod(hue + t + time * 0.08 * (0.5 + react_mix.z), 1.0)) * 1.1;
+			} else if (cmode > 2.5) {
+				col = style_col.rgb;
+			}
+			o = over(o, col, a);
 		}
 	}
 	return fb_out(o.rgb + fbk_dith(v_in.uv * res), o.a);

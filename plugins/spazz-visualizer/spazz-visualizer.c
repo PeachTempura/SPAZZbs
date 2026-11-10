@@ -158,6 +158,37 @@ static const struct style_knob knobs[] = {
 	 9},
 	{"ModernBlossoms", "blossom_color", "Knob.BlossomColor", KNOB_COLOR, 0, 0, 0, 0xffb3c8, NULL, NULL, 12},
 	{"ModernBlossoms", "blossom_use_palette", "Knob.BlossomUsePalette", KNOB_BOOL, 0, 0, 0, 0, NULL, NULL, 15},
+	/* Calm · Incense Smoke */
+	{"ModernIncense", "smoke_sticks", "Knob.SmokeSticks", KNOB_SLIDER, 1, 7, 1, 3, NULL, NULL, 0},
+	{"ModernIncense", "smoke_rise", "Knob.SmokeRise", KNOB_SLIDER, 0.0, 3.0, 0.05, 1.0, NULL, "x", 1},
+	{"ModernIncense", "smoke_curl", "Knob.SmokeCurl", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 2},
+	{"ModernIncense", "smoke_wind", "Knob.SmokeWind", KNOB_SLIDER, -1.0, 1.0, 0.05, 0.0, NULL, NULL, 3},
+	{"ModernIncense", "smoke_thick", "Knob.SmokeThick", KNOB_SLIDER, 0.3, 2.5, 0.05, 1.0, NULL, "x", 4},
+	{"ModernIncense", "smoke_height", "Knob.SmokeHeight", KNOB_SLIDER, 0.3, 2.0, 0.05, 1.0, NULL, "x", 5},
+	{"ModernIncense", "smoke_ember", "Knob.SmokeEmber", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 6},
+	{"ModernIncense", "smoke_music", "Knob.SmokeMusic", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 7},
+	{"ModernIncense", "smoke_color_beat", "Knob.SmokeColorBeat", KNOB_SLIDER, 0.0, 1.0, 0.05, 0.0, NULL, NULL, 8},
+	{"ModernIncense", "smoke_color", "Knob.SmokeColor", KNOB_COLOR, 0, 0, 0, 0xdde2ec, NULL, NULL, 12},
+	{"ModernIncense", "smoke_use_palette", "Knob.SmokeUsePalette", KNOB_BOOL, 0, 0, 0, 0, NULL, NULL, 15},
+	/* Neon · Stage Smoke */
+	{"ModernStageSmoke", "fog_top", "Knob.FogTop", KNOB_SLIDER, 0.1, 1.0, 0.01, 0.45, NULL, NULL, 0},
+	{"ModernStageSmoke", "fog_thick", "Knob.FogThick", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 1},
+	{"ModernStageSmoke", "fog_drift", "Knob.FogDrift", KNOB_SLIDER, -2.0, 2.0, 0.05, 0.5, NULL, NULL, 2},
+	{"ModernStageSmoke", "fog_sweep", "Knob.FogSweep", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 3},
+	{"ModernStageSmoke", "fog_beam_width", "Knob.FogBeamWidth", KNOB_SLIDER, 0.3, 2.5, 0.05, 1.0, NULL, "x", 4},
+	{"ModernStageSmoke", "fog_lights", "Knob.FogLights", KNOB_LIST, 0, 0, 0, 0, "top,floor,sides", NULL, 5},
+	{"ModernStageSmoke", "fog_strobe", "Knob.FogStrobe", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 6},
+	{"ModernStageSmoke", "fog_haze", "Knob.FogHaze", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 7},
+	{"ModernStageSmoke", "fog_color", "Knob.FogColor", KNOB_COLOR, 0, 0, 0, 0xb8c4d8, NULL, NULL, 12},
+	/* Trails · Alchemy Smoke */
+	{"MilkAlchemySmoke", "alch_rise", "Knob.AlchRise", KNOB_SLIDER, 0.2, 3.0, 0.05, 1.0, NULL, "x", 0},
+	{"MilkAlchemySmoke", "alch_curl", "Knob.AlchCurl", KNOB_SLIDER, 0.0, 2.5, 0.05, 1.0, NULL, "x", 1},
+	{"MilkAlchemySmoke", "alch_wind", "Knob.AlchWind", KNOB_SLIDER, -1.0, 1.0, 0.05, 0.0, NULL, NULL, 2},
+	{"MilkAlchemySmoke", "alch_linger", "Knob.AlchLinger", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 3},
+	{"MilkAlchemySmoke", "alch_colors", "Knob.AlchColors", KNOB_LIST, 0, 0, 0, 0, "palette,white,neon,custom", NULL,
+	 4},
+	{"MilkAlchemySmoke", "alch_puffs", "Knob.AlchPuffs", KNOB_SLIDER, 0.0, 2.0, 0.05, 1.0, NULL, "x", 5},
+	{"MilkAlchemySmoke", "alch_color", "Knob.AlchColor", KNOB_COLOR, 0, 0, 0, 0xe8ecf4, NULL, NULL, 12},
 };
 #define NUM_KNOBS (sizeof(knobs) / sizeof(knobs[0]))
 

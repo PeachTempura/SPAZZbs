@@ -171,8 +171,13 @@ float4 PSRetroOceanMist(VertData v_in) : TARGET
 	float x = uv.x * n;
 	float ci = floor(x);
 	float yy = 1.0 - uv.y;
-	float mist = fbm4(float2(uv.x * 7.0, yy * 3.0 - time * 0.45));
-	float wisp = fbm4(float2(uv.x * 15.0 + 3.1, yy * 6.0 - time * 0.8));
+	/* rolling mist: a slow, broad layer and a quicker wispy one, each
+	 * pushed around by a soft swirl so it billows instead of sliding */
+	float2 mp = float2(uv.x * res.x / max(res.y, 1.0), yy);
+	float2 sw = float2(fbm4(mp * 1.8 + float2(time * 0.05, -time * 0.12)), fbm4(mp * 1.8 + float2(4.3, 1.7 - time * 0.1)));
+	float mist = fbm4(mp * float2(3.2, 2.4) + sw * 1.4 + float2(time * 0.04, -time * 0.3));
+	float wisp = fbm4(mp * float2(7.5, 5.0) + sw * 2.2 + float2(-time * 0.07, -time * 0.55));
+	wisp = smoothstep(0.25, 0.8, wisp);
 
 	float3 light = float3(0.0, 0.0, 0.0);
 	for (int k = -2; k <= 2; k++) {
@@ -180,17 +185,19 @@ float4 PSRetroOceanMist(VertData v_in) : TARGET
 		if (i >= 0.0 && i < n) {
 			float e = band_level((i + 0.5) / n);
 			float cx = (i + 0.5) / n + 0.008 * sin(time * 0.7 + i * 1.7);
-			float dx = (uv.x - cx) * n;
+			/* the column widens and frays as it rises */
+			float dx = (uv.x - cx) * n + (mist - 0.5) * (0.6 + 1.6 * yy);
 			float h = 0.12 + 0.72 * rt_move(e);
-			float col = exp(-dx * dx * 1.6) * smoothstep(h + 0.12, h * 0.35, yy + (mist - 0.5) * 0.2);
+			float wide = 1.6 / (1.0 + 2.5 * yy);
+			float col = exp(-dx * dx * wide) * smoothstep(h + 0.15, h * 0.3, yy + (mist - 0.5) * 0.28);
 			float top = exp(-pow((yy - h * 0.85) * 9.0, 2.0)) * exp(-dx * dx * 2.5);
 			float hh = cm_hue(hue + 0.45 + yy * 0.25 + i / n * 0.15 + rt_tint(e) * 0.15, uv, yy, i / n);
 			float3 sea = lerp(prism(hh), float3(0.25, 0.85, 0.8), 0.45 * (1.0 - pal_mix));
-			light += sea * (col * (0.12 + 0.45 * rt_bright(e)) * (0.5 + 0.9 * wisp) + top * 0.25 * rt_bright(e));
+			light += sea * (col * (0.12 + 0.45 * rt_bright(e)) * (0.35 + 0.65 * mist + 0.6 * wisp) + top * 0.2 * rt_bright(e) * mist);
 		}
 	}
 	/* sea-green haze and a calm horizon line */
-	light += float3(0.02, 0.07, 0.08) * (0.6 + mist) * smoothstep(0.7, 0.0, yy);
+	light += float3(0.02, 0.07, 0.08) * (0.3 + 1.2 * mist * mist + 0.4 * wisp) * smoothstep(0.75, 0.0, yy);
 	/* glitter in the mist on the highs */
 	float2 g = floor(v_in.uv * res / 3.0);
 	float sp = step(0.9965, hash21(g + floor(time * 9.0)));

@@ -1489,6 +1489,245 @@ float4 PSModernLasers(VertData v_in) : TARGET
 /* techniques                                                           */
 /* ================================================================== */
 
+/* ================================================================== */
+/* SMOKE                                                                */
+/* ================================================================== */
+
+/* smooth 1-D noise and a few octaves of it (0..1) */
+float sm_n1(float x)
+{
+	float i = floor(x);
+	float f = frac(x);
+	float u = f * f * (3.0 - 2.0 * f);
+	return lerp(hash11(i * 0.6180339 + 0.37), hash11((i + 1.0) * 0.6180339 + 0.37), u);
+}
+
+float sm_f1(float x)
+{
+	return sm_n1(x) * 0.55 + sm_n1(x * 2.13 + 5.31) * 0.3 + sm_n1(x * 4.37 + 11.7) * 0.15;
+}
+
+/* where strand k of a plume is at height h: the shared stream sways, and
+ * the strands peel away from each other further up. ph is the height in
+ * the smoke's own frame (h minus how far it has risen), so every kink and
+ * curl rides up with the smoke. */
+float sm_strand_x(float h, float ph, float amp, float spread, float seed, float fk)
+{
+	float sway = (sm_f1(ph * 1.15 + seed) - 0.5) * amp * 1.8;
+	float peel = (sm_f1(ph * (1.9 + fk * 0.45) + seed + fk * 13.7) - 0.5) * spread * (0.5 + fk * 0.55);
+	return sway + peel;
+}
+
+/* ------------------------------------------------------------------ */
+/* Calm · Incense Smoke: real smoke from burning sticks. Each starts as  */
+/* a thin, smooth stream (laminar), then a little higher it starts to   */
+/* kink, splits into ribbons that fold and curl, and finally breaks up  */
+/* into a soft haze that fades as it spreads. Ribbons stay the same     */
+/* thickness where they bend sideways, and look brighter where a sheet  */
+/* folds edge-on, like real smoke lit from the side.                    */
+/* Knobs: sticks, rise speed, turbulence, wind, thickness, height,      */
+/* embers, music, colour.                                              */
+float4 PSModernIncense(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float2 p = float2(uv.x * aspect, 1.0 - uv.y);
+	float px = 1.0 / res.y;
+
+	float sticks = clamp(floor(style_a.x + 0.5), 1.0, 7.0);
+	float rise = style_a.y;
+	float curl = style_a.z;
+	float wind = style_a.w;
+	float thick = max(style_b.x, 0.1);
+	float reach = max(style_b.y, 0.2);
+	float ember_k = style_b.z;
+	float music = style_b.w;
+	float T = flow;
+
+	/* the colour: the picked one, or the palette */
+	float cshift = music_ease.x * floor(style_c.x * react_mix.z * 8.0 + 0.5) / 64.0;
+	float hp = cm_hue(hue + 0.6 + cshift, uv, p.y, 0.0);
+	float3 picked = bb_hue_turn(style_col.rgb, cshift);
+	float3 scol = style_col.w > 0.5 ? md_tint(float3(0.86, 0.88, 0.94), hp) : picked;
+	/* thin smoke scatters blue, thick smoke looks greyer and warmer */
+	float3 thin_c = scol * float3(0.82, 0.92, 1.12);
+	float3 thick_c = scol * float3(1.02, 0.99, 0.95);
+
+	/* music: a slow swell of the smoke, never a flash */
+	float swell = 1.0 + music * react_mix.y * (0.5 * calm_in.x + 0.35 * music_ease.y);
+	float v = 0.15 * rise * (1.0 + 0.3 * music * react_mix.x * calm_in.y);
+
+	float3 light = float3(0.0, 0.0, 0.0);
+	float total = 0.0;
+
+	for (int i = 0; i < 7; i++) {
+		float fi = float(i);
+		if (fi < sticks) {
+			float seed = fi * 17.31 + 3.7;
+			float sx = aspect * (fi + 0.5) / sticks + (hash11(fi * 7.13 + 1.1) - 0.5) * 0.35 * aspect / sticks;
+			float sy = 0.1 + 0.05 * hash11(fi * 3.7 + 2.0);
+			float h = p.y - sy;
+			float hh = max(h, 0.0);
+			/* the plume leans with the wind, more the higher it gets */
+			float lean = wind * 0.55 * pow(hh, 1.35) + 0.04 * hh * sin(T * 0.07 + seed);
+			float dxc = p.x - sx - lean;
+			/* skip pixels far from this plume */
+			if (h > -0.06 && abs(dxc) < 0.12 + 0.75 * hh * (0.5 + curl * 0.5) * thick) {
+				float ph = hh - T * v;
+				/* laminar near the stick, turbulent above the onset height */
+				float onset = 0.06 + 0.16 / (0.6 + curl);
+				float turb = smoothstep(0.0, onset * 1.6, hh - onset * 0.4) * curl;
+				float amp = turb * (0.015 + 0.2 * hh);
+				float spread = turb * (0.01 + 0.3 * hh);
+
+				float dens = 0.0;
+				for (int k = 0; k < 4; k++) {
+					float fk = float(k);
+					float e = 0.004;
+					float x0 = sm_strand_x(hh, ph, amp, spread, seed, fk);
+					float x1 = sm_strand_x(hh + e, ph + e, amp, spread, seed, fk);
+					float slope = (x1 - x0) / e;
+					float d = abs(dxc - x0) / sqrt(1.0 + min(slope * slope, 6.0));
+					float w = (0.0022 + 0.016 * hh * thick) * (1.0 + 0.7 * fk * turb) + px * 0.6;
+					float r = exp(-d * d / (w * w));
+					/* a sheet seen edge-on where it folds over looks brighter */
+					float fold = 1.0 + 0.35 * min(abs(slope), 2.0);
+					dens += r * fold / (1.0 + fk * 0.65);
+				}
+
+				/* higher up the ribbons tear into patches */
+				float tearn = fbm4(float2(p.x * 7.0 + seed, ph * 6.0));
+				float tear = smoothstep(0.12, 0.6, hh) * saturate(curl);
+				dens *= lerp(1.0, smoothstep(0.28, 0.72, tearn) * 1.6, tear);
+
+				/* ... and spread into a soft haze */
+				float cw = 0.03 + 0.28 * hh * thick;
+				float cx = sm_strand_x(hh, ph, amp, spread * 0.4, seed, 0.0);
+				float cq = (dxc - cx) / cw;
+				float cloud = exp(-cq * cq) * fbm4(float2((p.x - lean) * 3.5 + seed, ph * 2.6)) *
+					      smoothstep(0.08, 0.6, hh) * 0.55;
+
+				float fade = exp(-hh * hh * 1.5 / (reach * reach)) * smoothstep(-0.004, 0.012, h);
+				float di = (dens * 0.5 + cloud) * fade;
+				total += di;
+				light += lerp(thin_c, thick_c, saturate(di * 1.4)) * di * swell;
+			}
+
+			/* the stick and its glowing tip */
+			if (ember_k > 0.001) {
+				float2 tip = float2(sx, sy);
+				float de = length(p - tip);
+				float glow = 0.55 + 0.45 * sm_n1(T * 1.3 + seed) + 0.4 * music * react_mix.y * calm_in.y;
+				light += float3(1.0, 0.42, 0.12) * ember_k *
+					 (exp(-de * de / (0.004 * 0.004)) * 1.6 + exp(-de * de / (0.02 * 0.02)) * 0.18) * glow;
+				float stick = (1.0 - smoothstep(px * 0.8, px * 2.2, abs(p.x - sx))) * step(p.y, sy - 0.004);
+				light += float3(0.16, 0.1, 0.07) * stick * saturate(ember_k);
+			}
+		}
+	}
+
+	/* smoke that has gathered under the ceiling: a faint drifting haze */
+	float haze = fbm4(float2(p.x * 1.6 + T * 0.02, p.y * 2.2 - T * 0.03));
+	light += thick_c * haze * smoothstep(0.35, 1.0, p.y) * 0.05 * sqrt(sticks) * swell;
+
+	return finish_dither(light * 0.95, uv, v_in.uv * res);
+}
+
+/* ------------------------------------------------------------------ */
+/* Neon · Stage Smoke: a fog machine's rolling smoke bank with coloured */
+/* moving-head beams cutting through it. Beams only show where there is */
+/* smoke or haze to light, so they get brighter as they hit the bank.   */
+/* Each beam follows its own band; the beat strobes them.              */
+/* Amount = beams. Knobs: fog height, fog thickness, drift, sweep,      */
+/* beam width, where the lights hang, strobe, haze, fog colour.         */
+
+/* the smoke bank's thickness at p (aspect units, y up from the bottom) */
+float ss_fog(float2 p, float T, float drift, float top)
+{
+	float2 q = p * float2(1.5, 2.4) + float2(-T * 0.07 * drift, 0.0);
+	float2 w = float2(fbm4(q * 0.7 + float2(0.0, T * 0.04)), fbm4(q * 0.7 + float2(5.2, 1.3 - T * 0.05)));
+	float n = fbm4(q + w * 1.3 + float2(T * 0.025, -T * 0.02));
+	float n2 = fbm4(q * 2.4 + w * 1.8 - float2(T * 0.09 * drift, T * 0.03));
+	/* the bank's top rolls up and down */
+	float edge = top + 0.16 * (n - 0.5) + 0.06 * (n2 - 0.5);
+	float body = smoothstep(edge + 0.06, edge - 0.18, p.y);
+	/* puffy lobes: denser cores, wispy tops */
+	return body * saturate(0.25 + 1.5 * n * n2 + 0.35 * (n - 0.5));
+}
+
+float4 PSModernStageSmoke(VertData v_in) : TARGET
+{
+	float2 uv = view_uv(v_in.uv);
+	float aspect = res.x / res.y;
+	float2 p = float2(uv.x * aspect, 1.0 - uv.y);
+	float T = flow;
+
+	float top = style_a.x;
+	float thickk = style_a.y;
+	float drift = style_a.z;
+	float sweep = style_a.w;
+	float bw = max(style_b.x, 0.1);
+	float from = floor(style_b.y + 0.5);
+	float strobe = style_b.z;
+	float hazek = style_b.w;
+	float3 fogc = style_col.rgb;
+
+	float fog = ss_fog(p, T, drift, top) * thickk;
+	/* thin haze in the air so beams show above the bank too */
+	float haze = hazek * (0.1 + 0.16 * fbm4(p * 1.3 + float2(T * 0.02, T * 0.012)));
+	float medium = haze + fog * 1.7;
+
+	float nb = clamp(floor(1.0 + 5.0 * density + 0.5), 1.0, 9.0);
+	float hit = md_beat();
+	float3 light = fogc * fog * (0.13 + 0.08 * level * react_mix.y);
+
+	for (int i = 0; i < 9; i++) {
+		float fi = float(i);
+		if (fi < nb) {
+			float t = (fi + 0.5) / nb;
+			float e = band_level(t);
+			/* where the light hangs and which way it points at rest */
+			float2 src = float2(aspect * t, 1.06);
+			float base = 0.0;
+			if (from > 0.5 && from < 1.5) {
+				src = float2(aspect * t, -0.06);
+				base = 3.14159265;
+			} else if (from > 1.5) {
+				float side = glmod(fi, 2.0);
+				src = float2(side < 0.5 ? -0.04 : aspect + 0.04, 0.35 + 0.5 * hash11(fi * 3.1 + 0.4));
+				base = side < 0.5 ? -1.15 : 1.15;
+			}
+			/* each light sweeps on its own, a little more with the music */
+			float ang = base + sweep * (0.55 * sin(T * (0.31 + 0.07 * fi) + fi * 1.9) +
+						    0.18 * sin(T * (0.83 + 0.11 * fi) + fi * 4.1)) * (1.0 + 0.4 * react_mix.x * e);
+			float2 dir = float2(sin(ang), -cos(ang));
+			float2 rel = p - src;
+			float along = dot(rel, dir);
+			float perp = rel.x * dir.y - rel.y * dir.x;
+			if (along > 0.0) {
+				float hw = (0.004 + 0.075 * along) * bw;
+				float beam = exp(-perp * perp / (hw * hw)) + 0.35 * exp(-perp * perp / (hw * hw * 9.0));
+				float fall = 1.0 / (1.0 + along * 0.9);
+				float strobe_on = 1.0 + strobe * hit * (0.6 + 0.8 * step(0.5, hash11(fi + floor(time * 8.0))));
+				float intensity = (0.2 + 1.1 * e * react_mix.y) * strobe_on;
+				float3 bc = prism(cm_hue(hue + t * 0.65, uv, t, fi));
+				light += bc * beam * fall * intensity * medium * 1.4;
+				/* the lamp itself */
+				float dl = length(rel);
+				light += bc * exp(-dl * dl / 0.0004) * intensity * 0.8;
+			}
+		}
+	}
+
+	/* the bank glows a little from the light inside it, and catches a
+	 * bright rim along its rolling top */
+	float fog_up = ss_fog(p + float2(0.0, 0.03), T, drift, top) * thickk;
+	float rim = saturate((fog - fog_up) * 2.5);
+	light += prism(cm_hue(hue + 0.3, uv, uv.x, 0.0)) * rim * 0.12 * (0.6 + level * react_mix.y);
+
+	return finish_dither(light, uv, v_in.uv * res);
+}
+
 technique ModernSoftOrbs
 {
 	pass
@@ -1630,5 +1869,23 @@ technique ModernLasers
 	{
 		vertex_shader = VSDefault(v_in);
 		pixel_shader  = PSModernLasers(v_in);
+	}
+}
+
+technique ModernIncense
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSModernIncense(v_in);
+	}
+}
+
+technique ModernStageSmoke
+{
+	pass
+	{
+		vertex_shader = VSDefault(v_in);
+		pixel_shader  = PSModernStageSmoke(v_in);
 	}
 }

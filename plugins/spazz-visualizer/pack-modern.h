@@ -14,6 +14,7 @@ PACK_STYLE("ModernSunbeams", "ModernSunbeams", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION
 PACK_STYLE("ModernBlossoms", "ModernBlossoms", VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernSnowfall", "ModernSnowfall", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION | VZ_CALM)
 PACK_STYLE("ModernCrystalCave", "ModernCrystalCave", VZ_SPEED | VZ_CMOTION | VZ_CALM)
+PACK_STYLE("ModernIncense", "ModernIncense", VZ_SPEED | VZ_CMOTION | VZ_CALM)
 /* lively */
 PACK_STYLE("ModernCityRain", "ModernCityRain", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
 PACK_STYLE("ModernHexPulse", "ModernHexPulse", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
@@ -23,3 +24,4 @@ PACK_STYLE("ModernFerrofluid", "ModernFerrofluid", VZ_AMOUNT | VZ_SPEED | VZ_CMO
 PACK_STYLE("ModernSoundMap", "ModernSoundMap", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
 PACK_STYLE("ModernHoloFoil", "ModernHoloFoil", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
 PACK_STYLE("ModernLasers", "ModernLasers", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
+PACK_STYLE("ModernStageSmoke", "ModernStageSmoke", VZ_AMOUNT | VZ_SPEED | VZ_CMOTION)
