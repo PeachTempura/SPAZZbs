@@ -1944,6 +1944,8 @@ static void set_prev(struct spazz_viz *v, struct viz_fx *fx, gs_texture_t *tex, 
  * with last frame as "prev" (ungraded, no backdrop, blending off), swap;
  * then show the buffer through the pack's FeedbackShow, graded and over
  * the backdrop like any other style. */
+static void prep_fx(struct spazz_viz *v, struct viz_fx *fx);
+
 static bool draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *tech, float alpha)
 {
 	const uint32_t w = v->width, h = v->height;
@@ -2004,6 +2006,8 @@ static bool draw_feedback(struct spazz_viz *v, struct viz_fx *fx, const char *te
 		return false;
 	}
 
+	/* the trail pass ended a technique, which cleared every value */
+	prep_fx(v, fx);
 	set_grade(fx, v->brightness, v->saturation, alpha);
 	set_prev(v, fx, gs_texrender_get_texture(v->fb[v->fb_cur]), true);
 	while (gs_effect_loop(fx->effect, "FeedbackShow")) {
@@ -2078,6 +2082,7 @@ static void draw_style(struct spazz_viz *v, int idx, float alpha)
 	if (!fx->effect) {
 		return;
 	}
+	prep_fx(v, fx);
 	set_react(v, fx, idx);
 
 	/* trails through the buffers; if they can't be used, the style is
@@ -2209,6 +2214,60 @@ static void set_common(struct spazz_viz *v, struct viz_fx *fx, const struct vec2
 
 #undef SETF
 
+/* Everything a draw needs, set right before it: libobs clears ALL of an
+ * effect's values when a technique ends (gs_technique_end), so values set
+ * once a frame are gone for the second technique drawn from the same
+ * effect that frame (a trail style's FeedbackShow, a crossfade), and D3D11
+ * then refuses the draw ("Not all shader parameters were set"). */
+static void prep_fx(struct spazz_viz *v, struct viz_fx *fx)
+{
+	struct vec2 res;
+	vec2_set(&res, (float)v->width, (float)v->height);
+	struct vec4 view;
+	vec4_set(&view, v->zoom, v->mirror_x, v->mirror_y, v->flip_y);
+	set_common(v, fx, &res, &view);
+
+	/* the SPAZZamp player's values live in the built-in effect */
+	if (fx != &v->fx[0]) {
+		return;
+	}
+	gs_effect_set_texture(v->p_font_tex, v->font_tex);
+	gs_effect_set_texture(v->p_text_tex, v->text_tex);
+	const int st = v->now_state;
+	const bool playing = st == OBS_MEDIA_STATE_PLAYING;
+	const bool paused = st == OBS_MEDIA_STATE_PAUSED;
+	const bool going = playing || paused;
+	const float progress = going && v->now_dur_ms > 0.0 ? (float)(v->now_pos_ms / v->now_dur_ms) : 0.0f;
+	struct vec4 pstate;
+	/* SPAZZamp hands out "" when nothing is loaded: that's idle, not stopped */
+	const bool loaded = v->now_title && *v->now_title;
+	vec4_set(&pstate, fminf(fmaxf(progress, 0.0f), 1.0f),
+		 playing  ? 1.0f
+		 : paused ? 2.0f
+		 : loaded ? 3.0f
+			  : 0.0f,
+		 v->marquee_pos, v->marquee_len > MARQUEE_CELLS ? (float)v->marquee_len : 0.0f);
+	gs_effect_set_vec4(v->p_pl_state, &pstate);
+	const bool minus = v->player_remaining && going && v->now_dur_ms > 0.0;
+	double ms = going ? (minus ? v->now_dur_ms - v->now_pos_ms : v->now_pos_ms) : 0.0;
+	if (ms < 0.0) {
+		ms = 0.0;
+	}
+	const long long secs = (long long)(ms / 1000.0);
+	const long long mins = (secs / 60) % 100;
+	struct vec4 digits;
+	vec4_set(&digits, (float)(mins / 10), (float)(mins % 10), (float)((secs % 60) / 10), (float)(secs % 10));
+	gs_effect_set_vec4(v->p_pl_digits, &digits);
+	struct vec4 info;
+	vec4_set(&info, (float)v->now_volume, v->now_shuffle ? 1.0f : 0.0f, (float)v->now_repeat, minus ? 1.0f : 0.0f);
+	gs_effect_set_vec4(v->p_pl_info, &info);
+	struct vec4 show;
+	vec4_set(&show, v->show_title ? 1.0f : 0.0f, v->show_seek ? 1.0f : 0.0f, v->show_buttons ? 1.0f : 0.0f,
+		 v->stereo ? 1.0f : 0.0f);
+	gs_effect_set_vec4(v->p_pl_show, &show);
+	/* pl_look and pl_accent depend on the skin: draw_style sets them */
+}
+
 static void viz_render(void *data, gs_effect_t *unused)
 {
 	struct spazz_viz *v = data;
@@ -2223,67 +2282,9 @@ static void viz_render(void *data, gs_effect_t *unused)
 		v->tex_dirty = false;
 	}
 
-	struct vec2 res;
-	vec2_set(&res, (float)v->width, (float)v->height);
-	struct vec4 view;
-	vec4_set(&view, v->zoom, v->mirror_x, v->mirror_y, v->flip_y);
-
-	/* what every effect shares, for the effects drawing this frame */
-	bool need[NUM_FX] = {false};
-	need[styles[v->shown].fx] = true;
-	if (v->fade < 1.0f && v->prev_shown != v->shown) {
-		need[styles[v->prev_shown].fx] = true;
-	}
-	for (int i = 0; i < NUM_FX; i++) {
-		if (need[i] && v->fx[i].effect) {
-			set_common(v, &v->fx[i], &res, &view);
-		}
-	}
-
-	/* the SPAZZamp player, in the built-in effect (every draw sets these,
-	 * used or not) */
-	if (v->fx[0].effect) {
-		if (v->text_dirty && v->text_tex) {
-			gs_texture_set_image(v->text_tex, v->text_data, TEXT_TEX_W, false);
-			v->text_dirty = false;
-		}
-		gs_effect_set_texture(v->p_font_tex, v->font_tex);
-		gs_effect_set_texture(v->p_text_tex, v->text_tex);
-		const int st = v->now_state;
-		const bool playing = st == OBS_MEDIA_STATE_PLAYING;
-		const bool paused = st == OBS_MEDIA_STATE_PAUSED;
-		const bool going = playing || paused;
-		const float progress = going && v->now_dur_ms > 0.0 ? (float)(v->now_pos_ms / v->now_dur_ms) : 0.0f;
-		struct vec4 pstate;
-		/* SPAZZamp hands out "" when nothing is loaded: that's idle, not stopped */
-		const bool loaded = v->now_title && *v->now_title;
-		vec4_set(&pstate, fminf(fmaxf(progress, 0.0f), 1.0f),
-			 playing  ? 1.0f
-			 : paused ? 2.0f
-			 : loaded ? 3.0f
-				  : 0.0f,
-			 v->marquee_pos, v->marquee_len > MARQUEE_CELLS ? (float)v->marquee_len : 0.0f);
-		gs_effect_set_vec4(v->p_pl_state, &pstate);
-		const bool minus = v->player_remaining && going && v->now_dur_ms > 0.0;
-		double ms = going ? (minus ? v->now_dur_ms - v->now_pos_ms : v->now_pos_ms) : 0.0;
-		if (ms < 0.0) {
-			ms = 0.0;
-		}
-		const long long secs = (long long)(ms / 1000.0);
-		const long long mins = (secs / 60) % 100;
-		struct vec4 digits;
-		vec4_set(&digits, (float)(mins / 10), (float)(mins % 10), (float)((secs % 60) / 10),
-			 (float)(secs % 10));
-		gs_effect_set_vec4(v->p_pl_digits, &digits);
-		struct vec4 info;
-		vec4_set(&info, (float)v->now_volume, v->now_shuffle ? 1.0f : 0.0f, (float)v->now_repeat,
-			 minus ? 1.0f : 0.0f);
-		gs_effect_set_vec4(v->p_pl_info, &info);
-		struct vec4 show;
-		vec4_set(&show, v->show_title ? 1.0f : 0.0f, v->show_seek ? 1.0f : 0.0f, v->show_buttons ? 1.0f : 0.0f,
-			 v->stereo ? 1.0f : 0.0f);
-		gs_effect_set_vec4(v->p_pl_show, &show);
-		/* pl_look and pl_accent depend on the skin: draw_style sets them */
+	if (v->text_dirty && v->text_tex) {
+		gs_texture_set_image(v->text_tex, v->text_data, TEXT_TEX_W, false);
+		v->text_dirty = false;
 	}
 
 	/* crossfading: the old style fades out under the new one. Over a solid
