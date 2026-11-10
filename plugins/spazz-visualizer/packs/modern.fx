@@ -112,28 +112,81 @@ float4 PSModernSoftOrbs(VertData v_in) : TARGET
 /* (moon, nettle, comb, mixed); b.x beat pulse, b.y colour on beat,     */
 /* b.z tentacle length, b.w glow.                                        */
 
-/* where jellyfish fi is at time t (aspect units, y down), before the
- * beat kick; sp = drift speed, rr = bell size, span = wrap height */
-float2 jf_path(float fi, float t, float sp, float aspect, float span)
+/* How a jellyfish swims (moon jellies and sea nettles are "rowers"): the
+ * bell contracts quickly (about a quarter to a third of each pulse), then
+ * relaxes slowly and passively as its jelly springs back. Speed peaks near
+ * the end of the squeeze and decays like a coasting body under drag
+ * through the long relaxation, so it surges and glides rather than moving
+ * steadily. The squeeze runs as a wave from the top of the bell to the
+ * rim, so the margin paddles in a little after the dome. Each jelly keeps
+ * its own pulse rate, rhythm drift, stroke and path, so no two swim in
+ * step. Comb jellies don't pulse: their combs row them along smoothly.
+ * Everything is closed-form in time (no state), so it's smooth at any t. */
+
+/* per jelly: x pulses/s, y squeeze fraction of a pulse, z glide decay,
+ * w stroke length (screen heights per pulse) */
+float4 jf_rates(float fi, float sp)
 {
-	float h1 = hash11(fi * 39.59 + 0.3);
-	float h2 = hash11(fi * 97.37 + 2.0);
-	float f = 0.22 + 0.12 * h2; /* pulses per second */
-	float u = t * f * (0.4 + 0.6 * sp);
-	/* a surge after each squeeze, then coasting */
-	float rise = (0.35 * u + 0.65 * (floor(u) + smoothstep(0.08, 0.6, frac(u)))) * 0.05 * (0.25 + sp);
-	float y = 1.0 - frac(rise / span + h1) * span;
-	float x = (0.12 + 0.76 * hash11(fi * 56.71 + 1.1)) * aspect + 0.16 * sin(t * 0.037 * (0.3 + sp) + fi * 2.1) +
-		  0.06 * sin(t * 0.083 * (0.3 + sp) + fi * 4.7);
-	return float2(x, y);
+	float a = hash11(fi * 97.37 + 2.0);
+	float b = hash11(fi * 12.83 + 5.1);
+	float c = hash11(fi * 71.19 + 0.7);
+	float f = (0.38 + 0.4 * a) * (0.35 + 0.65 * sp); /* ~0.4..0.8 Hz at drift 1 */
+	return float4(f, 0.23 + 0.11 * b, 3.2 + 3.0 * c, (0.035 + 0.03 * b) * (0.3 + 0.7 * sp));
 }
 
-/* the squeeze: quick in, slow out (0 relaxed .. 1 squeezed) */
-float jf_squeeze(float fi, float t, float sp)
+/* the pulse phase: its own rate, slowly speeding up and easing off (up to
+ * +/-40%, never stopping), so the rhythms drift apart */
+float jf_phase(float fi, float t, float f)
 {
-	float h2 = hash11(fi * 97.37 + 2.0);
-	float u = frac(t * (0.22 + 0.12 * h2) * (0.4 + 0.6 * sp));
-	return smoothstep(0.0, 0.12, u) * (1.0 - smoothstep(0.12, 0.75, u));
+	float w = 0.11 + 0.12 * hash11(fi * 33.7 + 9.2);
+	float ph = hash11(fi * 5.31 + 3.3) * 6.2831853;
+	return f * t + hash11(fi * 18.9 + 1.4) + (0.4 * f / w) * sin(w * t + ph);
+}
+
+/* distance covered within one pulse (0..1 of a stroke) at phase u in 0..1:
+ * speed rises as (1 - cos) through the squeeze to its peak, then decays as
+ * exp(-k) while coasting; integrated in closed form and normalised */
+float jf_dist(float u, float c, float k)
+{
+	float tot = c * 0.5 + (1.0 - exp(-k * (1.0 - c))) / k;
+	float d = u < c ? (u * 0.5 - c * 0.159155 * sin(3.1415927 * u / c))
+			: (c * 0.5 + (1.0 - exp(-k * (u - c))) / k);
+	return d / tot;
+}
+
+/* speed at phase u, 0..1 of the peak */
+float jf_speed(float u, float c, float k)
+{
+	return u < c ? 0.5 - 0.5 * cos(3.1415927 * u / c) : exp(-k * (u - c));
+}
+
+/* the bell's squeeze at phase u (0 relaxed .. 1 fully in): eased in during
+ * the squeeze, then an elastic relax that slows as it nears rest */
+float jf_squeeze(float u, float c)
+{
+	float uu = frac(u);
+	float rel = saturate((uu - c) / (1.0 - c));
+	return uu < c ? smoothstep(0.0, c, uu) : pow(1.0 - rel, 2.2) * (1.0 + 0.6 * rel);
+}
+
+/* sideways path: a gentle S-curve tied to the distance swum (so the body
+ * leans exactly along its path), plus a slow sideways current in time */
+float jf_px(float fi, float s, float t, float aspect)
+{
+	float x0 = (0.12 + 0.76 * hash11(fi * 56.71 + 1.1)) * aspect;
+	float ax = 0.03 + 0.05 * hash11(fi * 8.13 + 2.2);
+	float kx = 2.0 + 2.5 * hash11(fi * 3.77 + 6.6);
+	float ph = hash11(fi * 41.3 + 0.9) * 6.2831853;
+	return x0 + ax * sin(s * kx + ph) + 0.04 * sin(t * (0.02 + 0.02 * hash11(fi * 2.9)) + fi * 2.1);
+}
+
+/* the path's slope at distance s (sideways per unit swum) */
+float jf_slope(float fi, float s)
+{
+	float ax = 0.03 + 0.05 * hash11(fi * 8.13 + 2.2);
+	float kx = 2.0 + 2.5 * hash11(fi * 3.77 + 6.6);
+	float ph = hash11(fi * 41.3 + 0.9) * 6.2831853;
+	return ax * kx * cos(s * kx + ph);
 }
 
 float4 PSModernJellyfish(VertData v_in) : TARGET
@@ -154,7 +207,6 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 	 * of the glide never jumps */
 	float cstep = floor(style_b.y * react_mix.z * 8.0 + 0.5) / 64.0;
 	float beatshift = music_ease.x * cstep;
-	float bpulse = saturate(music_ease.y) * kpulse;
 	float swell = (0.85 + 0.5 * react_mix.y * (music_ease.z * 0.6 + calm_in.x * 0.5)) * kglow;
 
 	/* deep water, lighter towards the surface */
@@ -195,27 +247,50 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 			float is_nettle = step(0.5, sp_k) * (1.0 - step(1.5, sp_k));
 			float is_comb = step(1.5, sp_k);
 
+			/* its own slow drift in depth: a little nearer/further over time */
+			rr *= 1.0 + 0.08 * sin(time * (0.03 + 0.03 * h3) + fi * 1.7);
 			float tl = rr * tlen * (1.2 * is_moon + 4.2 * is_nettle + 2.6 * is_comb);
 			float span = 1.0 + rr * 2.0 + tl + 0.1;
-			/* each beat kicks it up a little (whole steps of the wrap) */
-			float kq = floor(saturate(kpulse) * 2.0 + 0.5) / 64.0;
-			float2 c = jf_path(fi, time, drift, aspect, span);
-			c.y = 1.0 + rr - frac((1.0 + rr - c.y) / span + music_ease.x * kq) * span;
-			c.y += rr * 0.3;
+
+			/* ---- swimming ---- */
+			float4 jr = jf_rates(fi, drift);
+			float u = jf_phase(fi, time, jr.x);
+			float uf = frac(u);
+			float rowk = 1.0 - is_comb;
+			/* rowers: surge and glide; comb jellies: a smooth cilia glide */
+			float strokes = is_comb > 0.5 ? time * jr.x * 0.55 : floor(u) + jf_dist(uf, jr.y, jr.z);
+			float s = strokes * jr.w * (0.6 + 0.8 * saturate(react_mix.x));
+			float vnorm = is_comb > 0.5 ? 0.5 : jf_speed(uf, jr.y, jr.z);
+			/* each answers the beat in its own way: some sooner, some later
+			 * (a softer or sharper take on the eased pulse), some harder */
+			float gam = 0.6 + 1.8 * hash11(fi * 15.7 + 3.9);
+			float bstr = 0.6 + 0.7 * hash11(fi * 27.1 + 8.8);
+			float bp = pow(saturate(music_ease.y), gam) * kpulse * bstr;
+			/* and each beat carries it a little further (whole 1/64 steps of
+			 * its wrap, so the 64-beat wrap of the counter never jumps) */
+			float kq = floor(saturate(kpulse) * (1.0 + 2.0 * hash11(fi * 6.6 + 1.0)) + 0.5) / 64.0;
+			float2 c;
+			c.x = jf_px(fi, s, time, aspect);
+			c.y = 1.0 + rr - frac(s / span + h1 + music_ease.x * kq) * span + rr * 0.3;
 			float2 d0 = p - c;
 			float hc = cm_hue(hue + h1 * 0.85 + 0.08 * sp_k + beatshift, uv, saturate(d0.y / max(tl, 0.001)), fi);
 			float3 col = prism(hc);
 			float bright = (0.3 + 0.7 * depth) * swell;
 			/* a soft glow in the water around the bell */
 			float hd = length(float2(d0.x, d0.y + rr * 0.3)) / rr;
-			light += col * exp(-max(hd - 0.7, 0.0) * 2.2) * 0.05 * bright * (1.0 + 0.6 * bpulse);
+			light += col * exp(-max(hd - 0.7, 0.0) * 2.2) * 0.05 * bright * (1.0 + 0.6 * bp + 0.25 * vnorm * rowk);
 			/* outside its box (bell + trailing tentacles): nothing more to do */
-			if (abs(d0.x) < rr * 2.6 + tl * 0.35 && d0.y > -rr * 1.6 && d0.y < tl + rr * 0.6) {
-				float sq = jf_squeeze(fi, time, drift) * (1.0 - 0.6 * is_comb);
-				sq = saturate(sq * 0.8 + bpulse * 0.9 * (1.0 - is_comb));
-				/* lean a little into where it's going */
-				float2 cprev = jf_path(fi, time - 0.6, drift, aspect, span);
-				float tilt = clamp((c.x - cprev.x) * 6.0, -0.35, 0.35);
+			if (abs(d0.x) < rr * 2.6 + tl * 0.45 && d0.y > -rr * 1.6 && d0.y < tl + rr * 0.6) {
+				/* the squeeze, as a wave from the dome to the rim: the rim
+				 * paddles in a little after the top. A beat squeezes harder. */
+				float bsq = bp * 0.9 * rowk;
+				float sq_top = saturate(jf_squeeze(u, jr.y) * 0.85 * rowk + bsq);
+				float sq_rim = saturate(jf_squeeze(u - 0.07, jr.y) * 0.85 * rowk + bsq * 0.8);
+				float sq = 0.5 * (sq_top + sq_rim);
+				/* lean along its path, and rock a little with each stroke */
+				float tilt = atan(jf_slope(fi, s)) * 0.9 + 0.06 * rowk * sin(6.2831853 * u + fi) +
+					     0.04 * sin(time * 0.4 * (0.5 + h3) + fi * 3.0);
+				tilt = clamp(tilt, -0.4, 0.4);
 				float upx = px / rr;
 				float aa = upx * (1.2 + 5.0 * (1.0 - depth)); /* far ones are soft */
 
@@ -223,11 +298,15 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 
 				/* ---- the bell (moon and nettle) / the body (comb) ---- */
 				float2 q = rot2(d0, -tilt) / rr; /* origin at the rim, y down */
-				float bw = (1.0 - 0.17 * sq) * (1.0 - 0.15 * is_nettle);
-				float bh = (0.55 + 0.3 * is_nettle) * (1.0 + 0.16 * sq);
-				/* the margin hangs a little lower at the edges and curls in when squeezed */
+				/* squeezing narrows the bell (~a fifth) and makes it taller;
+				 * how much depends on the height, since the wave reaches the
+				 * rim last */
+				float bh = (0.55 + 0.3 * is_nettle) * (1.0 + 0.2 * sq_top);
+				float lev = saturate((q.y + bh) / bh); /* 0 top .. 1 rim */
+				float bw = (1.0 - 0.22 * lerp(sq_top, sq_rim, lev)) * (1.0 - 0.15 * is_nettle);
+				/* the margin hangs a little lower at the edges and curls in as it paddles */
 				float xn = q.x / bw;
-				float rimy = (0.1 - 0.06 * sq) * pow(saturate(abs(xn)), 4.0) - 0.05 * (1.0 - xn * xn) * (0.4 + sq) +
+				float rimy = (0.1 - 0.08 * sq_rim) * pow(saturate(abs(xn)), 4.0) - 0.05 * (1.0 - xn * xn) * (0.4 + 1.2 * sq_rim) +
 					     (0.012 * is_moon + 0.02 * is_nettle) * abs(sin(xn * (14.0 + 6.0 * is_moon) + fi));
 				float e = length(float2(xn, min(q.y, 0.0) / bh));
 				float body = (1.0 - smoothstep(1.0 - aa, 1.0 + aa, e)) * (1.0 - smoothstep(rimy - aa, rimy + aa, q.y));
@@ -270,7 +349,7 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 					float dd = abs(cq.x - wx) / (0.05 + upx * 1.5);
 					float row = exp(-dd * dd) * smoothstep(0.95, 0.75, abs(cq.y));
 					/* the cilia beat in waves that run down each row */
-					float wave = 0.5 + 0.5 * sin(cq.y * 18.0 - time * (4.0 + 6.0 * bpulse) + float(r));
+					float wave = 0.5 + 0.5 * sin(cq.y * 18.0 - time * (4.0 + 6.0 * bp) + float(r));
 					combs += row * (0.35 + 0.65 * wave) * (0.4 + 0.6 * saturate(front + 0.4));
 					/* and the row behind, mirrored */
 					float dd2 = abs(cq.x + wx) / (0.05 + upx * 1.5);
@@ -282,16 +361,26 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 				cedge *= 0.55;
 
 				/* ---- what trails behind: offset along the path it came by ---- */
-				float sdown = max(d0.y, 0.0);
-				float2 lagc = jf_path(fi, time - sdown / rr * 0.18 / (0.3 + drift), drift, aspect, span);
-				float lagx = (lagc.x - (c.x)) / rr;
+				/* tentacles follow the path it swam: a point this far down
+				 * is where the bell was that much swimming ago (and a
+				 * little time ago, for the current) */
+				/* in the bell's own frame (it leans), so they hang from its rim */
+				float sraw = max(q.y * rr, 0.0);
+				float back = sraw * (0.85 + 0.3 * vnorm);
+				float lagx = (jf_px(fi, s - back, time - back * 1.5, aspect) - c.x) / rr;
+				/* fast on the stroke they stream out straight; coasting,
+				 * they relax and bunch up a little */
+				float sdown = sraw / (1.0 + 0.16 * (vnorm - 0.4) * rowk);
 				float sn = sdown / max(tl, 0.0001);
 				float trail = 0.0;
 				float arms = 0.0;
 				if (sdown > 0.0 && sn < 1.0) {
-					float qx = d0.x / rr - lagx * (1.0 - 0.6 * is_comb);
+					float qx = q.x - lagx * (1.0 - 0.6 * is_comb);
 					float yq = sdown / rr;
-					float ph = time * 1.6 * (0.4 + 0.6 * drift) + fi;
+					/* each pulse sends a ripple down the tentacles and arms
+					 * (lagging with distance from the bell), over a slow sway
+					 * of their own */
+					float ph = 6.2831853 * u * rowk + time * (0.5 + 0.4 * h3) + fi;
 					/* moon: a fringe of many fine short tentacles along the margin */
 					float fr_len = 0.35 * tlen;
 					if (is_moon > 0.5 && yq < fr_len + 0.12) {
@@ -336,7 +425,7 @@ float4 PSModernJellyfish(VertData v_in) : TARGET
 
 				/* far ones fade into the water */
 				float3 fogc = lerp(water * 2.5, col, 0.35 + 0.65 * depth);
-				float3 add = lerp(fogc, col, depth) * (bell * (1.0 + 0.5 * bpulse) + trail * 0.55) * bright;
+				float3 add = lerp(fogc, col, depth) * (bell * (1.0 + 0.5 * bp) + trail * 0.55) * bright;
 				add += pale * arms * 0.5 * bright;
 				add += (comb_col * combs * 1.3 + col * cedge * 0.5 + col * cbody * 0.06) * bright;
 				/* the bell shades what's behind it a little, glows into the water around it */
